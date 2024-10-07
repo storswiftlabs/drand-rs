@@ -1,0 +1,81 @@
+syntax = "proto3";
+
+package common;
+
+message Address {
+  string address = 1;
+  bool tls = 2;
+}
+
+message StatusRequest {
+  // the check_conn contains the list of addresses to check connectivity to,
+  // i.e. calls Home() on it.
+  // If the field is absent or empty, then there is no connectivity checks.
+  repeated Address check_conn = 1;
+  Metadata metadata = 2;
+}
+
+message Empty { Metadata metadata = 1; }
+
+// REMINDER: This fields should be kept in sync with IdentityResponse message
+message Identity {
+  string address = 1;
+  bytes key = 2;
+  bool tls = 3;
+  // BLS signature over the identity to prove possession of the private key
+  bytes signature = 4;
+}
+
+// Node holds the information related to a server in a group that forms a drand
+// network
+message Node {
+  Identity public = 1;
+  uint32 index = 2;
+}
+
+// GroupPacket represents a group that is running a drand network (or is in the
+// process of creating one or performing a resharing).
+message GroupPacket {
+  repeated Node nodes = 1;
+  uint32 threshold = 2;
+  // period in seconds
+  uint32 period = 3;
+  uint64 genesis_time = 4;
+  uint64 transition_time = 5;
+  bytes genesis_seed = 6;
+  repeated bytes dist_key = 7;
+  // catchup_period in seconds
+  uint32 catchup_period = 8;
+  string schemeID = 9;
+  Metadata metadata = 10;
+}
+
+message ChainInfoPacket {
+  // marshalled public key
+  bytes public_key = 1;
+  // period in seconds
+  uint32 period = 2;
+  // genesis time of the chain
+  int64 genesis_time = 3;
+  // hash is included for ease of use - not needing to have a drand client to
+  // compute its hash
+  bytes hash = 4;
+  // hash of the genesis group
+  bytes groupHash = 5;
+  // indicates a set of values the process will use to act in specific ways
+  string schemeID = 6;
+  Metadata metadata = 7;
+}
+
+message NodeVersion {
+  uint32 major = 1;
+  uint32 minor = 2;
+  uint32 patch = 3;
+  string prerelease = 4;
+}
+
+message Metadata {
+  NodeVersion node_version = 1;
+  string beaconID = 2;
+  bytes chain_hash = 3;
+}

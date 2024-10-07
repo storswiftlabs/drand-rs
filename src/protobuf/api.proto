@@ -1,0 +1,22 @@
+/*
+ * This protobuf file contains the definition of the public API endpoints as
+ * well as messages. All client implementations should use this reference
+ * protobuf to implement a compatible drand client.
+ */
+syntax = "proto3";
+
+package drand;
+
+import "src/protobuf/common.proto";
+
+service Public {
+  // Home is a simple endpoint
+  rpc Home(HomeRequest) returns (HomeResponse);
+}
+
+message HomeRequest { common.Metadata metadata = 1; }
+
+message HomeResponse {
+  string status = 1;
+  common.Metadata metadata = 2;
+}
