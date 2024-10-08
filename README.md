@@ -23,6 +23,7 @@ cargo build --release --features blstrs
 2. Download golang binary [binary v1.5.8](https://github.com/drand/drand/releases/tag/v1.5.8-testnest) (tested on linux amd64)
 
 Rename binaries into **drand_go** and **drand_rs** accordingly and place them into [make_demo](/make_demo/) folder.
+
 Execute **./run** script to start Setup and Generation. Script configured to perform next scenario
 
  ```
