@@ -1,0 +1,7 @@
+#!/bin/bash
+nodes=10
+
+./drand_go stop --control 40001  &
+for ((i=1;i<$nodes;i++)); do ./drand_rs stop --control $(expr 40001 + $i) &  done
+rm -rf n* l* rs_* &
+
