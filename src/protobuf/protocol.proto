@@ -22,7 +22,7 @@ service Protocol {
   //   of starting the DKG.
   rpc PushDKGInfo(DKGInfoPacket) returns (common.Empty);
   //   BroadcastPacket is used during DKG phases
-  rpc BroadcastDKG(DKGPacket) returns (common.Empty);
+  rpc BroadcastDKG(DKGPacket) returns (common.Empty); 
   //   PartialBeacon sends its partial beacon to another node
   rpc PartialBeacon(PartialBeaconPacket) returns (common.Empty);
 }
