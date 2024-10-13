@@ -679,7 +679,7 @@ checksum = "60b1af1c220855b6ceac025d3f6ecdd2b7c4894bfe9cd9bda4fbb4bc7c0d4cf0"
 [[package]]
 name = "energon"
 version = "0.0.1"
-source = "git+ssh://git@github.com/version513/energon.git#7cf5f55d2adbecd268832c95c3653f1c397a81ce"
+source = "git+https://github.com/version513/energon.git?rev=7cf5f55#7cf5f55d2adbecd268832c95c3653f1c397a81ce"
 dependencies = [
  "aes-gcm",
  "ark-bls12-381",
