@@ -16,17 +16,11 @@ use super::beacon::BeaconCmd;
 use super::beacon::Callback;
 use super::beacon::InnerNode;
 use super::chain::ChainConfig;
-
-use energon::drand::poly::PriPoly;
-use energon::drand::poly::PriShare;
-use energon::drand::poly::PubPoly;
-use energon::drand::Scheme;
-
-use energon::traits::Affine;
+use super::KeyPoint;
+use super::Scheme;
 
 use crate::key::group::Group;
 use crate::key::keys::DistKeyShare;
-use crate::key::keys::PublicKey;
 use crate::net::address::DkgBroadcast;
 use crate::net::address::Pool;
 use crate::net::transport::Bundle;
@@ -37,6 +31,10 @@ use crate::net::transport::JustificationBundle;
 use crate::net::transport::Response;
 use crate::net::transport::ResponseBundle;
 use crate::net::transport::SetupInfo;
+use energon::cyber::poly::PriPoly;
+use energon::cyber::poly::PriShare;
+use energon::cyber::poly::PubPoly;
+use energon::traits::Affine;
 
 use anyhow::anyhow;
 use anyhow::bail;
@@ -125,7 +123,7 @@ impl PhaseTimer {
 }
 
 pub struct DkgConfig<S: Scheme> {
-    leader_key: PublicKey<S>,
+    leader_key: KeyPoint<S>,
     group: Group<S>,
     session_id: Vec<u8>,
     timeout: u32,
@@ -133,7 +131,7 @@ pub struct DkgConfig<S: Scheme> {
 }
 
 impl<S: Scheme> DkgConfig<S> {
-    pub fn new(leader_key: PublicKey<S>, group: Group<S>, timeout: u32, index: u32) -> Self {
+    pub fn new(leader_key: KeyPoint<S>, group: Group<S>, timeout: u32, index: u32) -> Self {
         let session_id = group.get_nonce();
         Self {
             leader_key,
@@ -152,7 +150,7 @@ pub struct Generator<S: Scheme> {
     pri_poly: PriPoly<S>,
     pub_poly: PubPoly<S>,
     sets: Sets,
-    distributed: HashMap<u32, (S::Scalar, Vec<PublicKey<S>>)>,
+    distributed: HashMap<u32, (S::Scalar, Vec<KeyPoint<S>>)>,
     broadcast: DkgBroadcast,
 }
 
@@ -418,7 +416,7 @@ impl<S: Scheme> Generator<S> {
                             };
 
                             // check if share is valid w.r.t. public commitment
-                            let comm: PublicKey<S> = pub_poly.eval(local_index).v;
+                            let comm: KeyPoint<S> = pub_poly.eval(local_index).v;
                             let comm_share = S::sk_to_pk(&share);
 
                             if comm != comm_share {
@@ -505,7 +503,7 @@ impl<S: Scheme> Generator<S> {
     }
 
     fn save_distributed(mut self) -> Result<(ChainConfig, Vec<String>)> {
-        let mut dist_commits: Vec<<<S as Scheme>::Key as energon::traits::Group>::Projective> =
+        let mut dist_commits: Vec<super::KeyPointProjective<S>> =
             Vec::with_capacity(self.inputs.group.threshold as usize);
 
         for c in self.pub_poly.commits.iter() {

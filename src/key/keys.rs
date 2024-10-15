@@ -12,17 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use energon::drand::poly::PriShare;
-use energon::drand::poly::PubPoly;
-use energon::drand::Scheme;
+use crate::core::KeyPoint;
+use crate::core::Scheme;
+use crate::core::SigPoint;
+
+use energon::cyber::poly::PriShare;
+use energon::cyber::poly::PubPoly;
 use energon::traits::Affine;
-use energon::traits::Group;
 use energon::traits::ScalarField;
 
 use std::fmt::Display;
 
-pub type PublicKey<S> = <<S as Scheme>::Key as Group>::Affine;
-pub type Signature<S> = <<S as Scheme>::Sig as Group>::Affine;
 pub struct PrivateKey<S: Scheme>(S::Scalar);
 
 #[derive(Debug, PartialEq)]
@@ -63,13 +63,13 @@ impl<S: Scheme> Pair<S> {
 #[derive(Debug, PartialEq)]
 pub struct Identity<S: Scheme> {
     address: String,
-    key: PublicKey<S>,
+    key: KeyPoint<S>,
     tls: bool,
-    signature: Signature<S>,
+    signature: SigPoint<S>,
 }
 
 impl<S: Scheme> Identity<S> {
-    pub fn new(address: String, tls: bool, key: PublicKey<S>, signature: Signature<S>) -> Self {
+    pub fn new(address: String, tls: bool, key: KeyPoint<S>, signature: SigPoint<S>) -> Self {
         Self {
             address,
             key,
@@ -78,7 +78,7 @@ impl<S: Scheme> Identity<S> {
         }
     }
 
-    pub fn key(&self) -> &PublicKey<S> {
+    pub fn key(&self) -> &KeyPoint<S> {
         &self.key
     }
 
@@ -86,7 +86,7 @@ impl<S: Scheme> Identity<S> {
         self.tls
     }
 
-    pub fn signature(&self) -> &Signature<S> {
+    pub fn signature(&self) -> &SigPoint<S> {
         &self.signature
     }
 
@@ -105,7 +105,7 @@ pub struct DistKeyShare<S: Scheme> {
 }
 
 impl<S: Scheme> DistKeyShare<S> {
-    pub fn new(commits: Vec<PublicKey<S>>, pri_share: PriShare<S>) -> Self {
+    pub fn new(commits: Vec<KeyPoint<S>>, pri_share: PriShare<S>) -> Self {
         Self {
             commits: PubPoly { commits },
             pri_share,

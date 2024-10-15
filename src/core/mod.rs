@@ -17,4 +17,7 @@ pub mod chain;
 pub mod daemon;
 pub mod dkg;
 pub mod multibeacon;
-pub mod schemes_init;
+pub mod schemes;
+
+pub use energon::points::{KeyPoint, KeyPointProjective, SigPoint};
+pub use energon::schemes::drand::DrandScheme as Scheme;

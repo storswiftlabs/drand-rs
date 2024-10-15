@@ -166,14 +166,7 @@ impl BeaconHandler {
         let fs = FileStore::set(base_folder, beacon_id);
         let pair = fs.load_pair_raw()?;
         let beacon_id = BeaconID::new(beacon_id);
-        crate::core::schemes_init::run_beacon(
-            pair,
-            beacon_id.clone(),
-            fs,
-            rx,
-            private_listen,
-            pool,
-        )?;
+        crate::core::schemes::run_beacon(pair, beacon_id.clone(), fs, rx, private_listen, pool)?;
 
         Ok(Self { beacon_id, tx })
     }

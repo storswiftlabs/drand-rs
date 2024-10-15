@@ -13,18 +13,18 @@
 // limitations under the License.
 
 use super::beacon::InnerNode;
+use super::schemes::BeaconDigest;
+use super::Scheme;
 use crate::key::keys::DistKeyShare;
 use crate::net::pool::PoolCmd;
 use crate::protobuf::drand::PartialBeaconPacket;
+
 use anyhow::bail;
 use anyhow::Result;
 use chrono::Utc;
 use core::time::Duration;
-use energon::drand::tbls::SigShare;
-use energon::drand::BeaconDigest;
-use energon::drand::Scheme;
+use energon::cyber::tbls::SigShare;
 use energon::traits::Affine;
-
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::SendError;

@@ -16,9 +16,11 @@ use super::chain::ChainSender;
 use super::dkg::DkgCmd;
 use super::dkg::DkgConfig;
 use super::dkg::DkgState;
+use super::Scheme;
 
 use crate::core::chain::ChainHandler;
 use crate::core::dkg::Generator;
+
 use crate::key::common::Hash;
 use crate::key::common::ToCommon;
 use crate::key::group::Group;
@@ -36,7 +38,6 @@ use anyhow::anyhow;
 use anyhow::bail;
 use anyhow::Result;
 use core::fmt;
-use energon::drand::Scheme;
 use energon::traits::Affine;
 use std::sync::Arc;
 use tokio::sync::mpsc;

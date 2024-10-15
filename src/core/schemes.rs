@@ -12,9 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub use energon::schemes::drand::BeaconDigest;
+pub use energon::schemes::drand::DefaultScheme;
+pub use energon::schemes::drand::SchortSigScheme;
+pub use energon::schemes::drand::UnchainedScheme;
+
 use super::beacon::Beacon;
 use super::beacon::BeaconCmd;
 use super::beacon::BeaconID;
+use super::Scheme;
 
 use crate::key::common::Pair;
 use crate::key::store::FileStore;
@@ -22,14 +28,9 @@ use crate::net::pool::PoolCmd;
 
 use anyhow::bail;
 use anyhow::Result;
-use energon::drand::DefaultScheme;
-use energon::drand::Scheme;
-use energon::drand::SchortSigScheme;
-use energon::drand::UnchainedScheme;
+
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Receiver;
-
-// Helper module for simple dev purpose: keep scheme initializations in _one_ place.
 
 #[derive(Debug, PartialEq)]
 pub enum Schemes {
@@ -108,6 +109,7 @@ pub fn gen_keypair(
     println!("Generating private / public key pair, TLS:{tls}");
 
     // basic sanity checks
+    // TODO: duplicated, use [`Address`] instead
     let uri = address.parse::<tonic::transport::Uri>()?;
     if uri.host().is_none()
         || uri.port().is_none()
