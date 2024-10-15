@@ -28,7 +28,7 @@ use crate::protobuf::dkg::DealBundle;
 use crate::protobuf::dkg::JustificationBundle;
 use crate::protobuf::dkg::ResponseBundle;
 
-use energon::drand::Scheme;
+use crate::core::Scheme;
 use energon::traits::Affine;
 use std::fmt::Display;
 

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::core::beacon;
+use crate::core::Scheme;
 use crate::key::store::FileStore;
 use crate::log::init_log;
 use crate::net::control;
@@ -21,7 +22,6 @@ use clap::arg;
 use clap::command;
 use clap::Parser;
 use clap::Subcommand;
-use energon::drand::scheme;
 
 #[derive(Debug, Parser)]
 #[command(name = "git")]
@@ -49,7 +49,7 @@ pub enum Commands {
         #[arg(long, default_value = beacon::DEFAULT_BEACON_ID)]
         id: String,
         /// Indicates a set of values drand will use to configure the randomness generation process
-        #[arg(long, default_value = scheme::DEFAULT_SCHEME)]
+        #[arg(long, default_value = crate::core::schemes::DefaultScheme::ID)]
         scheme: String,
         /// The address other nodes will be able to contact this node on (specified as 'private-listen' to the daemon)
         address: String,
@@ -157,7 +157,7 @@ impl Cli {
                 //  - We want to keep CLI in sync with golang implementation
                 //  - From here tls:true means tls enabled, this can probably be done more elegantly
                 let tls = !tls_disable;
-                crate::core::schemes_init::gen_keypair(scheme, &folder, tls, id, address)?
+                crate::core::schemes::gen_keypair(scheme, &folder, tls, id, address)?
             }
             Commands::Start {
                 folder,

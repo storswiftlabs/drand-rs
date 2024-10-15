@@ -15,16 +15,18 @@
 use super::group::Group;
 use super::keys::DistKeyShare;
 use super::keys::Identity;
-use super::keys::PublicKey;
 use super::node::Node;
 
-use energon::drand::poly::PriShare;
-use energon::drand::Scheme;
+use crate::core::KeyPoint;
+use crate::core::Scheme;
+
+use energon::cyber::poly::PriShare;
 use energon::traits::Affine;
 use energon::traits::ScalarField;
 
 use anyhow::bail;
 use anyhow::Result;
+
 use toml::value::Array;
 use toml::Table;
 use toml::Value;
@@ -280,7 +282,7 @@ impl<S: Scheme> FromToml for DistKeyShare<S> {
         let share_bytes = hex::decode(get!(value, "Share", as_str)?)?;
         let share = S::Scalar::from_bytes_be(&share_bytes)?;
         let commits_value = get!(value, "Commits", as_array)?;
-        let mut commits: Vec<PublicKey<S>> = vec![];
+        let mut commits: Vec<KeyPoint<S>> = vec![];
         for c in commits_value.iter() {
             if let Some(c) = c.as_str() {
                 commits.push(Affine::deserialize(&hex::decode(c)?)?)

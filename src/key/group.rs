@@ -13,15 +13,16 @@
 // limitations under the License.
 
 use super::keys::Identity;
-use super::keys::PublicKey;
 use super::node::Node;
+
 use crate::core::beacon::BeaconID;
+use crate::core::KeyPoint;
+use crate::core::Scheme;
+
 use anyhow::bail;
-use energon::drand::Scheme;
+use anyhow::Result;
 use sha2::Digest;
 use sha2::Sha256;
-
-use anyhow::Result;
 
 #[derive(PartialEq)]
 pub struct Group<S: Scheme> {
@@ -32,7 +33,7 @@ pub struct Group<S: Scheme> {
     pub genesis_time: u64,
     pub transition_time: u64,
     pub genesis_seed: Vec<u8>,
-    pub dist_key: Vec<PublicKey<S>>,
+    pub dist_key: Vec<KeyPoint<S>>,
     /// catchup_period in seconds
     pub catchup_period: u32,
     pub beacon_id: BeaconID,
@@ -46,7 +47,7 @@ impl<S: Scheme> Group<S> {
         genesis_time: u64,
         transition_time: u64,
         genesis_seed: Vec<u8>,
-        dist_key: Vec<PublicKey<S>>,
+        dist_key: Vec<KeyPoint<S>>,
         catchup_period: u32,
         beacon_id: BeaconID,
     ) -> Self {
@@ -76,7 +77,7 @@ impl<S: Scheme> Group<S> {
             .map(|node| node.index())
     }
 
-    pub fn get_key(&self, index: u32) -> Result<&PublicKey<S>> {
+    pub fn get_key(&self, index: u32) -> Result<&KeyPoint<S>> {
         match self.nodes.iter().find(|node| node.index() == index) {
             Some(node) => Ok(node.identity().key()),
             None => bail!("public key not found for index {index}"),

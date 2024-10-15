@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::keys::PublicKey;
 use crate::core::beacon;
+use crate::core::KeyPoint;
+use crate::core::Scheme;
 
-use energon::drand::Scheme;
 use energon::traits::Affine;
 use energon::traits::ScalarField;
 
@@ -102,7 +102,7 @@ impl<S: Scheme> TryInto<super::group::Group<S>> for Group {
     fn try_into(self) -> Result<super::group::Group<S>, Self::Error> {
         let nodes: Result<Vec<_>> = self.nodes.into_iter().map(|node| node.try_into()).collect();
 
-        let mut dist_key: Vec<PublicKey<S>> = vec![];
+        let mut dist_key: Vec<KeyPoint<S>> = vec![];
         if !self.dist_key.is_empty() {
             for key in self.dist_key.iter() {
                 dist_key.push(Affine::deserialize(key)?)

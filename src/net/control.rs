@@ -20,7 +20,7 @@ use super::utils::INTERNAL_ERR;
 use crate::core::beacon::BeaconCmd;
 use crate::core::beacon::BeaconID;
 use crate::core::daemon::Daemon;
-use crate::core::schemes_init::Schemes;
+use crate::core::schemes::Schemes;
 
 use crate::log::Logger;
 use crate::protobuf::common::Metadata;

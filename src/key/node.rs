@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::keys::Identity;
-use energon::drand::Scheme;
+use crate::core::Scheme;
 
 #[derive(PartialEq)]
 pub struct Node<S: Scheme> {

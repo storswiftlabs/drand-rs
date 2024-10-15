@@ -19,8 +19,7 @@ use super::toml::FromToml;
 use super::toml::IntoToml;
 use super::toml::ScalarSerialized;
 
-use energon::drand::Scheme;
-
+use crate::core::Scheme;
 use anyhow::bail;
 use anyhow::Result;
 use std::path::Path;
