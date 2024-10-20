@@ -118,11 +118,7 @@ impl<S: Scheme> ChainHandler<S> {
 
     async fn add_partial(&mut self, p: PartialBeaconPacket) -> Result<()> {
         let sig_sh = SigShare::deserialize(&p.partial_sig)?;
-        if self
-            .sigs_buf
-            .iter()
-            .any(|stored| stored.index() == sig_sh.index())
-        {
+        if self.sigs_buf.iter().any(|stored| stored.index() == sig_sh.index()) {
             debug!(parent: self.node.span(), "ignoring dublicated partial, index: {}, round: {}", sig_sh.index(), p.round);
             return Ok(());
         }
@@ -135,11 +131,7 @@ impl<S: Scheme> ChainHandler<S> {
         let msg = S::Beacon::digest(&p.previous_signature, p.round);
         let key = &self.share.public().eval(sig_sh.index()).v;
         if S::bls_verify(key, sig_sh.value(), &msg).is_err() {
-            bail!(
-                "invalid bls signarure, index: {}, round: {}",
-                sig_sh.index(),
-                p.round
-            );
+            bail!("invalid bls signarure, index: {}, round: {}", sig_sh.index(), p.round);
         }
 
         debug!(parent: self.node.span(), "Added valid partial, index: {}, round: {}, last_stored.round: {}", sig_sh.index(), p.round, self.last_stored.round);
@@ -183,11 +175,7 @@ impl<S: Scheme> ChainHandler<S> {
                 metadata: From::from(&self.node.beacon_id),
             };
 
-            if !self
-                .sigs_buf
-                .iter()
-                .any(|stored| stored.index() == our_partial.index())
-            {
+            if !self.sigs_buf.iter().any(|stored| stored.index() == our_partial.index()) {
                 self.try_recover(our_partial, &msg);
             }
             let _ = self.node.pool.send(PoolCmd::Partial(packet)).await;

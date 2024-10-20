@@ -41,37 +41,15 @@ impl ProtoConvert for Identity {
     type Proto = crate::protobuf::common::Identity;
 
     fn to_proto(self) -> Self::Proto {
-        let Identity {
-            address,
-            key,
-            tls,
-            signature,
-            scheme_name: _,
-        } = self;
+        let Identity { address, key, tls, signature, scheme_name: _ } = self;
 
-        Self::Proto {
-            address,
-            key,
-            tls,
-            signature,
-        }
+        Self::Proto { address, key, tls, signature }
     }
 
     fn from_proto(pb: Self::Proto) -> Result<Self, Status> {
-        let Self::Proto {
-            address,
-            key,
-            tls,
-            signature,
-        } = pb;
+        let Self::Proto { address, key, tls, signature } = pb;
 
-        Ok(Identity {
-            address,
-            key,
-            tls,
-            signature,
-            scheme_name: None,
-        })
+        Ok(Identity { address, key, tls, signature, scheme_name: None })
     }
 }
 
@@ -81,10 +59,7 @@ impl ProtoConvert for Node {
     fn to_proto(self) -> Self::Proto {
         let Node { identity, index } = self;
 
-        Self::Proto {
-            public: Some(identity.to_proto()),
-            index,
-        }
+        Self::Proto { public: Some(identity.to_proto()), index }
     }
 
     fn from_proto(pb: Self::Proto) -> Result<Self, Status> {
@@ -120,14 +95,10 @@ impl ProtoConvert for Group {
         let mut common_nodes: Vec<Node> = Vec::with_capacity(nodes.len());
         for node in nodes.into_iter() {
             let identity = Identity::from_proto(
-                node.public
-                    .ok_or_else(|| Status::data_loss(ERR_EMPTY_DATA))?,
+                node.public.ok_or_else(|| Status::data_loss(ERR_EMPTY_DATA))?,
             )?;
 
-            common_nodes.push(Node {
-                identity,
-                index: node.index,
-            })
+            common_nodes.push(Node { identity, index: node.index })
         }
         common_nodes.sort_by_key(|node| node.index);
 
@@ -166,10 +137,8 @@ impl ProtoConvert for DkgInfo {
     }
 
     fn from_proto(pb: Self::Proto) -> Result<Self, Status> {
-        let new_group = Group::from_proto(
-            pb.new_group
-                .ok_or_else(|| Status::data_loss(ERR_EMPTY_DATA))?,
-        )?;
+        let new_group =
+            Group::from_proto(pb.new_group.ok_or_else(|| Status::data_loss(ERR_EMPTY_DATA))?)?;
 
         Ok(Self {
             new_group,
@@ -207,41 +176,15 @@ pub struct IdentityResponse {
 type ProtoIdentityResponse = crate::protobuf::drand::IdentityResponse;
 impl IdentityResponse {
     pub fn to_proto(self) -> ProtoIdentityResponse {
-        let IdentityResponse {
-            address,
-            key,
-            tls,
-            signature,
-            scheme_name,
-        } = self;
+        let IdentityResponse { address, key, tls, signature, scheme_name } = self;
 
-        ProtoIdentityResponse {
-            address,
-            key,
-            tls,
-            signature,
-            metadata: None,
-            scheme_name,
-        }
+        ProtoIdentityResponse { address, key, tls, signature, metadata: None, scheme_name }
     }
 
     pub fn from_proto(pb: ProtoIdentityResponse) -> Self {
-        let ProtoIdentityResponse {
-            address,
-            key,
-            tls,
-            signature,
-            metadata: _,
-            scheme_name,
-        } = pb;
+        let ProtoIdentityResponse { address, key, tls, signature, metadata: _, scheme_name } = pb;
 
-        Self {
-            address,
-            key,
-            tls,
-            signature,
-            scheme_name,
-        }
+        Self { address, key, tls, signature, scheme_name }
     }
 }
 
@@ -338,13 +281,7 @@ impl Bundle {
                     })
                     .collect();
 
-                Bundle::Deal(DealBundle {
-                    dealer_index,
-                    commits,
-                    deals,
-                    session_id,
-                    signature,
-                })
+                Bundle::Deal(DealBundle { dealer_index, commits, deals, session_id, signature })
             }
             ProtoBundle::Response(response_bundle) => {
                 let crate::protobuf::dkg::ResponseBundle {
@@ -356,18 +293,10 @@ impl Bundle {
 
                 let responses = responses
                     .into_iter()
-                    .map(|r| Response {
-                        dealer_index: r.dealer_index,
-                        status: r.status,
-                    })
+                    .map(|r| Response { dealer_index: r.dealer_index, status: r.status })
                     .collect();
 
-                Bundle::Response(ResponseBundle {
-                    share_index,
-                    responses,
-                    session_id,
-                    signature,
-                })
+                Bundle::Response(ResponseBundle { share_index, responses, session_id, signature })
             }
             ProtoBundle::Justification(justification_bundle) => {
                 let crate::protobuf::dkg::JustificationBundle {
@@ -379,10 +308,7 @@ impl Bundle {
 
                 let justifications = justifications
                     .into_iter()
-                    .map(|j| Justification {
-                        share_index: j.share_index,
-                        share: j.share,
-                    })
+                    .map(|j| Justification { share_index: j.share_index, share: j.share })
                     .collect();
 
                 Bundle::Justification(JustificationBundle {
@@ -400,13 +326,8 @@ impl Bundle {
     pub fn to_proto(self, beacon_id: String) -> DkgPacket {
         let bundle = match self {
             Bundle::Deal(deal_bundle) => {
-                let DealBundle {
-                    dealer_index,
-                    commits,
-                    deals,
-                    session_id,
-                    signature,
-                } = deal_bundle;
+                let DealBundle { dealer_index, commits, deals, session_id, signature } =
+                    deal_bundle;
 
                 let deals = deals
                     .into_iter()
@@ -425,12 +346,8 @@ impl Bundle {
                 })
             }
             Bundle::Response(response_bundle) => {
-                let ResponseBundle {
-                    share_index,
-                    responses,
-                    session_id,
-                    signature,
-                } = response_bundle;
+                let ResponseBundle { share_index, responses, session_id, signature } =
+                    response_bundle;
 
                 let responses = responses
                     .into_iter()
@@ -448,12 +365,8 @@ impl Bundle {
                 })
             }
             Bundle::Justification(justification_bundle) => {
-                let JustificationBundle {
-                    dealer_index,
-                    justifications,
-                    session_id,
-                    signature,
-                } = justification_bundle;
+                let JustificationBundle { dealer_index, justifications, session_id, signature } =
+                    justification_bundle;
 
                 let justifications = justifications
                     .into_iter()
@@ -473,14 +386,8 @@ impl Bundle {
         };
 
         DkgPacket {
-            dkg: Some(crate::protobuf::dkg::Packet {
-                metadata: None,
-                bundle: Some(bundle),
-            }),
-            metadata: Some(Metadata {
-                beacon_id,
-                ..Default::default()
-            }),
+            dkg: Some(crate::protobuf::dkg::Packet { metadata: None, bundle: Some(bundle) }),
+            metadata: Some(Metadata { beacon_id, ..Default::default() }),
         }
     }
 }

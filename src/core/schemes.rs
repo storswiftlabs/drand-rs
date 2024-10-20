@@ -59,11 +59,7 @@ impl Schemes {
     }
 
     pub fn list_schemes() -> Vec<String> {
-        vec![
-            DefaultScheme::ID.into(),
-            UnchainedScheme::ID.into(),
-            SchortSigScheme::ID.into(),
-        ]
+        vec![DefaultScheme::ID.into(), UnchainedScheme::ID.into(), SchortSigScheme::ID.into()]
     }
 }
 

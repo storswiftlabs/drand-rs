@@ -96,10 +96,7 @@ impl Control for ControlHandler {
         &self,
         _req: Request<ListSchemesRequest>,
     ) -> Result<Response<ListSchemesResponse>, Status> {
-        let response = ListSchemesResponse {
-            ids: Schemes::list_schemes(),
-            metadata: None,
-        };
+        let response = ListSchemesResponse { ids: Schemes::list_schemes(), metadata: None };
         Ok(Response::new(response))
     }
 
@@ -122,11 +119,7 @@ impl Control for ControlHandler {
         let id = utils::get_ref_id(metadata.as_ref());
 
         let (sender, callback) = oneshot::channel();
-        if let Err(e) = self
-            .beacons()
-            .cmd(BeaconCmd::ShowPublicKey(sender), id)
-            .await
-        {
+        if let Err(e) = self.beacons().cmd(BeaconCmd::ShowPublicKey(sender), id).await {
             return Err(Status::from_error(e.into()));
         }
         match callback.await {
@@ -153,9 +146,7 @@ impl Control for ControlHandler {
                 metadata = None
             }
         } else {
-            self.stop_daemon()
-                .await
-                .map_err(|e| Status::from_error(e.into()))?
+            self.stop_daemon().await.map_err(|e| Status::from_error(e.into()))?
         }
 
         Ok(Response::new(ShutdownResponse { metadata }))
@@ -217,10 +208,9 @@ pub async fn start(
     info!(parent: &logger.span, "DrandDaemon initializing: private_listen: {private_listen}, control_port: {control_port}, folder: {folder}");
     let daemon = Daemon::new(private_listen, folder, id.as_ref(), logger)?;
 
-    if let Err(err) = tokio::try_join!(
-        start_node(Arc::clone(&daemon)),
-        start_control(daemon, control_port)
-    ) {
+    if let Err(err) =
+        tokio::try_join!(start_node(Arc::clone(&daemon)), start_control(daemon, control_port))
+    {
         bail!("can't instantiate drand daemon: {err}")
     }
 
@@ -232,10 +222,7 @@ pub async fn stop(control_port: &str, beacon_id: Option<&String>) -> anyhow::Res
 
     let mut metadata = None; // shutdown daemon if beacon_id.is_none()
     if let Some(id) = beacon_id {
-        metadata = Some(Metadata {
-            beacon_id: id.into(),
-            ..Default::default()
-        })
+        metadata = Some(Metadata { beacon_id: id.into(), ..Default::default() })
     }
     match conn.shutdown(ShutdownRequest { metadata }).await {
         Ok(response) => {
@@ -247,10 +234,7 @@ pub async fn stop(control_port: &str, beacon_id: Option<&String>) -> anyhow::Res
         }
         Err(err) => {
             if let Some(id) = beacon_id {
-                println!(
-                    "error stopping beacon process: [{id}], status: {}",
-                    err.message()
-                )
+                println!("error stopping beacon process: [{id}], status: {}", err.message())
             } else {
                 println!("error stopping drand daemon, status: {}", err.message())
             }
@@ -268,10 +252,7 @@ pub async fn public_key_request(
 
     let mut metadata = None;
     if let Some(beacon_id) = beacon_id {
-        metadata = Some(Metadata {
-            beacon_id,
-            ..Default::default()
-        })
+        metadata = Some(Metadata { beacon_id, ..Default::default() })
     }
     let response = conn.public_key(PublicKeyRequest { metadata }).await?;
     let key: &Vec<u8> = response.get_ref().pub_key.as_ref();
@@ -281,9 +262,7 @@ pub async fn public_key_request(
 
 pub async fn list_schemes(control_port: &str) -> anyhow::Result<()> {
     let mut client = ControlClient::connect(control_address_client(control_port)).await?;
-    let list = client
-        .list_schemes(ListSchemesRequest { metadata: None })
-        .await?;
+    let list = client.list_schemes(ListSchemesRequest { metadata: None }).await?;
     let msg = list.get_ref().ids.join("\n");
     println!("Drand supports the following list of schemes:\n{msg}\n\nChoose one of them and set it on --scheme flag");
 
@@ -312,10 +291,7 @@ pub async fn share(
 
     let addr = control_address_client(control_port);
     let secret = crate::core::dkg::load_secret_cmd()?.into_bytes();
-    let metadata = Metadata {
-        beacon_id: id.unwrap(),
-        ..Default::default()
-    };
+    let metadata = Metadata { beacon_id: id.unwrap(), ..Default::default() };
     let req = InitDkgPacket {
         info: Some(SetupInfoPacket {
             leader,

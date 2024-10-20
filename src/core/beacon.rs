@@ -125,13 +125,7 @@ impl<S: Scheme> Beacon<S> {
     ) -> Self {
         let span = info_span!("", id = format!("{private_listen}.{id}"));
 
-        Self(Arc::new(InnerNode {
-            beacon_id: id.clone(),
-            fs,
-            keypair,
-            pool,
-            span,
-        }))
+        Self(Arc::new(InnerNode { beacon_id: id.clone(), fs, keypair, pool, span }))
     }
 
     pub fn start(self, mut rx: Receiver<BeaconCmd>) {
@@ -299,18 +293,11 @@ impl<S: Scheme> Beacon<S> {
         secret: &[u8],
     ) -> Result<DkgConfig<S>> {
         if secret != p.secret_proof {
-            bail!(
-                "secret_proof is not valid, beacon_id: {}",
-                self.beacon_id.as_str()
-            );
+            bail!("secret_proof is not valid, beacon_id: {}", self.beacon_id.as_str());
         }
 
         if p.new_group.scheme_id != S::ID {
-            bail!(
-                "invalid scheme, expected: {}, received: {}",
-                S::ID,
-                p.new_group.scheme_id,
-            );
+            bail!("invalid scheme, expected: {}, received: {}", S::ID, p.new_group.scheme_id,);
         }
         let leader_key = Affine::deserialize(leader_key)?;
 
@@ -321,10 +308,7 @@ impl<S: Scheme> Beacon<S> {
         }
         let group: Group<S> = p.new_group.try_into()?;
         let Some(dkg_index) = group.find_index(self.keypair.public()) else {
-            bail!(
-                "local node {} is not found in group_file",
-                self.keypair.public().address()
-            )
+            bail!("local node {} is not found in group_file", self.keypair.public().address())
         };
 
         Ok(DkgConfig::new(leader_key, group, p.dkg_timeout, dkg_index))
@@ -333,9 +317,7 @@ impl<S: Scheme> Beacon<S> {
 
 impl From<String> for BeaconID {
     fn from(value: String) -> Self {
-        Self {
-            inner: value.into(),
-        }
+        Self { inner: value.into() }
     }
 }
 

@@ -70,10 +70,7 @@ impl<S: Scheme> ToProto for Node<S> {
     type Packet = ProtoNode;
 
     fn to_proto(&self) -> Self::Packet {
-        Self::Packet {
-            public: Some(self.identity().to_proto()),
-            index: self.index(),
-        }
+        Self::Packet { public: Some(self.identity().to_proto()), index: self.index() }
     }
 }
 
@@ -89,9 +86,7 @@ impl<S: Scheme> ToProto for Group<S> {
                 vec![]
             } else {
                 let mut dist_key = Vec::with_capacity(self.dist_key.len());
-                self.dist_key
-                    .iter()
-                    .for_each(|key| dist_key.push(key.serialize().unwrap()));
+                self.dist_key.iter().for_each(|key| dist_key.push(key.serialize().unwrap()));
                 dist_key
             }
         };
@@ -127,10 +122,7 @@ impl From<&BeaconID> for Option<Metadata> {
             beacon_id = id.as_str();
         }
 
-        Some(Metadata {
-            beacon_id: beacon_id.to_string(),
-            ..Default::default()
-        })
+        Some(Metadata { beacon_id: beacon_id.to_string(), ..Default::default() })
     }
 }
 

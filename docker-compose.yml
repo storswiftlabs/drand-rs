@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  drand:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - .:/app
+    working_dir: /app
+    entrypoint: ["./run"]

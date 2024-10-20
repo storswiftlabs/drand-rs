@@ -71,10 +71,7 @@ impl<S: Scheme> Group<S> {
     }
 
     pub fn find_index(&self, identity: &Identity<S>) -> Option<u32> {
-        self.nodes
-            .iter()
-            .find(|node| node.identity() == identity)
-            .map(|node| node.index())
+        self.nodes.iter().find(|node| node.identity() == identity).map(|node| node.index())
     }
 
     pub fn get_key(&self, index: u32) -> Result<&KeyPoint<S>> {

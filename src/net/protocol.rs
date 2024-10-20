@@ -105,9 +105,7 @@ impl Protocol for ProtocolHandler {
         &self,
         _request: Request<SignalDkgPacket>,
     ) -> Result<Response<Empty>, Status> {
-        Err(Status::failed_precondition(
-            "Leader logic is not implemented yet",
-        ))
+        Err(Status::failed_precondition("Leader logic is not implemented yet"))
     }
 
     async fn get_identity(

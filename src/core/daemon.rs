@@ -54,13 +54,7 @@ impl Daemon {
         let pool = Pool::start(false, logger.register_pool());
         let beacons = MultiBeacon::new(beacon_id, base_folder, &private_listen, pool.clone())?;
         let (stop_daemon, _) = tokio::sync::broadcast::channel::<()>(1);
-        let daemon = Self {
-            beacons,
-            stop_daemon,
-            logger,
-            private_listen,
-            pool,
-        };
+        let daemon = Self { beacons, stop_daemon, logger, private_listen, pool };
 
         Ok(Arc::new(daemon))
     }
@@ -127,9 +121,7 @@ impl Daemon {
             .await
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
-        callback
-            .await
-            .map_or_else(|_| Err(Status::internal(INTERNAL_ERR)), Ok)
+        callback.await.map_or_else(|_| Err(Status::internal(INTERNAL_ERR)), Ok)
     }
 
     pub async fn broadcast_dkg_bundle(&self, bundle: Bundle, id: &str) -> Result<(), Status> {
@@ -166,14 +158,9 @@ impl Daemon {
 
     pub async fn pool_status(&self) -> Result<String, Status> {
         let (sender, callback) = oneshot::channel();
-        self.pool
-            .send(PoolCmd::Status(sender))
-            .await
-            .map_err(|e| Status::from_error(e.into()))?;
+        self.pool.send(PoolCmd::Status(sender)).await.map_err(|e| Status::from_error(e.into()))?;
 
-        callback
-            .await
-            .map_or_else(|_| Err(Status::internal(INTERNAL_ERR)), Ok)
+        callback.await.map_or_else(|_| Err(Status::internal(INTERNAL_ERR)), Ok)
     }
 }
 

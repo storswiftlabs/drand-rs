@@ -1,0 +1,40 @@
+name: Drand
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+env:
+    CARGO_TERM_COLOR: always
+
+jobs:
+    build:
+        runs-on: ubuntu-latest
+        strategy:
+            matrix:
+                rust: [stable]
+    
+        steps:
+          - uses: actions/checkout@v2
+          - name: Install protobuf-compiler
+            run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+          - name: Install Rust
+            uses: actions-rs/toolchain@v1
+            with:
+              profile: minimal
+              toolchain: ${{ matrix.rust }}
+              override: true
+              components: rustfmt, clippy
+          - name: Build
+            run: cargo build --release --verbose --features arkworks
+          - name: Test
+            run: cargo test --release --verbose --features arkworks
+          - name: Lint
+            run: cargo clippy --release --features arkworks 
+          #- name: Format check (verbose)
+          #  run: cargo fmt -- --check --verbose $(find . -name '*.rs' -not -path './src/protobuf/*')
+        

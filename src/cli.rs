@@ -146,25 +146,16 @@ impl Cli {
     pub async fn run(self) -> anyhow::Result<()> {
         init_log(self.verbose)?;
         match self.commands {
-            Commands::GenerateKeypair {
-                folder,
-                id,
-                scheme,
-                address,
-                tls_disable,
-            } => {
+            Commands::GenerateKeypair { folder, id, scheme, address, tls_disable } => {
                 //  - Default boolean value is true, omitting '--tls_disable' leads to tls_disable:true
                 //  - We want to keep CLI in sync with golang implementation
                 //  - From here tls:true means tls enabled, this can probably be done more elegantly
                 let tls = !tls_disable;
                 crate::core::schemes::gen_keypair(scheme, &folder, tls, id, address)?
             }
-            Commands::Start {
-                folder,
-                id,
-                private_listen,
-                control,
-            } => control::start(&folder, id, &control, private_listen).await?,
+            Commands::Start { folder, id, private_listen, control } => {
+                control::start(&folder, id, &control, private_listen).await?
+            }
 
             Commands::Stop { control, id } => control::stop(&control, id.as_ref()).await?,
 
@@ -172,21 +163,11 @@ impl Cli {
                 Show::Public { control, id } => control::public_key_request(&control, id).await?,
             },
             Commands::Util(util) => match util {
-                Util::Check {
-                    tls_disable,
-                    id,
-                    addresses,
-                } => todo!(),
+                Util::Check { tls_disable, id, addresses } => todo!(),
                 Util::ListSchemes { control } => control::list_schemes(&control).await?,
                 Util::PoolInfo { control } => control::pool_info(&control).await?,
             },
-            Commands::Share {
-                control,
-                leader,
-                id,
-                tls_disable,
-                connect,
-            } => {
+            Commands::Share { control, leader, id, tls_disable, connect } => {
                 //  - Default boolean value is true, omitting '--tls_disable' leads to tls_disable:true
                 //  - We want to keep CLI in sync with golang implementation
                 //  - From here tls:true means tls enabled, this can probably be done more elegantly

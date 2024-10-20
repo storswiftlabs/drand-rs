@@ -56,11 +56,7 @@ pub const MINIMUM_SHARE_SECRET_LENGTH: usize = 32;
 
 pub enum DkgState {
     NonActive,
-    Initiated {
-        leader_key: Vec<u8>,
-        dkg_secret: Vec<u8>,
-        _reloader: mpsc::Sender<BeaconCmd>,
-    },
+    Initiated { leader_key: Vec<u8>, dkg_secret: Vec<u8>, _reloader: mpsc::Sender<BeaconCmd> },
     Running(mpsc::Sender<(Bundle, Callback<Result<()>>)>),
 }
 
@@ -101,10 +97,7 @@ impl PhaseTimer {
         let mut interval = tokio::time::interval(Duration::from_secs(timeout.into()));
         // next line purpose is to ignore first tick which completes immediately
         interval.tick().await;
-        Self {
-            phase: Phase::Deal,
-            interval,
-        }
+        Self { phase: Phase::Deal, interval }
     }
 
     fn new_phase(&mut self) {
@@ -133,13 +126,7 @@ pub struct DkgConfig<S: Scheme> {
 impl<S: Scheme> DkgConfig<S> {
     pub fn new(leader_key: KeyPoint<S>, group: Group<S>, timeout: u32, index: u32) -> Self {
         let session_id = group.get_nonce();
-        Self {
-            leader_key,
-            group,
-            session_id,
-            timeout,
-            index,
-        }
+        Self { leader_key, group, session_id, timeout, index }
     }
 }
 
@@ -235,9 +222,7 @@ impl<S: Scheme> Generator<S> {
                 }
             };
 
-            let _ = _reloader
-                .send(BeaconCmd::Dkg(DkgCmd::Finish(dkg_result)))
-                .await;
+            let _ = _reloader.send(BeaconCmd::Dkg(DkgCmd::Finish(dkg_result))).await;
         });
 
         Ok(())
@@ -247,31 +232,22 @@ impl<S: Scheme> Generator<S> {
         let now = Instant::now();
         let is_added = match bundle {
             Bundle::Deal(mut d) => {
-                let hash = self
-                    .precheck(d.hash(), &d.signature, d.dealer_index, &d.session_id)
-                    .await?;
+                let hash =
+                    self.precheck(d.hash(), &d.signature, d.dealer_index, &d.session_id).await?;
 
-                self.sets
-                    .deal
-                    .push(d.dealer_index, hash, d, "deal", self.node.span())?
+                self.sets.deal.push(d.dealer_index, hash, d, "deal", self.node.span())?
             }
             Bundle::Response(mut r) => {
-                let hash = self
-                    .precheck(r.hash(), &r.signature, r.share_index, &r.session_id)
-                    .await?;
+                let hash =
+                    self.precheck(r.hash(), &r.signature, r.share_index, &r.session_id).await?;
 
-                self.sets
-                    .resp
-                    .push(r.share_index, hash, r, "responce", self.node.span())?
+                self.sets.resp.push(r.share_index, hash, r, "responce", self.node.span())?
             }
             Bundle::Justification(mut j) => {
-                let hash = self
-                    .precheck(j.hash(), &j.signature, j.dealer_index, &j.session_id)
-                    .await?;
+                let hash =
+                    self.precheck(j.hash(), &j.signature, j.dealer_index, &j.session_id).await?;
 
-                self.sets
-                    .just
-                    .push(j.dealer_index, hash, j, "justification", self.node.span())?
+                self.sets.just.push(j.dealer_index, hash, j, "justification", self.node.span())?
             }
         };
         let new_now = tokio::time::Instant::now();
@@ -280,12 +256,8 @@ impl<S: Scheme> Generator<S> {
     }
 
     pub async fn send_deals(&self) -> Result<()> {
-        let commits: Vec<Vec<u8>> = self
-            .pub_poly
-            .commits
-            .iter()
-            .map(|commit| commit.serialize().unwrap())
-            .collect();
+        let commits: Vec<Vec<u8>> =
+            self.pub_poly.commits.iter().map(|commit| commit.serialize().unwrap()).collect();
 
         let mut deals: Vec<Deal> = vec![];
         for node in &self.inputs.group.nodes {
@@ -295,10 +267,7 @@ impl<S: Scheme> Generator<S> {
             }
 
             if let Ok(cipher) = S::encrypt(node.identity().key(), &si) {
-                deals.push(Deal {
-                    share_index: node.index(),
-                    encrypted_share: cipher,
-                })
+                deals.push(Deal { share_index: node.index(), encrypted_share: cipher })
             }
         }
         let mut bundle = DealBundle {
@@ -357,13 +326,8 @@ impl<S: Scheme> Generator<S> {
         // XXX: 'spawn_blocking' might be overkill here
         let node = Arc::clone(&self.node);
         let local_index = self.inputs.index;
-        let group_node_indexes = self
-            .inputs
-            .group
-            .nodes
-            .iter()
-            .map(|node| node.index())
-            .collect::<Vec<u32>>();
+        let group_node_indexes =
+            self.inputs.group.nodes.iter().map(|node| node.index()).collect::<Vec<u32>>();
         let self_sets_deal = self.sets.deal.vals.to_owned();
         let threshold = self.inputs.group.threshold as usize;
 
@@ -459,15 +423,9 @@ impl<S: Scheme> Generator<S> {
         let mut responses: Vec<Response> = vec![];
         for node in &self.inputs.group.nodes {
             if self.sets.deal.bad.contains(&node.index()) {
-                responses.push(Response {
-                    dealer_index: node.index(),
-                    status: false,
-                })
+                responses.push(Response { dealer_index: node.index(), status: false })
             } else {
-                responses.push(Response {
-                    dealer_index: node.index(),
-                    status: true,
-                })
+                responses.push(Response { dealer_index: node.index(), status: true })
             }
         }
 
@@ -482,10 +440,7 @@ impl<S: Scheme> Generator<S> {
 
         let new_now = tokio::time::Instant::now();
 
-        if let Err(e) = self
-            .broadcast
-            .send(Bundle::Response(bundle), &self.node.beacon_id)
-        {
+        if let Err(e) = self.broadcast.send(Bundle::Response(bundle), &self.node.beacon_id) {
             error!(parent: self.node.span(), "generator: {e}")
         }
         trace!(parent: self.node.span(), "MEASURE: send_responses: {:?}", new_now.checked_duration_since(now).unwrap());
@@ -522,17 +477,10 @@ impl<S: Scheme> Generator<S> {
         let dist_key_share = DistKeyShare::<S>::new(
             // TODO: it can be done without cloning
             self.inputs.group.dist_key.clone(),
-            PriShare {
-                i: self.inputs.index,
-                v: dist_share,
-            },
+            PriShare { i: self.inputs.index, v: dist_share },
         );
 
-        match self
-            .node
-            .fs
-            .save_distributed(&self.inputs.group, &dist_key_share)
-        {
+        match self.node.fs.save_distributed(&self.inputs.group, &dist_key_share) {
             Ok(path) => {
                 info!(parent: self.node.span(), "distributed share saved at {}", path.display())
             }
@@ -570,13 +518,7 @@ struct Sets {
 }
 impl Sets {
     fn new(group_size: usize, span: Span) -> Self {
-        Self {
-            span,
-            group_size,
-            deal: Set::new(),
-            resp: Set::new(),
-            just: Set::new(),
-        }
+        Self { span, group_size, deal: Set::new(), resp: Set::new(), just: Set::new() }
     }
 
     fn is_fast_move(&self, phase: Phase) -> bool {
@@ -616,10 +558,7 @@ struct Set<B> {
 
 impl<B> Set<B> {
     fn new() -> Self {
-        Self {
-            vals: HashMap::new(),
-            bad: HashSet::new(),
-        }
+        Self { vals: HashMap::new(), bad: HashSet::new() }
     }
 
     fn is_bad(&self, idx: u32) -> bool {
