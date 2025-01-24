@@ -1,3 +1,7 @@
+# Notice
+
+Main branch currently support the drand-go 1.5.8 binary . To check for versions greater than this , look into the other branches
+
 # drand-rs
 
 **This project is currently at the prototype stage and does not contain full functionality. Codebase uploaded only for demonstration purpose and does not reflect the final quiality. For production usage, please visit [Drand Golang implementation](https://github.com/drand/drand)**
@@ -54,4 +58,26 @@ Number of nodes can be modified for various scenaries, for example:
 
 ```
    [video: 4-7-10 nodes group](https://drive.google.com/file/d/191rzucL5gX529J6PMfG5YfpZej6GoWQV/view?usp=drive_link)
+
+## How to run Docker image 
+
+Build the image 
+
+```
+docker build -t drand-rs .
+```
+
+Check if the image is created
+
+```
+docker images
+```
+
+Run the docker image 
+
+```
+docker run --rm -it drand-rs 
+#or
+docker compose up
+```
 

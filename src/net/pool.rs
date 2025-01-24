@@ -128,9 +128,7 @@ impl PoolPartial for Pool {
                 .iter()
                 .for_each(|beacon_id| self.subscribe_client(beacon_id, &uri, conn.clone()));
 
-            self.active
-                .0
-                .insert(uri, ActiveConnection { conn, beacon_ids });
+            self.active.0.insert(uri, ActiveConnection { conn, beacon_ids });
         } else {
             error!(parent: &self.logger.span,"add_connection:: this should not be possible")
         }

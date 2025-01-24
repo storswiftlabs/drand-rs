@@ -106,11 +106,7 @@ impl MultiBeacon {
         if let Some(beacon) = self.0.load().iter().find(|h| h.beacon_id == id) {
             beacon
                 .tx
-                .send(BeaconCmd::Dkg(DkgCmd::Init(
-                    callback,
-                    setup_info,
-                    beacon.tx.clone(),
-                )))
+                .send(BeaconCmd::Dkg(DkgCmd::Init(callback, setup_info, beacon.tx.clone())))
                 .await?
         } else {
             bail!("MultiBeacon::cmd: beacon [{id}] not found")
@@ -126,21 +122,11 @@ impl MultiBeacon {
         private_listen: &str,
         pool: mpsc::Sender<PoolCmd>,
     ) -> Result<()> {
-        if self
-            .0
-            .load()
-            .iter()
-            .any(|h| h.beacon_id.as_str() == beacon_id)
-        {
+        if self.0.load().iter().any(|h| h.beacon_id.as_str() == beacon_id) {
             bail!("MultiBeacon::load_id: beacon is already loaded: {beacon_id}")
         }
         let h = BeaconHandler::new(beacon_id, base_folder, private_listen, pool)?;
-        let mut new_store = self
-            .0
-            .load()
-            .iter()
-            .cloned()
-            .collect::<Vec<BeaconHandler>>();
+        let mut new_store = self.0.load().iter().cloned().collect::<Vec<BeaconHandler>>();
 
         new_store.push(h);
         self.0.store(Arc::new(new_store));

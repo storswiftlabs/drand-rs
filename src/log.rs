@@ -47,27 +47,18 @@ pub struct Logger {
 impl Logger {
     pub fn register_node(private_listen: &str) -> Self {
         let span = tracing::info_span!("", node = private_listen);
-        Self {
-            host: private_listen.into(),
-            span,
-        }
+        Self { host: private_listen.into(), span }
     }
 
     pub fn register_pool(&self) -> Self {
         let span = tracing::info_span!("", pool = self.host.as_ref());
-        Self {
-            host: Arc::clone(&self.host),
-            span,
-        }
+        Self { host: Arc::clone(&self.host), span }
     }
     // TODO: use this to specify also dkg index
     pub fn new_child(&self, mut args: String) -> Self {
         args.insert_str(0, self.host.as_ref());
         let span = tracing::info_span!("", id = args);
-        Self {
-            host: Arc::clone(&self.host),
-            span,
-        }
+        Self { host: Arc::clone(&self.host), span }
     }
 }
 

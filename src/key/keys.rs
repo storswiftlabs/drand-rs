@@ -36,15 +36,7 @@ impl<S: Scheme> Pair<S> {
         let private = S::Scalar::random();
         let key = S::sk_to_pk(&private);
         let signature = S::bls_sign(&key.hash().unwrap(), &private).unwrap();
-        Self {
-            private,
-            public: Identity {
-                key,
-                address,
-                tls,
-                signature,
-            },
-        }
+        Self { private, public: Identity { key, address, tls, signature } }
     }
 
     pub fn set(private: S::Scalar, public: Identity<S>) -> Self {
@@ -70,12 +62,7 @@ pub struct Identity<S: Scheme> {
 
 impl<S: Scheme> Identity<S> {
     pub fn new(address: String, tls: bool, key: KeyPoint<S>, signature: SigPoint<S>) -> Self {
-        Self {
-            address,
-            key,
-            tls,
-            signature,
-        }
+        Self { address, key, tls, signature }
     }
 
     pub fn key(&self) -> &KeyPoint<S> {
@@ -106,10 +93,7 @@ pub struct DistKeyShare<S: Scheme> {
 
 impl<S: Scheme> DistKeyShare<S> {
     pub fn new(commits: Vec<KeyPoint<S>>, pri_share: PriShare<S>) -> Self {
-        Self {
-            commits: PubPoly { commits },
-            pri_share,
-        }
+        Self { commits: PubPoly { commits }, pri_share }
     }
 
     pub fn public(&self) -> &PubPoly<S> {

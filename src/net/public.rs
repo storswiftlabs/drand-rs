@@ -25,10 +25,7 @@ pub struct PublicHandler;
 #[tonic::async_trait]
 impl Public for PublicHandler {
     async fn home(&self, _request: Request<HomeRequest>) -> Result<Response<HomeResponse>, Status> {
-        let res = HomeResponse {
-            status: ("").into(),
-            metadata: None,
-        };
+        let res = HomeResponse { status: ("").into(), metadata: None };
 
         Ok(Response::new(res))
     }

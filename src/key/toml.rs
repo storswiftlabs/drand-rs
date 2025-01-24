@@ -79,12 +79,8 @@ impl<S: ScalarField> IntoToml for S {
 
 impl<S: Scheme> IntoToml for Node<S> {
     fn to_value(&self) -> Value {
-        let mut map = self
-            .identity()
-            .to_value()
-            .as_table()
-            .expect("Value should be Table")
-            .to_owned();
+        let mut map =
+            self.identity().to_value().as_table().expect("Value should be Table").to_owned();
         map.extend(map! {"Index": self.index()});
         Value::Table(map)
     }
@@ -103,18 +99,11 @@ impl<S: Scheme> IntoToml for Group<S> {
             "ID":             self.beacon_id.to_string(),
         };
 
-        let nodes: Vec<Value> = self
-            .nodes
-            .iter()
-            .map(|node| node.to_value())
-            .collect::<Array>();
+        let nodes: Vec<Value> = self.nodes.iter().map(|node| node.to_value()).collect::<Array>();
         map.insert("Nodes".to_string(), Value::Array(nodes));
 
-        let dist_key = self
-            .dist_key
-            .iter()
-            .map(|key| Value::String(key.to_string()))
-            .collect::<Array>();
+        let dist_key =
+            self.dist_key.iter().map(|key| Value::String(key.to_string())).collect::<Array>();
 
         let mut public_key = Table::new();
         public_key.insert("Coefficients".to_string(), Value::Array(dist_key));
@@ -154,11 +143,7 @@ impl<S: Scheme> FromToml for Identity<S> {
     fn from_value(value: &Value) -> Result<Self> {
         let scheme_str = get!(value, "SchemeName", as_str)?;
         if S::ID != scheme_str {
-            bail!(
-                "fs: identity load error, expected scheme: {} received: {}",
-                S::ID,
-                scheme_str
-            )
+            bail!("fs: identity load error, expected scheme: {} received: {}", S::ID, scheme_str)
         }
         let address = get!(value, "Address", as_str)?.to_string();
         let tls = get!(value, "TLS", as_bool)?;
@@ -195,16 +180,10 @@ impl FromToml for super::common::Group {
         let beacon_id = get!(value, "ID", as_str)?.to_string();
 
         let nodes_array = get!(value, "Nodes", as_array)?;
-        let nodes: Result<Vec<_>> = nodes_array
-            .iter()
-            .map(super::common::Node::from_value)
-            .collect();
+        let nodes: Result<Vec<_>> =
+            nodes_array.iter().map(super::common::Node::from_value).collect();
 
-        let dist_key_array = get!(
-            get!(value, "PublicKey", as_table)?,
-            "Coefficients",
-            as_array
-        )?;
+        let dist_key_array = get!(get!(value, "PublicKey", as_table)?, "Coefficients", as_array)?;
 
         if dist_key_array.is_empty() {
             bail!("Distributed public key is empty")
@@ -272,11 +251,7 @@ impl<S: Scheme> FromToml for DistKeyShare<S> {
     fn from_value(value: &Value) -> Result<Self> {
         let scheme_str = get!(value, "SchemeName", as_str)?;
         if S::ID != scheme_str {
-            bail!(
-                "fs: share load error, expected scheme: {} received: {}",
-                S::ID,
-                scheme_str
-            )
+            bail!("fs: share load error, expected scheme: {} received: {}", S::ID, scheme_str)
         }
         let i = get!(value, "Index", as_integer)? as u32;
         let share_bytes = hex::decode(get!(value, "Share", as_str)?)?;

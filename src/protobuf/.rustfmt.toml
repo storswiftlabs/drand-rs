@@ -1,0 +1,3 @@
+# This file is used to format generated protobuf code
+use_small_heuristics = "Max"
+merge_imports = true

@@ -85,11 +85,7 @@ pub struct DkgBroadcast {
 
 impl DkgBroadcast {
     pub fn send(&self, bundle: Bundle, beacon_id: &BeaconID) -> anyhow::Result<()> {
-        if self
-            .tx
-            .send(bundle.to_proto(beacon_id.to_string()))
-            .is_err()
-        {
+        if self.tx.send(bundle.to_proto(beacon_id.to_string())).is_err() {
             bail!("DkgBroadcast: channel closed: {beacon_id}")
         }
         Ok(())

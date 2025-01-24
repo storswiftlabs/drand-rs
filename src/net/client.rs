@@ -41,10 +41,7 @@ impl ProtocolClient {
 
     pub async fn get_identity(&mut self, beacon_id: &str) -> Result<IdentityResponse> {
         let req = IdentityRequest {
-            metadata: Some(Metadata {
-                beacon_id: beacon_id.to_string(),
-                ..Default::default()
-            }),
+            metadata: Some(Metadata { beacon_id: beacon_id.to_string(), ..Default::default() }),
         };
         let responce = self
             .0
@@ -65,10 +62,7 @@ impl ProtocolClient {
         let req = SignalDkgPacket {
             node: Some(identity.to_proto()),
             secret_proof: secret.to_vec(),
-            metadata: Some(Metadata {
-                beacon_id: beacon_id.to_string(),
-                ..Default::default()
-            }),
+            metadata: Some(Metadata { beacon_id: beacon_id.to_string(), ..Default::default() }),
             ..Default::default()
         };
 
@@ -90,11 +84,7 @@ pub fn uri_from_addr(addr: &str, tls: bool) -> anyhow::Result<Uri> {
         && uri.path_and_query().is_none()
     {
         let mut parts = uri.into_parts();
-        parts.scheme = if tls {
-            Some(Scheme::HTTPS)
-        } else {
-            Some(Scheme::HTTP)
-        };
+        parts.scheme = if tls { Some(Scheme::HTTPS) } else { Some(Scheme::HTTP) };
         parts.path_and_query = Some(PathAndQuery::from_static("/"));
         uri = Uri::from_parts(parts)?;
     } else {

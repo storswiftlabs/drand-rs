@@ -76,9 +76,7 @@ impl FileStore {
     }
 
     pub fn set(base_folder: &str, beacon_id: &str) -> Self {
-        let base_folder = PathBuf::from(base_folder)
-            .join(MULTIBEACON_FOLDER)
-            .join(beacon_id);
+        let base_folder = PathBuf::from(base_folder).join(MULTIBEACON_FOLDER).join(beacon_id);
         let key_folder = base_folder.join(KEY_FOLDER);
         let private_key_file = key_folder.join(PRIVATE_ID_FILE);
         let public_key_file = key_folder.join(PUBLIC_ID_FILE);
@@ -101,11 +99,7 @@ impl FileStore {
     pub fn save_pair<S: Scheme>(&self, pair: &Pair<S>) -> Result<()> {
         std::fs::write(&self.private_key_file, pair.private().to_toml()?)?;
         std::fs::write(&self.public_key_file, pair.public().to_toml()?)?;
-        println!(
-            "Generated keys at: {}\n{}\n",
-            self.key_folder.display(),
-            pair.public()
-        );
+        println!("Generated keys at: {}\n{}\n", self.key_folder.display(), pair.public());
         Ok(())
     }
 
