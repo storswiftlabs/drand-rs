@@ -1,10 +1,6 @@
-# Notice
+# drand-rs [WIP]
 
-Main branch currently support the drand-go 1.5.8 binary . To check for versions greater than this , look into the other branches
-
-# drand-rs
-
-**This project is currently at the prototype stage and does not contain full functionality. Codebase uploaded only for demonstration purpose and does not reflect the final quiality. For production usage, please visit [Drand Golang implementation](https://github.com/drand/drand)**
+**Note: The project is currently at the prototype stage and does not contain full functionality. Codebase uploaded only for demonstration purpose. The main branch is configured to interact with [v1.5.8-testnet](https://github.com/drand/drand/releases/tag/v1.5.8-testnest). For production usage, please visit [Drand Golang implementation](https://github.com/drand/drand)**
 
 
 ## Motivation
@@ -24,7 +20,7 @@ cargo build --release --features arkworks
 # or
 cargo build --release --features blstrs
 ```
-2. Download golang binary [binary v1.5.8](https://github.com/drand/drand/releases/tag/v1.5.8-testnest) (tested on linux amd64)
+2. Download golang binary [v1.5.8-testnest](https://github.com/drand/drand/releases/tag/v1.5.8-testnest) (tested on linux amd64)
 
 Rename binaries into **drand_go** and **drand_rs** accordingly and place them into [make_demo](/make_demo/) folder.
 

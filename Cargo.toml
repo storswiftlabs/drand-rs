@@ -1,4 +1,5 @@
 [package]
+authors = ["version513 at StorSwift Labs"]
 name = "drand"
 version = "0.0.1"
 edition = "2021"
