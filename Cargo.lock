@@ -299,6 +299,7 @@ dependencies = [
  "prost-types",
  "thiserror",
  "tokio",
+ "tokio-stream",
  "tonic",
  "tonic-build",
  "tonic-health",
