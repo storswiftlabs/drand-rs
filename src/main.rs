@@ -13,7 +13,6 @@
 // limitations under the License.
 
 #![warn(clippy::pedantic)]
-
 use clap::Parser;
 
 #[tokio::main]

@@ -1,45 +1,18 @@
 [package]
 authors = ["version513 at StorSwift Labs"]
 name = "drand"
-version = "0.0.1"
+version = "0.2.0"
 edition = "2021"
 
 [dependencies]
-time = "0.3.30"
-tokio-stream = { version = "0.1", features = ["net"] }
-chrono = "0.4.26"
-tracing = { version = "0.1.37" }
-tracing-subscriber = { version = "0.3.17", default-features = true, features = [
-    "fmt",
-    "time",
-    "env-filter",
-] }
-http = "0.2.9"
-tonic = { version = "0.10.0", features = ["tls-roots"] }
-aes-gcm = "0.10.1"
-hkdf = "0.12.3"
-prost = "0.12.0"
-home = "0.5.5"
 anyhow = "1.0.71"
-tokio = { version = "1.27.0", features = ["macros", "rt-multi-thread"] }
-energon = { git = "https://github.com/version513/energon.git", rev = "97f4013", default-features = false }
 clap = { version = "4", features = ["derive", "string"] }
-crev-common = "0.25.0"
-toml = { version = "0.8.0", features = ["preserve_order"] }
-sha2 = "0.10.7"
-hex = "0.4.2"
-arc-swap = "1.7.1"
-indexmap = "2.5.0"
-
+tokio = { version = "1.43.0", features = ["macros", "rt-multi-thread"] }
 
 [build-dependencies]
-tonic-build = "0.10.0"
+tonic-build = "0.12.3"
 
 [profile.release]
 lto = true
 strip = true
 codegen-units = 1
-
-[features]
-blstrs = ["energon/bls12381_blstrs"]
-arkworks = ["energon/bls12381_arkworks"]
