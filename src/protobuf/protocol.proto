@@ -1,0 +1,64 @@
+/*
+ * This protobuf file contains the services and message definitions of all
+ * methods used by drand nodes to produce distributed randomness.
+ *
+ */
+syntax = "proto3";
+
+package drand;
+
+import "src/protobuf/common.proto";
+
+service Protocol {
+  // GetIdentity returns the identity of the drand node
+  rpc GetIdentity(IdentityRequest) returns (IdentityResponse);
+  // PartialBeacon sends its partial beacon to another node
+  rpc PartialBeacon(PartialBeaconPacket) returns (drand.Empty);
+  // SyncRequest forces a daemon to sync up its chain with other nodes
+  rpc SyncChain(SyncRequest) returns (stream BeaconPacket);
+  // Status responds with the actual status of drand process
+  rpc Status(StatusRequest) returns (StatusResponse) {}
+}
+
+message IdentityRequest { Metadata metadata = 1; }
+
+message IdentityResponse {
+  string address = 1;
+  bytes key = 2;
+  // BLS signature over the identity to prove possession of the private key
+  bytes signature = 4;
+  // --------------
+  Metadata metadata = 5;
+  // We need to specify the scheme name to make sure the key is getting probably
+  // decoded on the client side
+  string schemeName = 6;
+}
+
+message PartialBeaconPacket {
+  // Round is the round for which the beacon will be created from the partial
+  // signatures
+  uint64 round = 1;
+  // signature of the previous round - could be removed at some point but now
+  // is used to verify the signature even before accessing the store
+  bytes previous_signature = 2;
+  // partial signature - a threshold of them needs to be aggregated to produce
+  // the final beacon at the given round.
+  bytes partial_sig = 3;
+  //
+  Metadata metadata = 4;
+}
+
+// SyncRequest is from a node that needs to sync up with the current head of the
+// chain
+message SyncRequest {
+  uint64 from_round = 1;
+  //
+  Metadata metadata = 2;
+}
+
+message BeaconPacket {
+  bytes previous_signature = 1;
+  uint64 round = 2;
+  bytes signature = 3;
+  Metadata metadata = 4;
+}
