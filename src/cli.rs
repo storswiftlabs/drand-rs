@@ -2,10 +2,14 @@ use clap::arg;
 use clap::command;
 use clap::Parser;
 
+/// Top-level error for CLI commands
+#[derive(thiserror::Error, Debug)]
+pub enum CliError {}
+
 #[derive(Debug, Parser)]
 #[command(name = "git")]
 #[command(about = "", long_about = None)]
-pub struct Cli {
+pub struct CLI {
     #[arg(long, global = true)]
     verbose: bool,
     #[command(subcommand)]
@@ -15,8 +19,8 @@ pub struct Cli {
 #[derive(Debug, Parser)]
 pub enum Cmd {}
 
-impl Cli {
-    pub async fn run(self) -> anyhow::Result<()> {
+impl CLI {
+    pub async fn run(self) -> Result<(), CliError> {
         Ok(())
     }
 }
