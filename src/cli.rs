@@ -4,7 +4,10 @@ use clap::Parser;
 
 /// Top-level error for CLI commands
 #[derive(thiserror::Error, Debug)]
-pub enum CliError {}
+pub enum CliError {
+    #[error("could not initialize a logger")]
+    LogInitError,
+}
 
 #[derive(Debug, Parser)]
 #[command(name = "git")]
@@ -21,6 +24,10 @@ pub enum Cmd {}
 
 impl CLI {
     pub async fn run(self) -> Result<(), CliError> {
+        // Logs are disabled in tests by default.
+        #[cfg(not(test))]
+        crate::log::init_log(self.verbose)?;
+
         Ok(())
     }
 }
