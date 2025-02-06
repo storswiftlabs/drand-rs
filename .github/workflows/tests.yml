@@ -1,0 +1,59 @@
+name: UnitTest
+
+on:
+  push:
+    branches:
+      - feat/v2
+  pull_request:
+    branches:
+      - feat/v2
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test-arkworks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Install rocksdb
+        run: sudo apt-get update && sudo apt-get install -y librocksdb-dev libclang-dev llvm clang
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Build with arkworks
+        run: cargo build --no-default-features --release --verbose --features arkworks,rocksdb
+      - name: Test with arkworks
+        run: cargo test --no-default-features --release --verbose --features arkworks,rocksdb
+      - name: Lint with arkworks
+        run: cargo clippy --no-default-features --release --features arkworks,rocksdb
+
+  test-blstrs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Install rocksdb
+        run: sudo apt-get update && sudo apt-get install -y librocksdb-dev libclang-dev llvm clang
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Build with blstrs
+        run: cargo build --no-default-features --release --verbose --features blstrs,rocksdb
+      - name: Test with blstrs
+        run: cargo test --no-default-features --release --verbose --features blstrs,rocksdb
+      - name: Lint with blstrs
+        run: cargo clippy --no-default-features --release --features blstrs,rocksdb
