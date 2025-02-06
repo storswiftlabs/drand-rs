@@ -24,4 +24,7 @@ fn main() {
         println!("cargo:rerun-if-changed={}", proto_file.to_str().unwrap());
     }
     println!("cargo:rerun-if-changed=build.rs");
+
+    // trigger recompilation when a new migration is added
+    println!("cargo:rerun-if-changed=migrations");
 }

@@ -13,6 +13,7 @@ prost-types = { version = "0.13.4", features = ["std"] }
 prost = "0.13.4"
 tonic = { version = "0.12.3", features = ["tls-roots"] }
 tonic-health = "0.12.3"
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres"] }
 
 [build-dependencies]
 tonic-build = "0.12.3"
@@ -21,3 +22,6 @@ tonic-build = "0.12.3"
 lto = true
 strip = true
 codegen-units = 1
+
+[dev-dependencies]
+bollard = "0.18.1"
