@@ -23,6 +23,8 @@ crev-common = "0.25.0"
 energon = { git = "https://github.com/version513/energon.git", rev = "aa4d5f1" }
 sha2 = "0.10.7"
 http = "1.2.0"
+toml_edit = "0.22.22"
+hex = "0.4.3"
 
 [build-dependencies]
 tonic-build = "0.12.3"
