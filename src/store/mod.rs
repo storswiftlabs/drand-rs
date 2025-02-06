@@ -2,15 +2,20 @@ use tonic::async_trait;
 
 use crate::protobuf::drand::BeaconPacket;
 
+#[cfg(feature = "postgres")]
 pub mod postgres;
 
+#[cfg(feature = "rocksdb")]
+pub mod rocksdb;
+
+#[derive(Debug)]
 pub struct Beacon {
     // PreviousSig is the previous signature generated
-    previous_sig: Vec<u8>,
+    pub previous_sig: Vec<u8>,
     // Round is the round number this beacon is tied to
-    round: u64,
+    pub round: u64,
     // Signature is the BLS deterministic signature as per the crypto.Scheme used
-    signature: Vec<u8>,
+    pub signature: Vec<u8>,
 }
 
 impl From<BeaconPacket> for Beacon {

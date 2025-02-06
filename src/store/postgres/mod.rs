@@ -46,6 +46,22 @@ impl PgStore {
             .get::<i32, _>("id");
         Ok(beacon_id)
     }
+
+    async fn get_beacon(&self, round: u64) -> Result<Beacon, StorageError> {
+        let row = sqlx::query("SELECT * FROM beacon_details WHERE beacon_id = $1 AND round = $2")
+            .bind(self.beacon_id)
+            .bind(round as i64)
+            .fetch_one(&self.db)
+            .await
+            .map_err(|e| e.into())?;
+        let beacon = Beacon {
+            previous_sig: vec![],
+            round: row.try_get::<i64, _>("round").map_err(|e| e.into())? as u64,
+            signature: row.try_get("signature").map_err(|e| e.into())?,
+        };
+
+        Ok(beacon)
+    }
 }
 
 #[async_trait]
@@ -99,7 +115,7 @@ impl Store for PgStore {
         };
 
         if beacon.round > 0 && self.requires_previous {
-            let prev = self.get(beacon.round - 1).await?;
+            let prev = self.get_beacon(beacon.round - 1).await?;
             beacon.previous_sig = prev.signature;
         }
 
@@ -107,20 +123,10 @@ impl Store for PgStore {
     }
 
     async fn get(&self, round: u64) -> Result<Beacon, StorageError> {
-        let row = sqlx::query("SELECT * FROM beacon_details WHERE beacon_id = $1 AND round = $2")
-            .bind(self.beacon_id)
-            .bind(round as i64)
-            .fetch_one(&self.db)
-            .await
-            .map_err(|e| e.into())?;
-        let mut beacon = Beacon {
-            previous_sig: vec![],
-            round: row.try_get::<i64, _>("round").map_err(|e| e.into())? as u64,
-            signature: row.try_get("signature").map_err(|e| e.into())?,
-        };
+        let mut beacon = self.get_beacon(round).await?;
 
         if round > 0 && self.requires_previous {
-            let prev = self.get(round - 1).await?;
+            let prev = self.get_beacon(round - 1).await?;
             beacon.previous_sig = prev.signature;
         }
 
