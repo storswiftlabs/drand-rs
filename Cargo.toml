@@ -25,9 +25,20 @@ sha2 = "0.10.7"
 http = "1.2.0"
 toml_edit = "0.22.22"
 hex = "0.4.3"
+sqlx = { version = "0.8", optional = true, features = [
+    "runtime-tokio",
+    "postgres",
+] }
+rocksdb = { version = "0.23.0", optional = true, default-features = false, features = [
+    "lz4",
+] }
 
 [build-dependencies]
 tonic-build = "0.12.3"
+
+[dev-dependencies]
+bollard = "0.18.1"
+tempdir = "0.3.7"
 
 [profile.release]
 lto = true
@@ -35,5 +46,8 @@ strip = true
 codegen-units = 1
 
 [features]
+default = ["rocksdb", "blstrs"]
+rocksdb = ["dep:rocksdb"]
+postgres = ["dep:sqlx"]
 blstrs = ["energon/bls12381_blstrs", "energon/bn254_arkworks"]
 arkworks = ["energon/bls12381_arkworks", "energon/bn254_arkworks"]
