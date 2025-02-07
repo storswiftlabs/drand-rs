@@ -46,7 +46,7 @@ impl PairToml {
         Some(Self::new(private, public))
     }
 
-    /// Returns a str representation of associated [Scheme::ID] if public and private parts contain the `SchemeName`.
+    /// Returns a str representation of associated [Scheme::ID] if public and private contain the same `SchemeName`.
     pub fn get_scheme_id(&self) -> Option<&str> {
         let private_scheme = self.private.get("SchemeName")?.as_str()?;
         let public_scheme = self.public.get("SchemeName")?.as_str()?;
