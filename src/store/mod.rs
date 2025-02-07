@@ -31,6 +31,7 @@ impl From<BeaconPacket> for Beacon {
     }
 }
 
+#[allow(clippy::len_without_is_empty)]
 #[async_trait]
 pub trait Store {
     async fn len(&self) -> Result<usize, StorageError>;
