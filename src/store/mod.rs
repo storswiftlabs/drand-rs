@@ -8,6 +8,9 @@ pub mod postgres;
 #[cfg(feature = "rocksdb")]
 pub mod rocksdb;
 
+#[cfg(feature = "memstore")]
+pub mod memstore;
+
 #[derive(Debug)]
 pub struct Beacon {
     // PreviousSig is the previous signature generated
