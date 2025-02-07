@@ -8,6 +8,9 @@ pub mod postgres;
 #[cfg(feature = "rocksdb")]
 pub mod rocksdb;
 
+#[cfg(feature = "memstore")]
+pub mod memstore;
+
 #[derive(Debug)]
 pub struct Beacon {
     // PreviousSig is the previous signature generated
@@ -28,6 +31,7 @@ impl From<BeaconPacket> for Beacon {
     }
 }
 
+#[allow(clippy::len_without_is_empty)]
 #[async_trait]
 pub trait Store {
     async fn len(&self) -> Result<usize, StorageError>;

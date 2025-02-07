@@ -46,8 +46,10 @@ strip = true
 codegen-units = 1
 
 [features]
-default = ["rocksdb", "blstrs"]
+default = ["memstore", "blstrs"]
 rocksdb = ["dep:rocksdb"]
 postgres = ["dep:sqlx"]
+# for development only
+memstore = []
 blstrs = ["energon/bls12381_blstrs", "energon/bn254_arkworks"]
 arkworks = ["energon/bls12381_arkworks", "energon/bn254_arkworks"]
