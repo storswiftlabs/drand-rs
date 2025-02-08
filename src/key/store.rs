@@ -244,7 +244,7 @@ mod tests {
     use super::*;
     use crate::net::utils::Address;
     use energon::drand::schemes::DefaultScheme;
-    use tempdir;
+    use tempfile::tempdir;
 
     // #Required permissions
     //
@@ -261,7 +261,7 @@ mod tests {
     #[test]
     fn check_permissions_and_data() {
         // Build absolute path for base folder 'testnet'
-        let temp_dir = tempdir::TempDir::new("permission_test").unwrap();
+        let temp_dir = tempdir().unwrap();
         let base_path = temp_dir
             .path()
             .join("testnet")

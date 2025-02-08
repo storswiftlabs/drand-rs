@@ -1,9 +1,12 @@
 use super::{Beacon, StorageError, Store};
+use cursor::PgCursor;
 use sqlx::{PgPool, Row};
 use tonic::async_trait;
 
 #[cfg(test)]
 mod db_container;
+
+pub mod cursor;
 
 pub struct PgStore {
     // db is the database connection
@@ -62,10 +65,44 @@ impl PgStore {
 
         Ok(beacon)
     }
+
+    async fn get_at_position(&self, pos: usize) -> Result<Beacon, StorageError> {
+        let row = sqlx::query("SELECT * FROM beacon_details WHERE beacon_id = $1 ORDER BY round ASC LIMIT 1 OFFSET $2")
+            .bind(self.beacon_id)
+            .bind(pos as i64)
+            .fetch_one(&self.db)
+            .await
+            .map_err(|e| e.into())?;
+        let mut beacon = Beacon {
+            previous_sig: vec![],
+            round: row.try_get::<i64, _>("round").map_err(|e| e.into())? as u64,
+            signature: row.try_get("signature").map_err(|e| e.into())?,
+        };
+
+        if beacon.round > 0 && self.requires_previous {
+            let prev = self.get_beacon(beacon.round - 1).await?;
+            beacon.previous_sig = prev.signature;
+        }
+
+        Ok(beacon)
+    }
+
+    async fn get_pos(&self, round: u64) -> Result<usize, StorageError> {
+        let count =
+            sqlx::query("SELECT COUNT(*) FROM beacon_details WHERE beacon_id = $1 AND round < $2")
+                .bind(self.beacon_id)
+                .bind(round as i64)
+                .fetch_one(&self.db)
+                .await
+                .map_err(|e| e.into())?
+                .get::<i64, _>("count");
+        Ok(count as usize)
+    }
 }
 
 #[async_trait]
 impl Store for PgStore {
+    type Cursor<'a> = PgCursor<'a>;
     async fn len(&self) -> Result<usize, StorageError> {
         let count = sqlx::query("SELECT COUNT(*) FROM beacon_details WHERE beacon_id = $1")
             .bind(self.beacon_id)
@@ -122,6 +159,32 @@ impl Store for PgStore {
         Ok(beacon)
     }
 
+    async fn first(&self) -> Result<Beacon, StorageError> {
+        let result = sqlx::query(
+            "SELECT * FROM beacon_details WHERE beacon_id = $1 ORDER BY round ASC LIMIT 1",
+        )
+        .bind(self.beacon_id)
+        .fetch_one(&self.db)
+        .await;
+
+        let row = match result {
+            Ok(row) => row,
+            Err(e) => return Err(e.into()),
+        };
+        let mut beacon = Beacon {
+            previous_sig: vec![],
+            round: row.try_get::<i64, _>("round").map_err(|e| e.into())? as u64,
+            signature: row.try_get("signature").map_err(|e| e.into())?,
+        };
+
+        if beacon.round > 0 && self.requires_previous {
+            let prev = self.get_beacon(beacon.round - 1).await?;
+            beacon.previous_sig = prev.signature;
+        }
+
+        Ok(beacon)
+    }
+
     async fn get(&self, round: u64) -> Result<Beacon, StorageError> {
         let mut beacon = self.get_beacon(round).await?;
 
@@ -146,19 +209,20 @@ impl Store for PgStore {
             .map_err(|e| e.into())?;
         Ok(())
     }
-}
 
-fn sqlx_to_storage_error(e: sqlx::Error) -> StorageError {
-    match e {
-        sqlx::Error::RowNotFound => StorageError::NotFound,
-        sqlx::Error::ColumnNotFound(e) => StorageError::KeyError(e.to_string()),
-        _ => StorageError::IoError(e.to_string()),
+    fn cursor(&self) -> PgCursor<'_> {
+        PgCursor::new(self)
     }
 }
 
+#[allow(clippy::from_over_into)]
 impl Into<StorageError> for sqlx::Error {
     fn into(self) -> StorageError {
-        sqlx_to_storage_error(self)
+        match self {
+            sqlx::Error::RowNotFound => StorageError::NotFound,
+            sqlx::Error::ColumnNotFound(e) => StorageError::KeyError(e.to_string()),
+            _ => StorageError::IoError(self.to_string()),
+        }
     }
 }
 
@@ -166,12 +230,9 @@ impl Into<StorageError> for sqlx::Error {
 mod tests {
     use sqlx::postgres::PgPoolOptions;
 
-    use crate::store::{Beacon, Store};
+    use crate::store::testing::{test_cursor, test_store};
 
-    use super::{
-        db_container::{end_pg, start_pg},
-        PgStore,
-    };
+    use super::*;
 
     #[derive(Debug)]
     struct PgTestData {
@@ -184,7 +245,7 @@ mod tests {
             let pg_id = self.pg_id.clone();
             let task = tokio::spawn(async move {
                 println!("dropping pg container");
-                end_pg(&pg_id).await.unwrap();
+                db_container::end_pg(&pg_id).await.unwrap();
                 println!("dropped pg container");
             });
             let handle = tokio::runtime::Handle::current().clone();
@@ -197,8 +258,9 @@ mod tests {
     #[test]
     fn test_pg() {
         let rt = tokio::runtime::Runtime::new().unwrap();
+
         rt.block_on(async {
-            let (pg_id, pg_ip) = start_pg().await.unwrap();
+            let (pg_id, pg_ip) = db_container::start_pg().await.unwrap();
             let testdata = PgTestData { pg_id, pg_ip };
 
             let pool = PgPoolOptions::new()
@@ -210,56 +272,15 @@ mod tests {
                 .await
                 .unwrap();
 
-            let store = PgStore::new(pool, true, "beacon_name")
+            let mut store = PgStore::new(pool, true, "beacon_name")
                 .await
                 .expect("Failed to create store");
 
-            store
-                .put(Beacon {
-                    previous_sig: vec![1, 2, 3],
-                    round: 0,
-                    signature: vec![4, 5, 6],
-                })
-                .await
-                .expect("Failed to put beacon");
+            test_store(&store).await;
 
-            store
-                .put(Beacon {
-                    previous_sig: vec![4, 5, 6],
-                    round: 1,
-                    signature: vec![7, 8, 9],
-                })
-                .await
-                .expect("Failed to put beacon");
+            store.requires_previous = false;
 
-            let b = store.get(1).await.expect("Failed to get beacon");
-
-            assert_eq!(
-                b.previous_sig,
-                vec![4, 5, 6],
-                "Previous signature does not match"
-            );
-            assert_eq!(b.round, 1, "Round does not match");
-            assert_eq!(b.signature, vec![7, 8, 9], "Signature does not match");
-
-            let len = store.len().await.expect("Failed to get length");
-
-            assert_eq!(len, 2, "Length should be 2");
-
-            let b = store.last().await.expect("Failed to get last");
-            assert_eq!(
-                b.previous_sig,
-                vec![4, 5, 6],
-                "Previous signature does not match"
-            );
-            assert_eq!(b.round, 1, "Round does not match");
-            assert_eq!(b.signature, vec![7, 8, 9], "Signature does not match");
-
-            store.del(1).await.expect("Failed to delete");
-
-            let len = store.len().await.expect("Failed to get length");
-
-            assert_eq!(len, 1, "Length should be 1");
+            test_cursor(&store).await;
         });
     }
 }
