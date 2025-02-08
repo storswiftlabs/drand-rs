@@ -31,10 +31,11 @@ impl RocksStore {
         }
         let path = path.join(&beacon_name);
         let db = open_rocksdb(path)?;
-        return Ok(RocksStore {
+
+        Ok(RocksStore {
             db,
             requires_previous,
-        });
+        })
     }
 
     fn key(&self, round: u64) -> [u8; 8] {
@@ -100,6 +101,33 @@ impl Store for RocksStore {
         Ok(beacon)
     }
 
+    async fn first(&self) -> Result<Beacon, StorageError> {
+        let mut iter = self.db.iterator(rocksdb::IteratorMode::Start);
+
+        let (key, value) = match iter.next() {
+            Some(res) => match res {
+                Ok(res) => res,
+                Err(_) => return Err(StorageError::NotFound),
+            },
+            None => return Err(StorageError::NotFound),
+        };
+
+        let round = u64::from_be_bytes(key[..8].try_into().unwrap());
+
+        let mut beacon = Beacon {
+            round,
+            signature: value.to_vec(),
+            previous_sig: vec![],
+        };
+
+        if beacon.round > 0 && self.requires_previous {
+            let prev = self.get_beacon(beacon.round - 1).await?;
+            beacon.previous_sig = prev.signature;
+        }
+
+        Ok(beacon)
+    }
+
     async fn get(&self, round: u64) -> Result<Beacon, StorageError> {
         let mut beacon = self.get_beacon(round).await?;
 
@@ -119,6 +147,10 @@ impl Store for RocksStore {
         self.db.delete(self.key(round)).map_err(|e| e.into())?;
         Ok(())
     }
+
+    async fn cursor(&self) -> Result<Box<dyn BeaconCursor>, StorageError> {
+        Ok(Box::new(MemDbCursor::new(self)))
+    }
 }
 
 fn rocksdbto_storage_error(e: rocksdb::Error) -> StorageError {
@@ -128,6 +160,7 @@ fn rocksdbto_storage_error(e: rocksdb::Error) -> StorageError {
     }
 }
 
+#[allow(clippy::from_over_into)]
 impl Into<StorageError> for rocksdb::Error {
     fn into(self) -> StorageError {
         rocksdbto_storage_error(self)
@@ -137,64 +170,25 @@ impl Into<StorageError> for rocksdb::Error {
 #[cfg(test)]
 mod tests {
 
+    use tempfile::tempdir;
+
+    use crate::store::testing::test_store;
+
     use super::*;
 
     #[test]
     fn test_rocksdb() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let tmp_dir = tempdir::TempDir::new("example").unwrap();
+            let tmp_dir = tempdir().unwrap();
             let path = tmp_dir.path();
 
             let store = RocksStore::new(path.into(), true, "beacon_name".to_owned())
                 .expect("Failed to create store");
 
-            store
-                .put(Beacon {
-                    previous_sig: vec![1, 2, 3],
-                    round: 0,
-                    signature: vec![4, 5, 6],
-                })
-                .await
-                .expect("Failed to put beacon");
+            test_store(&store).await;
 
-            store
-                .put(Beacon {
-                    previous_sig: vec![4, 5, 6],
-                    round: 1,
-                    signature: vec![7, 8, 9],
-                })
-                .await
-                .expect("Failed to put beacon");
-
-            let b = store.get(1).await.expect("Failed to get beacon");
-
-            assert_eq!(
-                b.previous_sig,
-                vec![4, 5, 6],
-                "Previous signature does not match"
-            );
-            assert_eq!(b.round, 1, "Round does not match");
-            assert_eq!(b.signature, vec![7, 8, 9], "Signature does not match");
-
-            let len = store.len().await.expect("Failed to get length");
-
-            assert_eq!(len, 2, "Length should be 2");
-
-            let b = store.last().await.expect("Failed to get last");
-            assert_eq!(
-                b.previous_sig,
-                vec![4, 5, 6],
-                "Previous signature does not match"
-            );
-            assert_eq!(b.round, 1, "Round does not match");
-            assert_eq!(b.signature, vec![7, 8, 9], "Signature does not match");
-
-            store.del(1).await.expect("Failed to delete");
-
-            let len = store.len().await.expect("Failed to get length");
-
-            assert_eq!(len, 1, "Length should be 1");
+            tmp_dir.close().unwrap();
         });
     }
 }

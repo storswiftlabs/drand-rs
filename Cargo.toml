@@ -39,7 +39,7 @@ tonic-build = "0.12.3"
 
 [dev-dependencies]
 bollard = "0.18.1"
-tempdir = "0.3.7"
+tempfile = "3.16.0"
 
 [profile.release]
 lto = true

@@ -11,6 +11,9 @@ pub mod rocksdb;
 #[cfg(feature = "memstore")]
 pub mod memstore;
 
+#[cfg(test)]
+mod testing;
+
 #[derive(Debug)]
 pub struct Beacon {
     // PreviousSig is the previous signature generated
@@ -34,12 +37,18 @@ impl From<BeaconPacket> for Beacon {
 #[allow(clippy::len_without_is_empty)]
 #[async_trait]
 pub trait Store {
+    type Cursor<'a>: BeaconCursor + 'a
+    where
+        Self: 'a;
+
     async fn len(&self) -> Result<usize, StorageError>;
     async fn put(&self, b: Beacon) -> Result<(), StorageError>;
+    async fn first(&self) -> Result<Beacon, StorageError>;
     async fn last(&self) -> Result<Beacon, StorageError>;
     async fn get(&self, round: u64) -> Result<Beacon, StorageError>;
     async fn close(self) -> Result<(), StorageError>;
     async fn del(&self, round: u64) -> Result<(), StorageError>;
+    fn cursor(&self) -> Self::Cursor<'_>;
 }
 
 #[derive(Debug)]
@@ -57,4 +66,12 @@ impl std::fmt::Display for StorageError {
             StorageError::KeyError(e) => write!(f, "KeyError:: {}", e),
         }
     }
+}
+
+#[async_trait]
+pub trait BeaconCursor {
+    async fn first(&mut self) -> Result<Option<Beacon>, StorageError>;
+    async fn next(&mut self) -> Result<Option<Beacon>, StorageError>;
+    async fn seek(&mut self, round: u64) -> Result<Option<Beacon>, StorageError>;
+    async fn last(&mut self) -> Result<Option<Beacon>, StorageError>;
 }
