@@ -185,6 +185,7 @@ impl Store for RocksStore {
     }
 
     async fn close(self) -> Result<(), StorageError> {
+        self.db.cancel_all_background_work(true);
         Ok(())
     }
 
