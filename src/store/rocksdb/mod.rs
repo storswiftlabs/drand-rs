@@ -1,10 +1,13 @@
 use std::path::Path;
 use std::path::PathBuf;
 
+use cursor::RocksCursor;
 use rocksdb::Options;
 use tonic::async_trait;
 
 use super::{Beacon, StorageError, Store};
+
+pub mod cursor;
 
 pub fn open_rocksdb<P: AsRef<Path>>(path: P) -> Result<rocksdb::DB, StorageError> {
     let mut option = Options::default();
@@ -42,6 +45,10 @@ impl RocksStore {
         round.to_be_bytes()
     }
 
+    fn decode_key(&self, key: &[u8]) -> u64 {
+        u64::from_be_bytes(key[..8].try_into().unwrap())
+    }
+
     async fn get_beacon(&self, round: u64) -> Result<Beacon, StorageError> {
         let signature = self.db.get(self.key(round)).map_err(|e| e.into())?;
 
@@ -58,10 +65,48 @@ impl RocksStore {
 
         Ok(beacon)
     }
+
+    async fn get_at_position(&self, pos: usize) -> Result<Beacon, StorageError> {
+        let (round, signature) = self
+            .db
+            .iterator(rocksdb::IteratorMode::Start)
+            .nth(pos)
+            .ok_or(StorageError::NotFound)?
+            .map_err(|e| e.into())?;
+
+        let mut beacon = Beacon {
+            round: self.decode_key(&round),
+            signature: signature.to_vec(),
+            previous_sig: vec![],
+        };
+
+        if beacon.round > 0 && self.requires_previous {
+            let prev = self.get_beacon(beacon.round - 1).await?;
+            beacon.previous_sig = prev.signature;
+        }
+
+        Ok(beacon)
+    }
+
+    async fn get_pos(&self, round: u64) -> Result<usize, StorageError> {
+        let mut pos = 0;
+
+        for data in self.db.iterator(rocksdb::IteratorMode::Start) {
+            let (k, _) = data.map_err(|e| e.into())?;
+            let r = u64::from_be_bytes(k[..8].try_into().unwrap());
+            if r == round {
+                break;
+            }
+            pos += 1;
+        }
+
+        Ok(pos)
+    }
 }
 
 #[async_trait]
 impl Store for RocksStore {
+    type Cursor<'a> = RocksCursor<'a>;
     async fn len(&self) -> Result<usize, StorageError> {
         let res = self.db.iterator(rocksdb::IteratorMode::End).count();
         Ok(res)
@@ -85,7 +130,7 @@ impl Store for RocksStore {
             None => return Err(StorageError::NotFound),
         };
 
-        let round = u64::from_be_bytes(key[..8].try_into().unwrap());
+        let round = self.decode_key(&key);
 
         let mut beacon = Beacon {
             round,
@@ -148,8 +193,8 @@ impl Store for RocksStore {
         Ok(())
     }
 
-    async fn cursor(&self) -> Result<Box<dyn BeaconCursor>, StorageError> {
-        Ok(Box::new(MemDbCursor::new(self)))
+    fn cursor(&self) -> RocksCursor<'_> {
+        RocksCursor::new(self)
     }
 }
 
@@ -172,7 +217,7 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use crate::store::testing::test_store;
+    use crate::store::testing::{test_cursor, test_store};
 
     use super::*;
 
@@ -183,10 +228,14 @@ mod tests {
             let tmp_dir = tempdir().unwrap();
             let path = tmp_dir.path();
 
-            let store = RocksStore::new(path.into(), true, "beacon_name".to_owned())
+            let mut store = RocksStore::new(path.into(), true, "beacon_name".to_owned())
                 .expect("Failed to create store");
 
             test_store(&store).await;
+
+            store.requires_previous = false;
+
+            test_cursor(&store).await;
 
             tmp_dir.close().unwrap();
         });

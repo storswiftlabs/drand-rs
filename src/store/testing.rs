@@ -94,6 +94,22 @@ pub async fn test_cursor<T: Store>(store: &T) {
         .expect("Failed to get next, empty");
     assert_eq!(next.round, 7);
 
+    store
+        .put(Beacon {
+            previous_sig: vec![6, 7],
+            round: 6,
+            signature: vec![8, 9],
+        })
+        .await
+        .expect("Failed to put");
+
+    let next = cursor
+        .next()
+        .await
+        .expect("Failed to get next")
+        .expect("Failed to get next, empty");
+    assert_eq!(next.round, 7); // a new element was added before cursor, current should still be 7
+
     let next = cursor
         .next()
         .await

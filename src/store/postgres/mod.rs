@@ -1,9 +1,12 @@
 use super::{Beacon, StorageError, Store};
+use cursor::PgCursor;
 use sqlx::{PgPool, Row};
 use tonic::async_trait;
 
 #[cfg(test)]
 mod db_container;
+
+pub mod cursor;
 
 pub struct PgStore {
     // db is the database connection
@@ -62,10 +65,44 @@ impl PgStore {
 
         Ok(beacon)
     }
+
+    async fn get_at_position(&self, pos: usize) -> Result<Beacon, StorageError> {
+        let row = sqlx::query("SELECT * FROM beacon_details WHERE beacon_id = $1 ORDER BY round ASC LIMIT 1 OFFSET $2")
+            .bind(self.beacon_id)
+            .bind(pos as i64)
+            .fetch_one(&self.db)
+            .await
+            .map_err(|e| e.into())?;
+        let mut beacon = Beacon {
+            previous_sig: vec![],
+            round: row.try_get::<i64, _>("round").map_err(|e| e.into())? as u64,
+            signature: row.try_get("signature").map_err(|e| e.into())?,
+        };
+
+        if beacon.round > 0 && self.requires_previous {
+            let prev = self.get_beacon(beacon.round - 1).await?;
+            beacon.previous_sig = prev.signature;
+        }
+
+        Ok(beacon)
+    }
+
+    async fn get_pos(&self, round: u64) -> Result<usize, StorageError> {
+        let count =
+            sqlx::query("SELECT COUNT(*) FROM beacon_details WHERE beacon_id = $1 AND round < $2")
+                .bind(self.beacon_id)
+                .bind(round as i64)
+                .fetch_one(&self.db)
+                .await
+                .map_err(|e| e.into())?
+                .get::<i64, _>("count");
+        Ok(count as usize)
+    }
 }
 
 #[async_trait]
 impl Store for PgStore {
+    type Cursor<'a> = PgCursor<'a>;
     async fn len(&self) -> Result<usize, StorageError> {
         let count = sqlx::query("SELECT COUNT(*) FROM beacon_details WHERE beacon_id = $1")
             .bind(self.beacon_id)
@@ -172,6 +209,10 @@ impl Store for PgStore {
             .map_err(|e| e.into())?;
         Ok(())
     }
+
+    fn cursor(&self) -> PgCursor<'_> {
+        PgCursor::new(self)
+    }
 }
 
 #[allow(clippy::from_over_into)]
@@ -189,7 +230,7 @@ impl Into<StorageError> for sqlx::Error {
 mod tests {
     use sqlx::postgres::PgPoolOptions;
 
-    use crate::store::testing::test_store;
+    use crate::store::testing::{test_cursor, test_store};
 
     use super::*;
 
@@ -217,6 +258,7 @@ mod tests {
     #[test]
     fn test_pg() {
         let rt = tokio::runtime::Runtime::new().unwrap();
+
         rt.block_on(async {
             let (pg_id, pg_ip) = db_container::start_pg().await.unwrap();
             let testdata = PgTestData { pg_id, pg_ip };
@@ -230,11 +272,15 @@ mod tests {
                 .await
                 .unwrap();
 
-            let store = PgStore::new(pool, true, "beacon_name")
+            let mut store = PgStore::new(pool, true, "beacon_name")
                 .await
                 .expect("Failed to create store");
 
             test_store(&store).await;
+
+            store.requires_previous = false;
+
+            test_cursor(&store).await;
         });
     }
 }

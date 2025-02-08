@@ -158,12 +158,10 @@ mod tests {
     fn test_memstore() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let store = MemStore::new(true);
+            let mut store = MemStore::new(true);
             test_store(&store).await;
 
-            drop(store);
-
-            let store = MemStore::new(false);
+            store.requires_previous = false;
 
             test_cursor(&store).await;
         });

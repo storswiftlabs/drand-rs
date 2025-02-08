@@ -1,22 +1,22 @@
 use tonic::async_trait;
 
-use super::MemStore;
+use super::RocksStore;
 
 use crate::store::{Beacon, BeaconCursor, StorageError, Store};
 
-pub struct MemDbCursor<'a> {
+pub struct RocksCursor<'a> {
     pos: usize,
-    store: &'a MemStore,
+    store: &'a RocksStore,
 }
 
-impl<'a> MemDbCursor<'a> {
-    pub fn new(store: &'a MemStore) -> Self {
-        MemDbCursor { pos: 0, store }
+impl<'a> RocksCursor<'a> {
+    pub fn new(store: &'a RocksStore) -> Self {
+        Self { pos: 0, store }
     }
 }
 
 #[async_trait]
-impl BeaconCursor for MemDbCursor<'_> {
+impl BeaconCursor for RocksCursor<'_> {
     async fn first(&mut self) -> Result<Option<Beacon>, StorageError> {
         match self.store.first().await {
             Ok(beacon) => {
