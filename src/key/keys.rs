@@ -1,15 +1,12 @@
-use super::Hash;
 use super::Scheme;
 use crate::net::utils::Address;
 
-use energon::backends::error::PointError;
-use energon::drand::SchemeError;
+use anyhow::Result;
 use energon::kyber::poly::PriShare;
 use energon::points::KeyPoint;
 use energon::points::SigPoint;
 use energon::traits::Affine;
 use energon::traits::ScalarField;
-use sha2::Digest;
 
 /// Pair is a wrapper around a random scalar and the corresponding public key
 #[derive(Debug, PartialEq)]
@@ -24,26 +21,15 @@ impl<S: Scheme> Pair<S> {
     }
 
     /// Returns a freshly created private / public key pair.
-    pub fn generate(address: Address) -> Result<Self, SchemeError> {
+    pub fn generate(address: Address) -> Result<Self> {
         let private = S::Scalar::random();
         let key = S::sk_to_pk(&private);
         let mut msg = S::ID.as_bytes().to_vec();
         msg.extend_from_slice(key.hash()?.as_slice());
-
         let signature = S::bls_sign(&msg, &private)?;
         let public = Identity::new(address, key, signature);
 
         Ok(Self::new(private, public))
-    }
-
-    /// Signs the public key with the key pair
-    pub fn self_sign(&mut self) -> Result<(), SchemeError> {
-        let mut msg = S::ID.as_bytes().to_vec();
-        let pk_hash = self.public_identity().hash()?;
-        msg.extend_from_slice(&pk_hash);
-        self.public.signature = S::bls_sign(&msg, self.private_key())?;
-
-        Ok(())
     }
 
     pub fn private_key(&self) -> &S::Scalar {
@@ -89,8 +75,10 @@ impl<S: Scheme> Identity<S> {
     /// Hash returns the hash of the public key without signing the signature. The hash
     /// is the input to the signature Scheme. It does *not* hash the address field as
     /// this may need to change while the node keeps the same key.
-    pub fn hash(&self) -> Result<[u8; 32], PointError> {
-        self.key.hash()
+    pub fn hash(&self) -> Result<[u8; 32]> {
+        let hash = self.key.hash()?;
+
+        Ok(hash)
     }
 
     pub fn is_valid_signature(&self) -> bool {
@@ -99,20 +87,7 @@ impl<S: Scheme> Identity<S> {
             msg.extend_from_slice(hash.as_slice());
             return S::bls_verify(&self.key, &self.signature, &msg).is_ok();
         }
-
         false
-    }
-}
-
-impl<S: Scheme> Hash for Identity<S> {
-    type Hasher = crev_common::Blake2b256;
-
-    fn hash(&self) -> Result<[u8; 32], PointError> {
-        let mut h = Self::Hasher::new();
-        let msg = self.key().serialize()?;
-        h.update(msg);
-
-        Ok(h.finalize().into())
     }
 }
 
@@ -130,7 +105,7 @@ impl<S: Scheme> DistPublic<S> {
         Self { commits }
     }
 
-    pub fn from_bytes(bytes: &[Vec<u8>]) -> Result<Self, PointError> {
+    pub fn from_bytes(bytes: &[Vec<u8>]) -> Result<Self> {
         let mut commits = Vec::with_capacity(bytes.len());
 
         for commit in bytes.iter() {

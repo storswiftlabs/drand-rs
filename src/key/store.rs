@@ -31,7 +31,7 @@ const PRIVATE_PERM: u32 = 0o600;
 const PUBLIC_PERM: u32 = 0o664;
 
 #[derive(thiserror::Error, Debug)]
-#[error("file_store: ")]
+#[error("file_store: {0}")]
 pub enum FileStoreError {
     #[error(transparent)]
     IO(#[from] std::io::Error),
@@ -39,7 +39,8 @@ pub enum FileStoreError {
     FileAlreadyExists(PathBuf),
     #[error("file is not found at {0}")]
     FileNotFound(PathBuf),
-    #[error("toml error, this is not expected")]
+    // Normally should not be possible
+    #[error("toml error")]
     TomlError,
     #[error("key materials scheme is invalid")]
     InvalidScheme,
@@ -132,9 +133,7 @@ impl FileStore {
     }
 
     pub fn save_key_pair<S: Scheme>(&self, pair: &Pair<S>) -> Result<(), FileStoreError> {
-        let pair_toml = pair
-            .toml_encode()
-            .ok_or_else(|| FileStoreError::TomlError)?;
+        let pair_toml = pair.toml_encode().ok_or(FileStoreError::TomlError)?;
 
         // save private
         let mut f = File::create(self.private_id_file())?;
@@ -156,9 +155,7 @@ impl FileStore {
     }
 
     pub fn save_group<S: Scheme>(&self, group: &Group<S>) -> Result<(), FileStoreError> {
-        let group_toml = group
-            .toml_encode()
-            .ok_or_else(|| FileStoreError::TomlError)?;
+        let group_toml = group.toml_encode().ok_or(FileStoreError::TomlError)?;
         let mut f = File::create(self.group_file())?;
         f.set_permissions(Permissions::from_mode(PUBLIC_PERM))?;
         f.write_all(group_toml.to_string().as_bytes())?;
@@ -167,9 +164,7 @@ impl FileStore {
     }
 
     pub fn save_share<S: Scheme>(&self, share: &Share<S>) -> Result<(), FileStoreError> {
-        let share_toml = share
-            .toml_encode()
-            .ok_or_else(|| FileStoreError::TomlError)?;
+        let share_toml = share.toml_encode().ok_or(FileStoreError::TomlError)?;
         let mut f = File::create(self.private_share_file())?;
         f.set_permissions(Permissions::from_mode(PRIVATE_PERM))?;
         f.write_all(share_toml.to_string().as_bytes())?;
@@ -181,15 +176,16 @@ impl FileStore {
     pub fn load_key_pair_toml(&self) -> Result<PairToml, FileStoreError> {
         let private_str = std::fs::read_to_string(self.private_id_file())?;
         let public_str = std::fs::read_to_string(self.public_id_file())?;
+        let pair_toml = PairToml::parse(private_str.as_str(), public_str.as_str())
+            .ok_or(FileStoreError::TomlError)?;
 
-        PairToml::parse(private_str.as_str(), public_str.as_str())
-            .ok_or_else(|| FileStoreError::TomlError)
+        Ok(pair_toml)
     }
 
     pub fn load_share<S: Scheme>(&self) -> Result<Share<S>, FileStoreError> {
         let share_str = std::fs::read_to_string(self.private_share_file())?;
         Toml::toml_decode(&share_str.parse().map_err(|_| FileStoreError::TomlError)?)
-            .ok_or_else(|| FileStoreError::TomlError)
+            .ok_or(FileStoreError::TomlError)
     }
 
     pub fn drand_home() -> String {
@@ -244,7 +240,6 @@ mod tests {
     use super::*;
     use crate::net::utils::Address;
     use energon::drand::schemes::DefaultScheme;
-    use tempfile::tempdir;
 
     // #Required permissions
     //
@@ -261,7 +256,7 @@ mod tests {
     #[test]
     fn check_permissions_and_data() {
         // Build absolute path for base folder 'testnet'
-        let temp_dir = tempdir().unwrap();
+        let temp_dir = tempfile::TempDir::new().unwrap();
         let base_path = temp_dir
             .path()
             .join("testnet")

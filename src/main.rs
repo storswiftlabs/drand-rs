@@ -15,19 +15,8 @@
 #![warn(clippy::pedantic)]
 use clap::Parser;
 use drand::cli::CLI;
-use std::process::ExitCode;
 
 #[tokio::main]
-async fn main() -> ExitCode {
-    if let Err(err) = CLI::parse().run().await {
-        // Errors are expected to be well-formatted in release builds.
-        eprintln!("Error: {err}");
-
-        #[cfg(debug_assertions)]
-        eprintln!("Error: {err:?}");
-
-        ExitCode::FAILURE
-    } else {
-        ExitCode::SUCCESS
-    }
+async fn main() -> anyhow::Result<()> {
+    CLI::parse().run().await
 }
