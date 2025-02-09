@@ -1,4 +1,3 @@
-use crate::cli::CliError;
 use std::sync::Arc;
 use tracing::Span;
 use tracing_subscriber::fmt::time;
@@ -6,7 +5,7 @@ use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
-pub fn init_log(verbose: bool) -> Result<(), CliError> {
+pub fn init_log(verbose: bool) -> anyhow::Result<()> {
     let filter = EnvFilter::builder().parse_lossy(match verbose {
         true => "drand=debug",
         false => "drand=info",
@@ -22,8 +21,9 @@ pub fn init_log(verbose: bool) -> Result<(), CliError> {
     tracing_subscriber::registry()
         .with(layer)
         .with(filter)
-        .try_init()
-        .map_err(|_| CliError::LogInitError)
+        .try_init()?;
+
+    Ok(())
 }
 
 pub struct Logger {

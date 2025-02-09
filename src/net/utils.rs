@@ -1,4 +1,8 @@
+use crate::protobuf::drand::Metadata;
+use crate::protobuf::drand::NodeVersion;
+
 use http::uri::Authority;
+use std::error::Error;
 use std::fmt::Display;
 use std::str::FromStr;
 
@@ -30,10 +34,16 @@ impl Display for Address {
         f.write_str(self.0.as_str())
     }
 }
-
 #[derive(thiserror::Error, Debug)]
 #[error("expected valid host:port, received {0}")]
 pub struct InvalidAddress(String);
+
+const VERSION: NodeVersion = NodeVersion {
+    major: 0,
+    minor: 2,
+    patch: 0,
+    prerelease: String::new(),
+};
 
 #[derive(Debug, Default, PartialEq)]
 pub struct Seconds {
@@ -78,6 +88,48 @@ impl FromStr for Seconds {
             .map_err(|_| ParseSecondsError)?;
 
         Ok(Self::new(value))
+    }
+}
+
+/// Error type for failed connection attempt, contains address and underlying error
+#[derive(thiserror::Error, Debug)]
+pub struct ConnectionError {
+    pub address: String,
+    pub error: tonic::transport::Error,
+}
+
+impl std::fmt::Display for ConnectionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "could not establish connection to {},", self.address)?;
+        if let Some(source) = self.error.source() {
+            write!(f, " {source}")
+        } else {
+            write!(f, " {}", self.error)
+        }
+    }
+}
+
+impl Metadata {
+    /// Default implementation of `Metadata` which always contains [`NodeVersion`]
+    ///
+    /// Note: This function  should be used instead of default impl provided by [`::prost::Message`]
+    pub(super) fn with_default() -> Option<Self> {
+        let metadata = Self {
+            node_version: Some(VERSION),
+            ..Default::default()
+        };
+
+        Some(metadata)
+    }
+
+    pub fn with_id(beacon_id: &str) -> Option<Self> {
+        let metadata = Self {
+            node_version: Some(VERSION),
+            beacon_id: beacon_id.into(),
+            chain_hash: vec![],
+        };
+
+        Some(metadata)
     }
 }
 

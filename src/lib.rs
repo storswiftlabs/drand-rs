@@ -7,3 +7,4 @@ pub mod net;
 pub mod protobuf;
 pub mod store;
 pub mod transport;
+pub mod core;

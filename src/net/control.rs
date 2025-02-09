@@ -1,6 +1,9 @@
-//! This module provides server implementations for Control.
+//! This module provides client and server implementations for Control.
 
+use crate::net::utils::ConnectionError;
 use crate::protobuf::drand as protobuf;
+
+use protobuf::control_client::ControlClient as _ControlClient;
 use protobuf::control_server::Control;
 use protobuf::BackupDbRequest;
 use protobuf::BackupDbResponse;
@@ -12,6 +15,7 @@ use protobuf::ListSchemesRequest;
 use protobuf::ListSchemesResponse;
 use protobuf::LoadBeaconRequest;
 use protobuf::LoadBeaconResponse;
+use protobuf::Metadata;
 use protobuf::Ping;
 use protobuf::Pong;
 use protobuf::PublicKeyRequest;
@@ -25,12 +29,19 @@ use protobuf::StatusRequest;
 use protobuf::StatusResponse;
 use protobuf::SyncProgress;
 
+use anyhow::Result;
+use http::Uri;
+use std::str::FromStr;
 use tokio_stream::Stream;
+use tonic::transport::Channel;
 use tonic::Request;
 use tonic::Response;
 use tonic::Status;
 
 type ResponseStream = std::pin::Pin<Box<dyn Stream<Item = Result<SyncProgress, Status>> + Send>>;
+
+pub const DEFAULT_CONTROL_PORT: &str = "8888";
+pub const CONTROL_HOST: &str = "127.0.0.1";
 
 /// Implementor for [`Control`] trait for use with `ControlServer`
 pub struct ControlHandler;
@@ -133,5 +144,42 @@ impl Control for ControlHandler {
         _request: Request<RemoteStatusRequest>,
     ) -> Result<Response<RemoteStatusResponse>, Status> {
         Err(Status::unimplemented("remote_status: RemoteStatusRequest"))
+    }
+}
+
+/// Control client capable of issuing proto commands to a [`DEFAULT_CONTROL_HOST`] running daemon
+pub struct ControlClient {
+    client: _ControlClient<Channel>,
+}
+
+impl ControlClient {
+    pub async fn new(port: &str) -> Result<Self> {
+        let address = format!("grpc://{CONTROL_HOST}:{port}");
+        let uri = Uri::from_str(&address)?;
+        let channel = Channel::builder(uri)
+            .connect()
+            .await
+            .map_err(|error| ConnectionError { address, error })?;
+        let client = _ControlClient::new(channel);
+
+        Ok(Self { client })
+    }
+
+    pub async fn ping_pong(&mut self) -> Result<()> {
+        let request = Ping {
+            metadata: Metadata::with_default(),
+        };
+        let _ = self.client.ping_pong(request).await?;
+
+        Ok(())
+    }
+
+    pub async fn load_beacon(&mut self, beacon_id: &str) -> Result<()> {
+        let request = LoadBeaconRequest {
+            metadata: Metadata::with_id(beacon_id),
+        };
+        let _ = self.client.load_beacon(request).await?;
+
+        Ok(())
     }
 }

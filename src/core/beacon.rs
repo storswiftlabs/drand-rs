@@ -1,0 +1,1 @@
+pub const DEFAULT_BEACON_ID: &str = "default";
