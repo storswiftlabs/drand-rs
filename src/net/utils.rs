@@ -1,3 +1,6 @@
+use crate::core::multibeacon::BeaconHandlerError;
+use crate::key::ConversionError;
+use crate::net::control::CONTROL_HOST;
 use crate::protobuf::drand::Metadata;
 use crate::protobuf::drand::NodeVersion;
 
@@ -5,6 +8,12 @@ use http::uri::Authority;
 use std::error::Error;
 use std::fmt::Display;
 use std::str::FromStr;
+use tokio::net::TcpListener;
+use tonic::Status;
+
+pub(super) const ERR_METADATA_IS_MISSING: &str = "metadata is missing";
+// TODO: tls enabled by default, const value will be gated behind default/insecure features.
+pub(super) const URI_SCHEME: &str = "http";
 
 /// Implementation of authority component of a URI which is always contain host and port.
 /// For validation rules, see [`Address::precheck`].
@@ -34,6 +43,7 @@ impl Display for Address {
         f.write_str(self.0.as_str())
     }
 }
+
 #[derive(thiserror::Error, Debug)]
 #[error("expected valid host:port, received {0}")]
 pub struct InvalidAddress(String);
@@ -130,6 +140,96 @@ impl Metadata {
         };
 
         Some(metadata)
+    }
+}
+
+/// Helper trait for binding TCP listeners.
+pub trait NewTcpListener {
+    type Error: Display;
+    type Config;
+
+    fn bind(
+        config: Self::Config,
+    ) -> impl std::future::Future<Output = Result<TcpListener, Self::Error>>;
+}
+
+pub struct ControlListener;
+pub struct NodeListener;
+pub struct TestListener;
+
+impl NewTcpListener for ControlListener {
+    type Error = std::io::Error;
+    // control port from cli agrs
+    type Config = String;
+
+    /// Attempt to bind a listener for localhost control server.
+    async fn bind(port: Self::Config) -> Result<TcpListener, Self::Error> {
+        TcpListener::bind(format!("{CONTROL_HOST}:{port}")).await
+    }
+}
+
+impl NewTcpListener for NodeListener {
+    type Error = std::io::Error;
+    // Prechecked Authority
+    type Config = Address;
+
+    /// Attempt to bind a listener for internet-facing IPv4 node address.
+    async fn bind(address: Self::Config) -> Result<TcpListener, std::io::Error> {
+        TcpListener::bind(address.as_str()).await
+    }
+}
+
+#[cfg(test)]
+impl NewTcpListener for TestListener {
+    type Error = std::convert::Infallible;
+    type Config = TcpListener;
+
+    async fn bind(test: Self::Config) -> Result<TcpListener, Self::Error> {
+        Ok(test)
+    }
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum StartServerError {
+    #[error("failed to start control server")]
+    FailedToStartControl,
+    #[error("failed to start node server")]
+    FailedToStartNode,
+}
+
+/// Converts the underlying error into a [`Status`], including the provided beacon id.
+pub trait ToStatus {
+    fn to_status(&self, id: &str) -> Status;
+}
+
+impl ToStatus for tokio::sync::oneshot::error::RecvError {
+    /// This error should not be possible. Means that callback sender is dropped without sending.
+    fn to_status(&self, id: &str) -> Status {
+        Status::internal(format!("beacon id '{id}' internal RecvError"))
+    }
+}
+
+impl ToStatus for BeaconHandlerError {
+    fn to_status(&self, id: &str) -> Status {
+        match self {
+            BeaconHandlerError::UnknownID => {
+                Status::invalid_argument(format!("beacon id '{id}' is not running"))
+            }
+            // This error should not be possible. Means that beacon cmd receiver has been dropped.
+            BeaconHandlerError::SendError => {
+                Status::internal(format!("beacon id '{id}' internal SendError"))
+            }
+            BeaconHandlerError::AlreadyLoaded => {
+                Status::invalid_argument(format!("beacon id '{id}' is already running"))
+            }
+        }
+    }
+}
+
+impl ToStatus for ConversionError {
+    /// TODO: well-define error values, see [`ConversionError`]
+    fn to_status(&self, id: &str) -> Status {
+        Status::invalid_argument(format!("beacon id '{id}', conversion error: {self}"))
     }
 }
 

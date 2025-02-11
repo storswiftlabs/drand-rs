@@ -1,10 +1,17 @@
 //! This module provides client and server implementations for Control.
 
 use crate::net::utils::ConnectionError;
+use crate::net::utils::NewTcpListener;
+use crate::net::utils::StartServerError;
+use crate::net::utils::ToStatus;
+use crate::net::utils::ERR_METADATA_IS_MISSING;
+
+use crate::core::daemon::Daemon;
 use crate::protobuf::drand as protobuf;
 
 use protobuf::control_client::ControlClient as _ControlClient;
 use protobuf::control_server::Control;
+use protobuf::control_server::ControlServer;
 use protobuf::BackupDbRequest;
 use protobuf::BackupDbResponse;
 use protobuf::ChainInfoPacket;
@@ -29,14 +36,22 @@ use protobuf::StatusRequest;
 use protobuf::StatusResponse;
 use protobuf::SyncProgress;
 
-use anyhow::Result;
-use http::Uri;
-use std::str::FromStr;
-use tokio_stream::Stream;
 use tonic::transport::Channel;
+use tonic::transport::Server;
 use tonic::Request;
 use tonic::Response;
 use tonic::Status;
+
+use tracing::debug;
+use tracing::error;
+use tracing::info;
+
+use http::Uri;
+use std::ops::Deref;
+use std::str::FromStr;
+use std::sync::Arc;
+use tokio_stream::wrappers::TcpListenerStream;
+use tokio_stream::Stream;
 
 type ResponseStream = std::pin::Pin<Box<dyn Stream<Item = Result<SyncProgress, Status>> + Send>>;
 
@@ -44,7 +59,7 @@ pub const DEFAULT_CONTROL_PORT: &str = "8888";
 pub const CONTROL_HOST: &str = "127.0.0.1";
 
 /// Implementor for [`Control`] trait for use with `ControlServer`
-pub struct ControlHandler;
+pub struct ControlHandler(Arc<Daemon>);
 
 #[tonic::async_trait]
 impl Control for ControlHandler {
@@ -57,7 +72,10 @@ impl Control for ControlHandler {
     /// PingPong simply responds with an empty packet,
     /// proving that this drand node is up and alive.
     async fn ping_pong(&self, _request: Request<Ping>) -> Result<Response<Pong>, Status> {
-        Err(Status::unimplemented("ping_pong: Ping"))
+        debug!("control listener: received ping_pon request");
+        let metadata = Metadata::with_default();
+
+        Ok(Response::new(Pong { metadata }))
     }
 
     /// Status responds with the actual status of drand process
@@ -104,16 +122,68 @@ impl Control for ControlHandler {
     // Metadata is Some: stop the beacon_id, if stopped beacon_id was the last - stop the daemon.
     async fn shutdown(
         &self,
-        _request: Request<ShutdownRequest>,
+        request: Request<ShutdownRequest>,
     ) -> Result<Response<ShutdownResponse>, Status> {
-        Err(Status::unimplemented("shutdown: ShutdownRequest"))
+        let metadata = request.get_ref().metadata.as_ref();
+        // Callback to indicate if shutdown is graceful
+        let (tx_graceful, rx_graceful) = tokio::sync::oneshot::channel::<bool>();
+
+        #[allow(unused_assignments)]
+        let mut is_graceful = false;
+        let mut is_last_beacon = true;
+
+        // Metadata is Some - request to stop given beacon_id
+        if let Some(meta) = metadata {
+            is_last_beacon = self
+                .stop_id(&meta.beacon_id, tx_graceful)
+                .map_err(|err| err.to_status(&meta.beacon_id))?;
+            is_graceful = rx_graceful
+                .await
+                .map_err(|err| err.to_status(&meta.beacon_id))?;
+        } else
+        // Metadata is None - request to stop the daemon
+        {
+            self.stop_daemon(tx_graceful);
+            is_graceful = rx_graceful
+                .await
+                .map_err(|_| Status::internal("something is very broken: RecvError"))?;
+        }
+        if !is_graceful {
+            return Err(Status::internal("shutdown is not graceful"));
+        }
+        // Encode new daemon state, see [`ControlClient::shutdown`]
+        let metadata = match is_last_beacon {
+            // No more beacons left
+            true => None,
+            // Daemon is still running
+            false => Metadata::with_default(),
+        };
+
+        Ok(Response::new(ShutdownResponse { metadata }))
     }
 
     async fn load_beacon(
         &self,
-        _request: Request<LoadBeaconRequest>,
+        request: Request<LoadBeaconRequest>,
     ) -> Result<Response<LoadBeaconResponse>, Status> {
-        Err(Status::unimplemented("load_beacon: LoadBeaconRequest"))
+        // Borrow id from metadata.
+        let id = request.get_ref().metadata.as_ref().map_or_else(
+            || Err(Status::data_loss(ERR_METADATA_IS_MISSING)),
+            |meta| Ok(meta.beacon_id.as_str()),
+        )?;
+        info!(parent: self.log(), "received load id request for {id}");
+
+        // Send request to the daemon
+        self.load_id(id).map_err(|err| {
+            error!(parent: self.log(), "failed to proceed, {err}: {id}");
+            err.to_status(id)
+        })?;
+
+        let response = LoadBeaconResponse {
+            metadata: Metadata::with_id(id),
+        };
+
+        Ok(Response::new(response))
     }
 
     async fn start_follow_chain(
@@ -147,13 +217,44 @@ impl Control for ControlHandler {
     }
 }
 
+pub async fn start_server<N: NewTcpListener>(
+    daemon: Arc<Daemon>,
+    control: N::Config,
+) -> Result<(), StartServerError> {
+    let listener = N::bind(control).await.map_err(|err| {
+        error!(
+            "listener: {}, {err}",
+            StartServerError::FailedToStartControl,
+        );
+        StartServerError::FailedToStartControl
+    })?;
+    let cancel = daemon.token.clone();
+
+    Server::builder()
+        .add_service(ControlServer::new(ControlHandler(daemon)))
+        .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async move {
+            debug!("Control server started");
+            let _ = cancel.cancelled().await;
+            debug!("Control server: received shutdown request");
+        })
+        .await
+        .map_err(|err| {
+            error!("{}, {err}", StartServerError::FailedToStartControl);
+            StartServerError::FailedToStartControl
+        })?;
+
+    debug!("control server is shutting down");
+
+    Ok(())
+}
+
 /// Control client capable of issuing proto commands to a [`DEFAULT_CONTROL_HOST`] running daemon
 pub struct ControlClient {
     client: _ControlClient<Channel>,
 }
 
 impl ControlClient {
-    pub async fn new(port: &str) -> Result<Self> {
+    pub async fn new(port: &str) -> anyhow::Result<Self> {
         let address = format!("grpc://{CONTROL_HOST}:{port}");
         let uri = Uri::from_str(&address)?;
         let channel = Channel::builder(uri)
@@ -165,7 +266,7 @@ impl ControlClient {
         Ok(Self { client })
     }
 
-    pub async fn ping_pong(&mut self) -> Result<()> {
+    pub async fn ping_pong(&mut self) -> anyhow::Result<()> {
         let request = Ping {
             metadata: Metadata::with_default(),
         };
@@ -174,12 +275,31 @@ impl ControlClient {
         Ok(())
     }
 
-    pub async fn load_beacon(&mut self, beacon_id: &str) -> Result<()> {
+    pub async fn load_beacon(&mut self, beacon_id: &str) -> anyhow::Result<()> {
         let request = LoadBeaconRequest {
             metadata: Metadata::with_id(beacon_id),
         };
         let _ = self.client.load_beacon(request).await?;
 
         Ok(())
+    }
+
+    pub async fn shutdown(&mut self, beacon_id: Option<&str>) -> anyhow::Result<bool> {
+        let metadata = match beacon_id {
+            Some(id) => Metadata::with_id(id),
+            None => None,
+        };
+        let request = ShutdownRequest { metadata };
+        let responce = self.client.shutdown(request).await?;
+        let is_daemon_running = responce.get_ref().metadata.is_some();
+        Ok(is_daemon_running)
+    }
+}
+
+impl Deref for ControlHandler {
+    type Target = Daemon;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
