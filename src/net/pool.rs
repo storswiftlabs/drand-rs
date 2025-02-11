@@ -5,13 +5,13 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tonic::transport::Channel;
 use tracing::{error, trace, warn};
 
+use crate::net::utils::URI_SCHEME;
 use crate::protobuf::drand::{protocol_client::ProtocolClient, PartialBeaconPacket};
 
 use super::utils::Address;
 
 #[derive(Debug)]
 pub struct PoolStatus {
-    pub tls: bool,
     pub pending: Vec<(String, Vec<String>)>,
     pub connected: Vec<(String, Vec<String>)>,
     pub active_beacons: Vec<String>,
@@ -19,7 +19,7 @@ pub struct PoolStatus {
 
 impl std::fmt::Display for PoolStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "PoolStatus {{ tls: {}", self.tls)?;
+        writeln!(f, "PoolStatus {{")?;
         writeln!(f, "\tpending: ")?;
         for (id, uris) in &self.pending {
             writeln!(f, "\t\t{}: {:?}", id, uris)?;
@@ -44,7 +44,7 @@ pub enum PoolCmd {
 type BeaconID = String;
 
 pub trait PoolPartial {
-    fn start(tls: bool) -> PoolHandler;
+    fn start() -> PoolHandler;
 }
 
 pub struct Connection {
@@ -59,20 +59,18 @@ pub struct PendingConnection {
 }
 
 pub struct Pool {
-    tls: bool,
     active: BTreeMap<Address, Connection>,
     pending: BTreeMap<Address, PendingConnection>,
     enabled_beacons: BTreeMap<BeaconID, broadcast::Sender<PartialBeaconPacket>>,
 }
 
 impl PoolPartial for Pool {
-    fn start(tls: bool) -> PoolHandler {
+    fn start() -> PoolHandler {
         let (tx_cmd, mut rx_cmd) = mpsc::channel::<PoolCmd>(3);
         let (tx_new_conn, mut rx_new_conn) = mpsc::channel::<(Address, ProtocolClient<Channel>)>(1);
 
         tokio::spawn(async move {
             let mut pool = Self {
-                tls,
                 active: BTreeMap::new(),
                 pending: BTreeMap::new(),
                 enabled_beacons: BTreeMap::new(),
@@ -242,15 +240,10 @@ impl Pool {
             },
         );
 
-        let scheme = match self.tls {
-            true => "https",
-            false => "http",
-        };
-
         // attempt to connect
         tokio::spawn(async move {
             let client = loop {
-                let uri = format!("{}://{}", scheme, uri.as_str());
+                let uri = format!("{}://{}", URI_SCHEME, uri.as_str());
 
                 match ProtocolClient::connect(uri.to_string()).await {
                     Ok(client) => {
@@ -281,7 +274,6 @@ impl Pool {
         });
     }
     fn get_status(&self) -> PoolStatus {
-        let tls = self.tls;
         let mut connected = vec![];
         for (k, v) in self.active.iter() {
             connected.push((
@@ -311,7 +303,6 @@ impl Pool {
             .collect::<Vec<String>>();
 
         PoolStatus {
-            tls,
             pending,
             connected,
             active_beacons,
