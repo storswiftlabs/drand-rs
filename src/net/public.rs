@@ -1,5 +1,6 @@
 //! This module provides server implementations for Public.
 
+use crate::core::daemon::Daemon;
 use crate::protobuf::drand as protobuf;
 use protobuf::public_server::Public;
 use protobuf::ChainInfoPacket;
@@ -9,7 +10,10 @@ use protobuf::ListBeaconIDsResponse;
 use protobuf::PublicRandRequest;
 use protobuf::PublicRandResponse;
 
+use std::ops::Deref;
 use std::pin::Pin;
+use std::sync::Arc;
+
 use tokio_stream::Stream;
 use tonic::Request;
 use tonic::Response;
@@ -18,7 +22,7 @@ use tonic::Status;
 type ResponseStream = Pin<Box<dyn Stream<Item = Result<PublicRandResponse, Status>> + Send>>;
 
 /// Implementor for [`Public`] trait for use with PublicServer
-pub struct PublicHandler;
+pub struct PublicHandler(Arc<Daemon>);
 
 #[tonic::async_trait]
 impl Public for PublicHandler {
@@ -55,5 +59,13 @@ impl Public for PublicHandler {
         Err(Status::unimplemented(
             "list_beacon_i_ds: ListBeaconIDsRequest",
         ))
+    }
+}
+
+impl Deref for PublicHandler {
+    type Target = Daemon;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }

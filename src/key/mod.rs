@@ -1,9 +1,11 @@
+mod convert;
 pub mod group;
 pub mod keys;
 pub mod node;
 pub mod store;
 pub mod toml;
 
+pub use convert::ConversionError;
 /// Re-export often used types
 pub use energon::drand::traits::DrandScheme as Scheme;
 pub use energon::points::KeyPoint;

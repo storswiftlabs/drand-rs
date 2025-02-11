@@ -42,10 +42,12 @@ pub enum FileStoreError {
     // Normally should not be possible
     #[error("toml error")]
     TomlError,
-    #[error("key materials scheme is invalid")]
-    InvalidScheme,
+    #[error("schemes in public and private parts must be equal and non-empty")]
+    InvalidPairSchemes,
     #[error("beacon id is not found in filestore")]
     BeaconNotFound,
+    #[error("beacon id is failed to init, unknown scheme")]
+    FailedInitID,
 }
 
 /// FileStore holds absolute path of **beacon_id** and abstracts the

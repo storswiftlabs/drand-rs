@@ -1,4 +1,5 @@
 pub mod cli;
+pub mod core;
 pub mod dkg;
 pub mod key;
 pub mod log;
@@ -7,4 +8,3 @@ pub mod net;
 pub mod protobuf;
 pub mod store;
 pub mod transport;
-pub mod core;
