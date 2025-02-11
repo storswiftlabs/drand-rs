@@ -17,7 +17,7 @@ pub(super) const URI_SCHEME: &str = "http";
 
 /// Implementation of authority component of a URI which is always contain host and port.
 /// For validation rules, see [`Address::precheck`].
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Clone)]
 pub struct Address(Authority);
 
 impl Address {
@@ -35,6 +35,18 @@ impl Address {
 
     pub fn as_str(&self) -> &str {
         self.0.as_str()
+    }
+}
+
+impl PartialOrd for Address {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Address {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.as_str().cmp(other.0.as_str())
     }
 }
 
