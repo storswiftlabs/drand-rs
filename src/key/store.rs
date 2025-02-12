@@ -165,6 +165,15 @@ impl FileStore {
         Ok(())
     }
 
+    pub fn load_group<S: Scheme>(&self) -> Result<Group<S>, FileStoreError> {
+        let group_toml = std::fs::read_to_string(self.group_file())?;
+        let group: Group<S> =
+            Toml::toml_decode(&group_toml.parse().map_err(|_| FileStoreError::TomlError)?)
+                .ok_or(FileStoreError::TomlError)?;
+
+        Ok(group)
+    }
+
     pub fn save_share<S: Scheme>(&self, share: &Share<S>) -> Result<(), FileStoreError> {
         let share_toml = share.toml_encode().ok_or(FileStoreError::TomlError)?;
         let mut f = File::create(self.private_share_file())?;
