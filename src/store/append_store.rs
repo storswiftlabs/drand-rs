@@ -8,7 +8,7 @@ use super::{Beacon, StorageError, Store};
 // last block inserted and with the corresponding previous signature
 pub struct AppendStore<T: Store> {
     store: T,
-    last: Mutex<Beacon>,
+    last_beacon: Mutex<Beacon>,
 }
 
 impl<T: Store> AppendStore<T> {
@@ -16,7 +16,7 @@ impl<T: Store> AppendStore<T> {
         let last = store.last().await?;
         Ok(AppendStore {
             store,
-            last: Mutex::new(last),
+            last_beacon: Mutex::new(last),
         })
     }
 }
@@ -32,7 +32,7 @@ impl<T: Store + Sync + Send> Store for AppendStore<T> {
     }
 
     async fn put(&self, b: Beacon) -> Result<(), StorageError> {
-        let mut last = self.last.lock().await;
+        let mut last = self.last_beacon.lock().await;
         if b.round == last.round {
             if last.signature == b.signature {
                 if last.previous_sig == b.previous_sig {
@@ -81,5 +81,60 @@ impl<T: Store + Sync + Send> Store for AppendStore<T> {
 
     fn cursor(&self) -> Self::Cursor<'_> {
         self.store.cursor()
+    }
+}
+
+#[cfg(feature = "memstore")]
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::ChainStore;
+
+    #[test]
+    fn test_append_memstore() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let store = ChainStore::new(true);
+
+            store
+                .put(Beacon {
+                    previous_sig: vec![1, 2, 3],
+                    round: 0,
+                    signature: vec![4, 5, 6],
+                })
+                .await
+                .expect("Failed to put beacon");
+
+            let store = AppendStore::new(store).await.unwrap();
+
+            let last = store.last_beacon.lock().await;
+            assert_eq!(last.round, 0);
+            drop(last);
+
+            let err = store
+                .put(Beacon {
+                    previous_sig: vec![1, 2, 3],
+                    round: 2,
+                    signature: vec![4, 5, 6],
+                })
+                .await
+                .err()
+                .unwrap();
+
+            assert!(matches!(err, StorageError::InvalidKey(_)));
+
+            store
+                .put(Beacon {
+                    previous_sig: vec![1, 2, 3],
+                    round: 1,
+                    signature: vec![4, 5, 6],
+                })
+                .await
+                .expect("Failed to put beacon");
+
+            let len = store.len().await.expect("Failed to get length");
+
+            assert_eq!(len, 2, "Length should be 2");
+        });
     }
 }
