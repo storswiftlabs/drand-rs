@@ -1,5 +1,3 @@
-use super::multibeacon::BeaconHandler;
-
 use crate::key::keys::Pair;
 use crate::key::store::FileStore;
 use crate::key::store::FileStoreError;
@@ -7,6 +5,8 @@ use crate::key::toml::PairToml;
 use crate::key::toml::Toml;
 use crate::key::ConversionError;
 use crate::key::Scheme;
+
+use super::multibeacon::BeaconHandler;
 use crate::protobuf::drand::IdentityResponse;
 
 use tracing::debug;
@@ -15,6 +15,7 @@ use tracing::info;
 use tracing::info_span;
 use tracing::Span;
 
+use std::io::ErrorKind;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::task::TaskTracker;
@@ -84,12 +85,27 @@ impl<S: Scheme> BeaconProcess<S> {
     pub fn run(fs: FileStore, pair: PairToml, id: &str) -> Result<BeaconHandler, FileStoreError> {
         let keypair: Pair<S> = Toml::toml_decode(&pair).ok_or(FileStoreError::TomlError)?;
         let (tx, mut rx) = mpsc::channel::<BeaconCmd>(30);
-        // TODO: Attempt to load group, share, db, if succesful - start chain handler.
+
+        // Ignore IO error `NotFound`.
+        match fs.load_group::<S>() {
+            Ok(_group) => todo!("load share, db, start chain handler"),
+            Err(err) => match err {
+                FileStoreError::IO(error) => {
+                    if error.kind() == ErrorKind::NotFound {
+                        info!("beacon id [{id}]: will run as fresh install -> expect to run DKG.")
+                    } else {
+                        return Err(FileStoreError::IO(error));
+                    }
+                }
+                _ => return Err(err),
+            },
+        };
+
         let span = info_span!(
             "",
             id = format!("{}.{id}", keypair.public_identity().address())
         );
-        info!(parent: &span, "Beacon ID initialized succesfully");
+
         let beacon_node = Self(Arc::new(InnerNode {
             beacon_id: BeaconID::new(id),
             fs,
