@@ -1,3 +1,4 @@
+use thiserror::Error;
 use tonic::async_trait;
 
 use crate::protobuf::drand::BeaconPacket;
@@ -11,10 +12,23 @@ pub mod rocksdb;
 #[cfg(feature = "memstore")]
 pub mod memstore;
 
+pub mod append_store;
+
+#[cfg(feature = "rocksdb")]
+pub type ChainStore = rocksdb::RocksStore;
+
+#[cfg(feature = "postgres")]
+pub type ChainStore = postgres::PgStore;
+
+#[cfg(feature = "memstore")]
+pub type ChainStore = memstore::MemStore;
+
+pub type AppendStore = append_store::AppendStore<ChainStore>;
+
 #[cfg(test)]
 mod testing;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Beacon {
     // PreviousSig is the previous signature generated
     pub previous_sig: Vec<u8>,
@@ -51,21 +65,20 @@ pub trait Store {
     fn cursor(&self) -> Self::Cursor<'_>;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum StorageError {
+    #[error("IO error: {0}")]
     IoError(String),
+    #[error("Not found")]
     NotFound,
+    #[error("Key error: {0}")]
     KeyError(String),
-}
-
-impl std::fmt::Display for StorageError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            StorageError::IoError(e) => write!(f, "IoError:: {}", e),
-            StorageError::NotFound => write!(f, "Not found"),
-            StorageError::KeyError(e) => write!(f, "KeyError:: {}", e),
-        }
-    }
+    #[error("Already exists")]
+    AlreadyExists,
+    #[error("Duplicate key: {0}")]
+    DuplicateKey(String),
+    #[error("Invalid key: {0}")]
+    InvalidKey(String),
 }
 
 #[async_trait]
