@@ -36,6 +36,10 @@ impl Address {
     pub fn as_str(&self) -> &str {
         self.0.as_str()
     }
+
+    pub fn to_uri(&self) -> String {
+        format!("{URI_SCHEME}://{}", self.0.as_str())
+    }
 }
 
 impl PartialOrd for Address {

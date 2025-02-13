@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use tokio::sync::Mutex;
 
 use tonic::async_trait;
@@ -7,12 +9,12 @@ use super::{Beacon, StorageError, Store};
 // appendStore is a store that only appends new block with a round +1 from the
 // last block inserted and with the corresponding previous signature
 pub struct AppendStore<T: Store> {
-    store: T,
+    store: Arc<T>,
     last_beacon: Mutex<Beacon>,
 }
 
 impl<T: Store> AppendStore<T> {
-    pub async fn new(store: T) -> Result<Self, StorageError> {
+    pub async fn new(store: Arc<T>) -> Result<Self, StorageError> {
         let last = store.last().await?;
         Ok(AppendStore {
             store,
@@ -72,7 +74,7 @@ impl<T: Store + Sync + Send> Store for AppendStore<T> {
     }
 
     async fn close(self) -> Result<(), StorageError> {
-        self.store.close().await
+        Ok(())
     }
 
     async fn del(&self, round: u64) -> Result<(), StorageError> {
@@ -105,7 +107,7 @@ mod tests {
                 .await
                 .expect("Failed to put beacon");
 
-            let store = AppendStore::new(store).await.unwrap();
+            let store = AppendStore::new(Arc::new(store)).await.unwrap();
 
             let last = store.last_beacon.lock().await;
             assert_eq!(last.round, 0);
