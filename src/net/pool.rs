@@ -35,10 +35,11 @@ impl std::fmt::Display for PoolStatus {
 }
 
 pub enum PoolCmd {
-    Status(tokio::sync::oneshot::Sender<PoolStatus>),
+    Status(oneshot::Sender<PoolStatus>),
     Partial(PartialBeaconPacket),
     AddID(BeaconID, Vec<String>), // beacon_id, uris
     RemoveID(BeaconID),
+    Shutdown(oneshot::Sender<()>),
 }
 
 type BeaconID = String;
@@ -59,6 +60,7 @@ pub struct PendingConnection {
 }
 
 pub struct Pool {
+    shutdown: bool,
     active: BTreeMap<Address, Connection>,
     pending: BTreeMap<Address, PendingConnection>,
     enabled_beacons: BTreeMap<BeaconID, broadcast::Sender<PartialBeaconPacket>>,
@@ -71,6 +73,7 @@ impl PoolPartial for Pool {
 
         tokio::spawn(async move {
             let mut pool = Self {
+                shutdown: false,
                 active: BTreeMap::new(),
                 pending: BTreeMap::new(),
                 enabled_beacons: BTreeMap::new(),
@@ -86,6 +89,11 @@ impl PoolPartial for Pool {
                     }
 
                     cmd = rx_cmd.recv()=> {
+                        if pool.shutdown {
+                            warn!("PoolCmd::AddID: pool is shutting down, ignoring message");
+                            continue;
+                        }
+
                         if let Some(cmd)=cmd{
                             match cmd{
                                 PoolCmd::Partial(msg) =>{
@@ -123,6 +131,12 @@ impl PoolPartial for Pool {
                                 }
                                 PoolCmd::Status(callback)=>{
                                     let _=callback.send(pool.get_status());
+                                }
+                                PoolCmd::Shutdown(callback) => {
+                                    trace!("PoolCmd::Shutdown");
+                                    pool.shutdown();
+                                    let _ = callback.send(());
+                                    return;
                                 }
                             }
                         }
@@ -211,6 +225,7 @@ impl Pool {
                             trace!("sending partial: round {round} to: {pin_address}, status: OK")
                         }
                     }
+                    //TODO: shutdown callback
                     warn!("disabled subscription: {pin_address}")
                 }
             });
@@ -248,6 +263,10 @@ impl Pool {
                 match ProtocolClient::connect(uri.to_string()).await {
                     Ok(client) => {
                         trace!("pool: connected to {uri}");
+                        if let Ok(()) = rx.try_recv() {
+                            trace!("pool: pending connection {uri} canceled");
+                            break None;
+                        }
                         break Some(client);
                     }
                     Err(e) => {
@@ -337,6 +356,36 @@ impl Pool {
             self.active.remove(&k);
         }
     }
+
+    fn shutdown(&mut self) {
+        self.shutdown = true;
+
+        //cancel pending
+        let keys: Vec<Address> = self.pending.keys().cloned().collect();
+
+        for k in keys {
+            if let Some(pending) = self.pending.remove(&k) {
+                let _ = pending.cancel.send(());
+            };
+        }
+
+        // wait for all beacon senders to be empty
+        let mut queued = false;
+        while queued {
+            for sender in self.enabled_beacons.values_mut() {
+                if !sender.is_empty() {
+                    queued = true;
+                    break;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        // close all beacon senders, so the conn is closed
+        self.enabled_beacons.clear();
+
+        self.active.clear();
+    }
 }
 
 pub struct PoolHandler {
@@ -377,5 +426,16 @@ impl PoolHandler {
             .send(PoolCmd::Partial(packet))
             .await
             .map_err(|_| PoolHandlerError::Closed)
+    }
+
+    pub async fn shutdown(&self) -> Result<(), PoolHandlerError> {
+        let (tx, rx) = oneshot::channel::<()>();
+        self.sender
+            .send(PoolCmd::Shutdown(tx))
+            .await
+            .map_err(|_| PoolHandlerError::Closed)?;
+
+        rx.await.map_err(|_| PoolHandlerError::Closed)?;
+        Ok(())
     }
 }
