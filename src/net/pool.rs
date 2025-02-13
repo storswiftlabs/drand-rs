@@ -439,3 +439,152 @@ impl PoolHandler {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+
+    use std::sync::Arc;
+
+    use super::*;
+
+    #[test]
+    fn test_pool() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+
+        let handler = rt.block_on(async { <Pool as PoolPartial>::start() });
+
+        let handler = Arc::new(handler);
+
+        rt.block_on(async {
+            handler
+                .add_id(
+                    "AAA".to_owned(),
+                    vec![
+                        "localhost:50001".to_owned(),
+                        "localhost:50002".to_owned(),
+                        "localhost:50003".to_owned(),
+                        "localhost:50004".to_owned(),
+                    ],
+                )
+                .await
+                .unwrap();
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+
+            let status = handler.status().await.unwrap();
+
+            assert_eq!(
+                status.active_beacons,
+                vec!["AAA".to_owned()],
+                "AAA should be active"
+            );
+            assert_eq!(status.connected.len(), 4, "4 connections should be active");
+
+            handler
+                .add_id(
+                    "BBB".to_owned(),
+                    vec![
+                        "localhost:50001".to_owned(),
+                        "localhost:50002".to_owned(),
+                        "localhost:50003".to_owned(),
+                        "localhost:50004".to_owned(),
+                        "localhost:50005".to_owned(),
+                        "localhost:50006".to_owned(),
+                        "localhost:50007".to_owned(),
+                    ],
+                )
+                .await
+                .unwrap();
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+
+            let status = handler.status().await.unwrap();
+            assert_eq!(
+                status.active_beacons,
+                vec!["AAA".to_owned(), "BBB".to_owned()],
+                "AAA and BBB should be active"
+            );
+            assert_eq!(status.connected.len(), 7, "7 connections should be active");
+
+            assert_eq!(
+                status.connected[0].1.len(),
+                2,
+                "connection should be shared"
+            );
+
+            handler
+                .add_id(
+                    "CCC".to_owned(),
+                    vec![
+                        "localhost:50001".to_owned(),
+                        "localhost:50002".to_owned(),
+                        "localhost:50003".to_owned(),
+                        "localhost:50004".to_owned(),
+                        "localhost:50005".to_owned(),
+                        "localhost:50006".to_owned(),
+                        "localhost:50007".to_owned(),
+                        "localhost:50008".to_owned(),
+                        "localhost:50009".to_owned(),
+                        "localhost:50010".to_owned(),
+                    ],
+                )
+                .await
+                .unwrap();
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+
+            let status = handler.status().await.unwrap();
+            assert_eq!(
+                status.connected.len(),
+                10,
+                "10 connections should be active"
+            );
+
+            // add failing uri
+            handler
+                .add_id("DDD".to_owned(), vec!["localhost:4444".to_owned()])
+                .await
+                .unwrap();
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+
+            let status = handler.status().await.unwrap();
+
+            assert_eq!(status.pending.len(), 1, "1 connections should be pending");
+            assert_eq!(
+                status.pending[0].1,
+                vec!["DDD".to_string()],
+                "DDD should be pending"
+            );
+
+            handler.remove_id("DDD".to_string()).await.unwrap();
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            let status = handler.status().await.unwrap();
+
+            assert_eq!(status.pending.len(), 0, "0 connections should be pending");
+
+            handler.remove_id("CCC".to_string()).await.unwrap();
+            tokio::time::sleep(Duration::from_secs(1)).await;
+
+            let status = handler.status().await.unwrap();
+            assert_eq!(
+                status.active_beacons,
+                vec!["AAA".to_owned(), "BBB".to_owned()],
+                "AAA and BBB should be active"
+            );
+            assert_eq!(status.connected.len(), 7, "7 connections should be active");
+
+            handler.remove_id("AAA".to_string()).await.unwrap();
+            handler.remove_id("BBB".to_string()).await.unwrap();
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+
+            let status = handler.status().await.unwrap();
+
+            assert_eq!(status.connected.len(), 0, "no connections should be active");
+
+            handler.shutdown().await.unwrap();
+        });
+    }
+}
