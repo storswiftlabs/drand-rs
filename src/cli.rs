@@ -55,6 +55,32 @@ pub struct Config {
     pub id: Option<String>,
 }
 
+/// Sync your local randomness chain with other nodes and validate your local beacon chain. To follow a remote node, it requires the use of the 'follow' flag.
+#[derive(Debug, Parser, Clone)]
+pub struct SyncConfig {
+    /// Folder to keep all drand cryptographic information, with absolute path.
+    #[arg(long, default_value_t = FileStore::drand_home())]
+    pub folder: String,
+    /// Set the port you want to listen to for control port commands. If not specified, we will use the default value.
+    #[arg(long, default_value = control::DEFAULT_CONTROL_PORT)]
+    pub control: String,
+    /// The hash of the chain info.
+    #[arg(long)]
+    pub chain_hash: String,
+    /// <ADDRESS:PORT>,<...> of (multiple) reachable drand daemon(s). When checking our local database, using our local daemon address will result in a dry run.
+    #[arg(long)]
+    pub sync_nodes: Vec<String>,
+    /// Specify a round at which the drand daemon will stop syncing the chain, typically used to bootstrap a new node in chained mode
+    #[arg(long, default_value = "0")]
+    pub up_to: u64,
+    /// Indicates the id for the randomness generation process which will be started
+    #[arg(long)]
+    pub id: String,
+    /// Indicates whether we want to follow another daemon, if not we perform a check of our local DB. Requires to specify the chain-hash using the 'chain-hash' flag.
+    #[arg(long)]
+    pub follow: bool,
+}
+
 #[derive(Debug, Parser, Clone)]
 #[command(name = "git")]
 #[command(about = "", long_about = None)]
@@ -87,6 +113,7 @@ pub enum Cmd {
         #[arg(long)]
         id: String,
     },
+    Sync(SyncConfig),
 }
 
 impl CLI {
@@ -100,6 +127,7 @@ impl CLI {
             Cmd::Start(config) => start_cmd(config).await?,
             Cmd::Load { control, id } => load_cmd(&control, &id).await?,
             Cmd::Stop { control, id } => stop_cmd(&control, id.as_deref()).await?,
+            Cmd::Sync(config) => sync_cmd(config).await?,
         }
 
         Ok(())
@@ -191,6 +219,13 @@ pub async fn stop_cmd(control_port: &str, beacon_id: Option<&str>) -> anyhow::Re
             }
         }
     }
+
+    Ok(())
+}
+
+async fn sync_cmd(config: SyncConfig) -> Result<()> {
+    let mut client = ControlClient::new(&config.control).await?;
+    client.sync(config).await?;
 
     Ok(())
 }

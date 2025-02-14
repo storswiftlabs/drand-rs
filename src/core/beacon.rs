@@ -8,7 +8,9 @@ use crate::key::Scheme;
 
 use super::multibeacon::BeaconHandler;
 use crate::protobuf::drand::IdentityResponse;
+use crate::store::memstore::MemStore;
 
+use energon::drand::traits::BeaconDigest;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -35,6 +37,7 @@ pub struct InnerNode<S: Scheme> {
 pub enum BeaconCmd {
     Shutdown(Callback<(), ()>),
     IdentityRequest(Callback<IdentityResponse, ConversionError>),
+    Sync(Callback<Arc<MemStore>, &'static str>),
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -116,6 +119,10 @@ impl<S: Scheme> BeaconProcess<S> {
 
         let node = Self::from_arc(beacon_node.0.clone());
         beacon_node.tracker().spawn(async move {
+            // Simplest store case. This compiles now behind "memstore" cfg as default feature.
+            use crate::store::memstore::MemStore;
+            let store = Arc::new(MemStore::new(S::Beacon::is_chained()));
+
             while let Some(cmd) = rx.recv().await {
                 match cmd {
                     BeaconCmd::Shutdown(callback) => {
@@ -127,6 +134,11 @@ impl<S: Scheme> BeaconProcess<S> {
                     BeaconCmd::IdentityRequest(callback) => {
                         if let Err(err) = node.identity_request(callback) {
                             error!("failed to send identity responce, {err}")
+                        }
+                    }
+                    BeaconCmd::Sync(callback) => {
+                        if callback.send(Ok(Arc::clone(&store))).is_err() {
+                            error!("failed to proceed sync request")
                         }
                     }
                 }

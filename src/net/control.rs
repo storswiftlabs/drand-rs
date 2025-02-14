@@ -1,11 +1,15 @@
 //! This module provides client and server implementations for Control.
 
+use crate::net::protocol::ProtocolClient;
+use crate::net::utils::Address;
 use crate::net::utils::ConnectionError;
 use crate::net::utils::NewTcpListener;
 use crate::net::utils::StartServerError;
 use crate::net::utils::ToStatus;
 use crate::net::utils::ERR_METADATA_IS_MISSING;
 
+use crate::cli::SyncConfig;
+use crate::core::beacon::BeaconCmd;
 use crate::core::daemon::Daemon;
 use crate::protobuf::drand as protobuf;
 
@@ -46,12 +50,14 @@ use tracing::debug;
 use tracing::error;
 use tracing::info;
 
-use http::Uri;
 use std::ops::Deref;
 use std::str::FromStr;
 use std::sync::Arc;
+
+use http::Uri;
 use tokio_stream::wrappers::TcpListenerStream;
 use tokio_stream::Stream;
+use tokio_stream::StreamExt;
 
 type ResponseStream = std::pin::Pin<Box<dyn Stream<Item = Result<SyncProgress, Status>> + Send>>;
 
@@ -186,10 +192,46 @@ impl Control for ControlHandler {
         Ok(Response::new(response))
     }
 
+    // Until sync manager is ready.
     async fn start_follow_chain(
         &self,
-        _request: Request<StartSyncRequest>,
+        request: Request<StartSyncRequest>,
     ) -> Result<Response<Self::StartFollowChainStream>, Status> {
+        // Borrow id from metadata.
+        let id = request.get_ref().metadata.as_ref().map_or_else(
+            || Err(Status::data_loss(ERR_METADATA_IS_MISSING)),
+            |meta| Ok(meta.beacon_id.as_str()),
+        )?;
+        debug!("received follow_chain request for {id}");
+
+        // Get store pointer from beacon process
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.beacons()
+            .cmd(BeaconCmd::Sync(tx), id)
+            .await
+            .map_err(|err| err.to_status(id))?;
+        let _store = rx
+            .await
+            .map_err(|err| err.to_status(id))?
+            .map_err(Status::aborted)?;
+
+        // Connect to remote node.
+        let inner = request.get_ref();
+        let address = inner
+            .nodes
+            .first()
+            .ok_or_else(|| Status::aborted("list of nodes can not be empty"))?;
+        let address = Address::precheck(address).map_err(|err| err.to_status(id))?;
+
+        let mut client = ProtocolClient::new(&address)
+            .await
+            .map_err(|err| Status::from_error(err.into()))?;
+        let mut stream = client.sync_chain(inner.up_to, id).await?;
+
+        while let Some(_beacon) = stream.next().await {
+            // write to db and stream back the progress
+        }
+
         Err(Status::unimplemented(
             "start_follow_chain: StartSyncRequest",
         ))
@@ -293,6 +335,27 @@ impl ControlClient {
         let responce = self.client.shutdown(request).await?;
         let is_daemon_running = responce.get_ref().metadata.is_some();
         Ok(is_daemon_running)
+    }
+
+    pub async fn sync(&mut self, config: SyncConfig) -> anyhow::Result<()> {
+        let metadata = Metadata::with_chain_hash(&config.id, &config.chain_hash)?;
+        let request = StartSyncRequest {
+            nodes: config.sync_nodes,
+            up_to: config.up_to,
+            metadata: Some(metadata),
+        };
+
+        let mut responce = self.client.start_follow_chain(request).await?.into_inner();
+
+        let mut count: u64 = 0;
+        while let Some(item) = responce.next().await {
+            count += 1;
+            if count % 300 == 0 {
+                debug!("received:\n {count}, target: {}", item?.target);
+            }
+        }
+
+        Ok(())
     }
 }
 

@@ -153,6 +153,16 @@ impl Metadata {
 
         Some(metadata)
     }
+
+    pub fn with_chain_hash(beacon_id: &str, chain_hash: &str) -> anyhow::Result<Self> {
+        let metadata = Self {
+            node_version: Some(VERSION),
+            beacon_id: beacon_id.into(),
+            chain_hash: hex::decode(chain_hash)?,
+        };
+
+        Ok(metadata)
+    }
 }
 
 /// Helper trait for binding TCP listeners.
@@ -242,6 +252,12 @@ impl ToStatus for ConversionError {
     /// TODO: well-define error values, see [`ConversionError`]
     fn to_status(&self, id: &str) -> Status {
         Status::invalid_argument(format!("beacon id '{id}', conversion error: {self}"))
+    }
+}
+
+impl ToStatus for InvalidAddress {
+    fn to_status(&self, id: &str) -> Status {
+        Status::invalid_argument(format!("beacon id '{id}', {}", self.0))
     }
 }
 
