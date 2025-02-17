@@ -88,13 +88,15 @@ impl<T: Store + Sync + Send> Store for AppendStore<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::ChainStore;
+    use crate::store::{ChainStore, NewStore, StorageConfig};
 
     #[test]
     fn test_append_memstore() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let store = ChainStore::new(true);
+            let store = ChainStore::new(StorageConfig::default(), true)
+                .await
+                .unwrap();
 
             store
                 .put(Beacon {

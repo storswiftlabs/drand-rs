@@ -1,6 +1,6 @@
-use super::{Beacon, StorageError, Store};
+use super::{Beacon, NewStore, StorageConfig, StorageError, Store};
 use cursor::PgCursor;
-use sqlx::{PgPool, Row};
+use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 use tonic::async_trait;
 
 #[cfg(test)]
@@ -16,36 +16,18 @@ pub struct PgStore {
 }
 
 impl PgStore {
-    pub async fn new(
-        pool: PgPool,
-        requires_previous: bool,
-        beacon_name: &str,
-    ) -> Result<Self, sqlx::Error> {
-        sqlx::migrate!("src/store/postgres/migrations")
-            .run(&pool)
-            .await?;
-
-        let mut store = PgStore {
-            db: pool,
-            beacon_id: 0,
-            requires_previous,
-        };
-        let beacon_id = store.add_beacon_name(beacon_name).await?;
-        store.beacon_id = beacon_id;
-
-        Ok(store)
-    }
-
-    pub async fn add_beacon_name(&self, beacon_name: &str) -> Result<i32, sqlx::Error> {
+    pub async fn add_beacon_name(&self, beacon_name: &str) -> Result<i32, StorageError> {
         sqlx::query("INSERT INTO beacons (name) VALUES ($1) ON CONFLICT DO NOTHING")
             .bind(beacon_name)
             .execute(&self.db)
-            .await?;
+            .await
+            .map_err(|e| e.into())?;
 
         let beacon_id = sqlx::query("SELECT id FROM beacons WHERE name = $1")
             .bind(beacon_name)
             .fetch_one(&self.db)
-            .await?
+            .await
+            .map_err(|e| e.into())?
             .get::<i32, _>("id");
         Ok(beacon_id)
     }
@@ -97,6 +79,36 @@ impl PgStore {
                 .map_err(|e| e.into())?
                 .get::<i64, _>("count");
         Ok(count as usize)
+    }
+}
+
+#[async_trait]
+impl NewStore for PgStore {
+    async fn new(config: StorageConfig, requires_previous: bool) -> Result<Self, StorageError> {
+        let pool = PgPoolOptions::new()
+            .max_connections(5)
+            .connect(
+                config
+                    .uri
+                    .ok_or(StorageError::InvalidConfig("empty uri".to_string()))?
+                    .as_str(),
+            )
+            .await
+            .map_err(|e| e.into())?;
+        sqlx::migrate!("src/store/postgres/migrations")
+            .run(&pool)
+            .await
+            .map_err(|e| StorageError::MigrateError(e.to_string()))?;
+
+        let mut store = PgStore {
+            db: pool,
+            beacon_id: 0,
+            requires_previous,
+        };
+        let beacon_id = store.add_beacon_name(&config.beacon_id).await?;
+        store.beacon_id = beacon_id;
+
+        Ok(store)
     }
 }
 
@@ -228,7 +240,6 @@ impl Into<StorageError> for sqlx::Error {
 
 #[cfg(test)]
 mod tests {
-    use sqlx::postgres::PgPoolOptions;
 
     use crate::store::testing::{test_cursor, test_store};
 
@@ -263,18 +274,19 @@ mod tests {
             let (pg_id, pg_ip) = db_container::start_pg().await.unwrap();
             let testdata = PgTestData { pg_id, pg_ip };
 
-            let pool = PgPoolOptions::new()
-                .max_connections(5)
-                .connect(&format!(
-                    "postgres://postgres:password@{}/test",
-                    testdata.pg_ip
-                ))
-                .await
-                .unwrap();
-
-            let mut store = PgStore::new(pool, true, "beacon_name")
-                .await
-                .expect("Failed to create store");
+            let mut store = PgStore::new(
+                StorageConfig {
+                    beacon_id: "test".to_string(),
+                    uri: Some(format!(
+                        "postgres://postgres:password@{}/test",
+                        testdata.pg_ip
+                    )),
+                    ..Default::default()
+                },
+                true,
+            )
+            .await
+            .expect("Failed to create store");
 
             test_store(&store).await;
 
