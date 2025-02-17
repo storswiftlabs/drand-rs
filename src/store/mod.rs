@@ -65,6 +65,18 @@ pub trait Store {
     fn cursor(&self) -> Self::Cursor<'_>;
 }
 
+#[async_trait]
+pub trait NewStore: Sized {
+    async fn new(config: StorageConfig, requires_previous: bool) -> Result<Self, StorageError>;
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct StorageConfig {
+    pub path: Option<String>, // Path for rocksdb
+    pub uri: Option<String>,  // URI for postgres
+    pub beacon_id: String,
+}
+
 #[derive(Debug, Error)]
 pub enum StorageError {
     #[error("IO error: {0}")]
@@ -79,6 +91,10 @@ pub enum StorageError {
     DuplicateKey(String),
     #[error("Invalid key: {0}")]
     InvalidKey(String),
+    #[error("Invalid config: {0}")]
+    InvalidConfig(String),
+    #[error("Migrate error: {0}")]
+    MigrateError(String),
 }
 
 #[async_trait]

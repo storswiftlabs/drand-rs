@@ -5,6 +5,8 @@ use cursor::RocksCursor;
 use rocksdb::Options;
 use tonic::async_trait;
 
+use super::NewStore;
+use super::StorageConfig;
 use super::{Beacon, StorageError, Store};
 
 pub mod cursor;
@@ -24,23 +26,6 @@ pub struct RocksStore {
 }
 
 impl RocksStore {
-    pub fn new(
-        path: PathBuf,
-        requires_previous: bool,
-        beacon_name: String,
-    ) -> Result<Self, StorageError> {
-        if !path.exists() {
-            std::fs::create_dir_all(&path).map_err(|e| StorageError::IoError(e.to_string()))?;
-        }
-        let path = path.join(&beacon_name);
-        let db = open_rocksdb(path)?;
-
-        Ok(RocksStore {
-            db,
-            requires_previous,
-        })
-    }
-
     fn key(&self, round: u64) -> [u8; 8] {
         round.to_be_bytes()
     }
@@ -101,6 +86,28 @@ impl RocksStore {
         }
 
         Ok(pos)
+    }
+}
+
+#[async_trait]
+impl NewStore for RocksStore {
+    async fn new(config: StorageConfig, requires_previous: bool) -> Result<Self, StorageError> {
+        let path_str = config
+            .path
+            .ok_or(StorageError::InvalidConfig("empty path".to_string()))?;
+
+        let path = PathBuf::from(path_str);
+
+        if !path.exists() {
+            std::fs::create_dir_all(&path).map_err(|e| StorageError::IoError(e.to_string()))?;
+        }
+        let path = path.join(&config.beacon_id);
+        let db = open_rocksdb(path)?;
+
+        Ok(RocksStore {
+            db,
+            requires_previous,
+        })
     }
 }
 
@@ -229,8 +236,16 @@ mod tests {
             let tmp_dir = tempdir().unwrap();
             let path = tmp_dir.path();
 
-            let mut store = RocksStore::new(path.into(), true, "beacon_name".to_owned())
-                .expect("Failed to create store");
+            let mut store = RocksStore::new(
+                StorageConfig {
+                    path: Some(path.to_str().unwrap().to_string()),
+                    beacon_id: "beacon_id".to_string(),
+                    ..Default::default()
+                },
+                true,
+            )
+            .await
+            .expect("Failed to create store");
 
             test_store(&store).await;
 

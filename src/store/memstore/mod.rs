@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use tokio::sync::RwLock;
 use tonic::async_trait;
 
-use super::{Beacon, StorageError, Store};
+use super::{Beacon, NewStore, StorageConfig, StorageError, Store};
 
 pub mod cursor;
 
@@ -14,13 +14,6 @@ pub struct MemStore {
 }
 
 impl MemStore {
-    pub fn new(requires_previous: bool) -> Self {
-        MemStore {
-            data: RwLock::new(BTreeMap::new()),
-            requires_previous,
-        }
-    }
-
     async fn get_beacon(&self, round: u64) -> Result<Beacon, StorageError> {
         let datastore = self.data.read().await;
         let signature = datastore.get(&round).ok_or(StorageError::NotFound)?;
@@ -70,8 +63,19 @@ impl MemStore {
 }
 
 #[async_trait]
+impl NewStore for MemStore {
+    async fn new(_config: StorageConfig, requires_previous: bool) -> Result<Self, StorageError> {
+        Ok(MemStore {
+            data: RwLock::new(BTreeMap::new()),
+            requires_previous,
+        })
+    }
+}
+
+#[async_trait]
 impl Store for MemStore {
     type Cursor<'a> = MemDbCursor<'a>;
+
     async fn len(&self) -> Result<usize, StorageError> {
         let datastore = self.data.read().await;
         Ok(datastore.len())
@@ -158,7 +162,7 @@ mod tests {
     fn test_memstore() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let mut store = MemStore::new(true);
+            let mut store = MemStore::new(StorageConfig::default(), true).await.unwrap();
             test_store(&store).await;
 
             store.requires_previous = false;
