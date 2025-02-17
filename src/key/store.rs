@@ -18,6 +18,7 @@ const DEFAULT_DIR: &str = ".drand";
 const MULTIBEACON_DIR: &str = "multibeacon";
 const KEY_DIR: &str = "key";
 const GROUP_DIR: &str = "groups";
+const DB_DIR: &str = "db";
 const PRIVATE_ID_FILE: &str = "drand_id.private";
 const PUBLIC_ID_FILE: &str = "drand_id.public";
 const PRIVATE_SHARE_FILE: &str = "dist_key.private";
@@ -79,6 +80,7 @@ impl FileStore {
         // Create beacon sub folders
         new_secure_dir(&beacon_path.join(KEY_DIR))?;
         new_secure_dir(&beacon_path.join(GROUP_DIR))?;
+        new_secure_dir(&beacon_path.join(DB_DIR))?;
 
         Ok(Self { beacon_path })
     }
@@ -165,11 +167,11 @@ impl FileStore {
         Ok(())
     }
 
-    pub fn load_group<S: Scheme>(&self) -> Result<Group<S>, FileStoreError> {
+    /// Returns non-generic group representation
+    pub fn load_group(&self) -> Result<crate::transport::drand::GroupPacket, FileStoreError> {
         let group_toml = std::fs::read_to_string(self.group_file())?;
-        let group: Group<S> =
-            Toml::toml_decode(&group_toml.parse().map_err(|_| FileStoreError::TomlError)?)
-                .ok_or(FileStoreError::TomlError)?;
+        let group = crate::transport::drand::GroupPacket::from_toml(&group_toml)
+            .ok_or(FileStoreError::TomlError)?;
 
         Ok(group)
     }
@@ -226,6 +228,10 @@ impl FileStore {
 
     fn private_share_file(&self) -> PathBuf {
         self.beacon_path.join(GROUP_DIR).join(PRIVATE_SHARE_FILE)
+    }
+
+    pub fn db_path(&self) -> PathBuf {
+        self.beacon_path.join(DB_DIR)
     }
 }
 

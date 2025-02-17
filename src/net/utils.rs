@@ -76,6 +76,10 @@ impl Seconds {
     pub fn new(value: u32) -> Self {
         Self { value }
     }
+
+    pub fn get_value(&self) -> u32 {
+        self.value
+    }
 }
 
 impl From<u32> for Seconds {
@@ -162,6 +166,25 @@ impl Metadata {
         };
 
         Ok(metadata)
+    }
+
+    pub fn mimic_version(
+        major: u32,
+        minor: u32,
+        patch: u32,
+        beacon_id: &str,
+        chain_hash: &[u8],
+    ) -> Self {
+        Metadata {
+            node_version: Some(NodeVersion {
+                major,
+                minor,
+                patch,
+                prerelease: String::new(),
+            }),
+            beacon_id: beacon_id.into(),
+            chain_hash: chain_hash.into(),
+        }
     }
 }
 

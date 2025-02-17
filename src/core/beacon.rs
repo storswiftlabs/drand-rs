@@ -1,3 +1,6 @@
+use super::chain::ChainHandler;
+use super::multibeacon::BeaconHandler;
+
 use crate::key::keys::Pair;
 use crate::key::store::FileStore;
 use crate::key::store::FileStoreError;
@@ -5,24 +8,27 @@ use crate::key::toml::PairToml;
 use crate::key::toml::Toml;
 use crate::key::ConversionError;
 use crate::key::Scheme;
-
-use super::multibeacon::BeaconHandler;
+use crate::protobuf::drand::ChainInfoPacket;
 use crate::protobuf::drand::IdentityResponse;
 use crate::store::memstore::MemStore;
 
-use energon::drand::traits::BeaconDigest;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing::info_span;
 use tracing::Span;
 
+use energon::drand::traits::BeaconDigest;
 use std::io::ErrorKind;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::task::TaskTracker;
 
 pub const DEFAULT_BEACON_ID: &str = "default";
+
+pub fn is_default_beacon_id(beacon_id: &str) -> bool {
+    beacon_id == DEFAULT_BEACON_ID || beacon_id.is_empty()
+}
 
 pub type Callback<T, E> = tokio::sync::oneshot::Sender<Result<T, E>>;
 
@@ -38,6 +44,7 @@ pub enum BeaconCmd {
     Shutdown(Callback<(), ()>),
     IdentityRequest(Callback<IdentityResponse, ConversionError>),
     Sync(Callback<Arc<MemStore>, &'static str>),
+    ChainInfo(Callback<ChainInfoPacket, &'static str>),
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -89,13 +96,15 @@ impl<S: Scheme> BeaconProcess<S> {
         let keypair: Pair<S> = Toml::toml_decode(&pair).ok_or(FileStoreError::TomlError)?;
         let (tx, mut rx) = mpsc::channel::<BeaconCmd>(30);
 
-        // Ignore IO error `NotFound`.
-        match fs.load_group::<S>() {
-            Ok(_group) => todo!("load share, db, start chain handler"),
+        let chain: Option<ChainHandler> = match fs.load_group() {
+            // TODO: load share, db
+            Ok(groupfile) => Some(ChainHandler::new(groupfile)),
             Err(err) => match err {
+                // Ignore IO error `NotFound`.
                 FileStoreError::IO(error) => {
                     if error.kind() == ErrorKind::NotFound {
-                        info!("beacon id [{id}]: will run as fresh install -> expect to run DKG.")
+                        info!("beacon id [{id}]: will run as fresh install -> expect to run DKG.");
+                        None
                     } else {
                         return Err(FileStoreError::IO(error));
                     }
@@ -108,6 +117,15 @@ impl<S: Scheme> BeaconProcess<S> {
             "",
             id = format!("{}.{id}", keypair.public_identity().address())
         );
+
+        // Attempt to load database
+        let _store: Option<u8> = if chain.is_some() {
+            let _path = fs.db_path();
+            // TODO: single database type
+            None
+        } else {
+            None
+        };
 
         let beacon_node = Self(Arc::new(InnerNode {
             beacon_id: BeaconID::new(id),
@@ -137,10 +155,23 @@ impl<S: Scheme> BeaconProcess<S> {
                         }
                     }
                     BeaconCmd::Sync(callback) => {
+                        // TODO: match Option<Store>
                         if callback.send(Ok(Arc::clone(&store))).is_err() {
                             error!("failed to proceed sync request")
                         }
                     }
+                    BeaconCmd::ChainInfo(callback) => match chain.as_ref() {
+                        Some(chain_handler) => {
+                            if callback.send(Ok(chain_handler.chain_info())).is_err() {
+                                error!("failed to send chain_info, receiver is dropped")
+                            }
+                        }
+                        None => {
+                            if callback.send(Err("no dkg group setup yet")).is_err() {
+                                error!("failed to send chain_info, receiver is dropped")
+                            }
+                        }
+                    },
                 }
             }
         });

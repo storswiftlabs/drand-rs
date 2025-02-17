@@ -1,4 +1,5 @@
 //! This module provides server implementations for Protocol.
+use crate::net::public::PublicHandler;
 use crate::net::utils::Address;
 use crate::net::utils::ConnectionError;
 use crate::net::utils::NewTcpListener;
@@ -8,6 +9,7 @@ use crate::net::utils::ERR_METADATA_IS_MISSING;
 use crate::net::utils::URI_SCHEME;
 
 use crate::protobuf::drand as protobuf;
+use crate::protobuf::drand::public_server::PublicServer;
 use crate::protobuf::drand::Metadata;
 use crate::transport::utils::ConvertProto;
 
@@ -119,7 +121,8 @@ pub async fn start_server<N: NewTcpListener>(
     // TODO: update health_service with _health_reporter
     let (_health_reporter, health_service) = tonic_health::server::health_reporter();
     Server::builder()
-        .add_service(ProtocolServer::new(ProtocolHandler(daemon)))
+        .add_service(ProtocolServer::new(ProtocolHandler(daemon.clone())))
+        .add_service(PublicServer::new(PublicHandler::new(daemon)))
         .add_service(health_service)
         .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async move {
             debug!("Node server started");

@@ -55,6 +55,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use http::Uri;
+use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
 use tokio_stream::Stream;
 use tokio_stream::StreamExt;
@@ -111,9 +112,27 @@ impl Control for ControlHandler {
     /// ChainInfo returns the chain info for the chain hash or beacon id requested in the metadata
     async fn chain_info(
         &self,
-        _request: Request<ChainInfoRequest>,
+        request: Request<ChainInfoRequest>,
     ) -> Result<Response<ChainInfoPacket>, Status> {
-        Err(Status::unimplemented("chain_info: ChainInfoRequest"))
+        // Borrow id from metadata.
+        let id = request.get_ref().metadata.as_ref().map_or_else(
+            || Err(Status::data_loss(ERR_METADATA_IS_MISSING)),
+            |meta| Ok(meta.beacon_id.as_str()),
+        )?;
+
+        let (tx, rx) = oneshot::channel();
+        self.beacons()
+            .cmd(BeaconCmd::ChainInfo(tx), id)
+            .await
+            .map_err(|err| err.to_status(id))?;
+
+        // Await response from callback
+        let chain_info = rx
+            .await
+            .map_err(|recv_err| recv_err.to_status(id))?
+            .map_err(Status::not_found)?;
+
+        Ok(Response::new(chain_info))
     }
 
     /// GroupFile returns the TOML-encoded group file, containing the group public key and coefficients
