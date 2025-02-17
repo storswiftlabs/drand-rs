@@ -10,7 +10,9 @@ use crate::key::ConversionError;
 use crate::key::Scheme;
 use crate::protobuf::drand::ChainInfoPacket;
 use crate::protobuf::drand::IdentityResponse;
-use crate::store::memstore::MemStore;
+use crate::store::ChainStore;
+use crate::store::NewStore;
+use crate::store::StorageConfig;
 
 use tracing::debug;
 use tracing::error;
@@ -43,7 +45,7 @@ pub struct InnerNode<S: Scheme> {
 pub enum BeaconCmd {
     Shutdown(Callback<(), ()>),
     IdentityRequest(Callback<IdentityResponse, ConversionError>),
-    Sync(Callback<Arc<MemStore>, &'static str>),
+    Sync(Callback<Arc<ChainStore>, &'static str>),
     ChainInfo(Callback<ChainInfoPacket, &'static str>),
 }
 
@@ -118,14 +120,7 @@ impl<S: Scheme> BeaconProcess<S> {
             id = format!("{}.{id}", keypair.public_identity().address())
         );
 
-        // Attempt to load database
-        let _store: Option<u8> = if chain.is_some() {
-            let _path = fs.db_path();
-            // TODO: single database type
-            None
-        } else {
-            None
-        };
+        let db_path = fs.db_path();
 
         let beacon_node = Self(Arc::new(InnerNode {
             beacon_id: BeaconID::new(id),
@@ -137,9 +132,21 @@ impl<S: Scheme> BeaconProcess<S> {
 
         let node = Self::from_arc(beacon_node.0.clone());
         beacon_node.tracker().spawn(async move {
-            // Simplest store case. This compiles now behind "memstore" cfg as default feature.
-            use crate::store::memstore::MemStore;
-            let store = Arc::new(MemStore::new(S::Beacon::is_chained()));
+            // Attempt to load database
+            let mut store = if chain.is_some() {
+                let store = ChainStore::new(
+                    StorageConfig {
+                        path: Some(db_path.clone()), // TODO: postgres config
+                        ..Default::default()
+                    },
+                    S::Beacon::is_chained(),
+                )
+                .await
+                .unwrap();
+                Some(Arc::new(store))
+            } else {
+                None
+            };
 
             while let Some(cmd) = rx.recv().await {
                 match cmd {
@@ -154,12 +161,31 @@ impl<S: Scheme> BeaconProcess<S> {
                             error!("failed to send identity responce, {err}")
                         }
                     }
-                    BeaconCmd::Sync(callback) => {
-                        // TODO: match Option<Store>
-                        if callback.send(Ok(Arc::clone(&store))).is_err() {
-                            error!("failed to proceed sync request")
+                    BeaconCmd::Sync(callback) => match &store {
+                        Some(store) => {
+                            if callback.send(Ok(Arc::clone(store))).is_err() {
+                                error!("failed to proceed sync request")
+                            }
                         }
-                    }
+                        None => {
+                            let new_store = Arc::new(
+                                ChainStore::new(
+                                    StorageConfig {
+                                        path: Some(db_path.clone()), // TODO: postgres config
+                                        ..Default::default()
+                                    },
+                                    S::Beacon::is_chained(),
+                                )
+                                .await
+                                .unwrap(),
+                            );
+                            store = Some(new_store.clone());
+
+                            if callback.send(Ok(new_store)).is_err() {
+                                error!("failed to send chain_info, receiver is dropped")
+                            }
+                        }
+                    },
                     BeaconCmd::ChainInfo(callback) => match chain.as_ref() {
                         Some(chain_handler) => {
                             if callback.send(Ok(chain_handler.chain_info())).is_err() {

@@ -37,7 +37,7 @@ use tonic::Status;
 type ResponseStream = Pin<Box<dyn Stream<Item = Result<PublicRandResponse, Status>> + Send>>;
 
 /// Implementor for [`Public`] trait for use with PublicServer
-pub struct PublicHandler(Arc<Daemon>);
+pub struct PublicHandler(pub(super) Arc<Daemon>);
 
 impl PublicHandler {
     pub fn new(daemon: Arc<Daemon>) -> Self {

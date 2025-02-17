@@ -11,11 +11,13 @@ use crate::net::utils::URI_SCHEME;
 use crate::protobuf::drand as protobuf;
 use crate::protobuf::drand::public_server::PublicServer;
 use crate::protobuf::drand::Metadata;
+use crate::store::Store;
 use crate::transport::utils::ConvertProto;
 
 use crate::core::beacon::BeaconCmd;
 use crate::core::daemon::Daemon;
 
+use futures::SinkExt;
 use protobuf::protocol_client::ProtocolClient as _ProtocolClient;
 use protobuf::protocol_server::Protocol;
 use protobuf::protocol_server::ProtocolServer;
@@ -39,14 +41,12 @@ use tracing::error;
 
 use http::Uri;
 use std::ops::Deref;
-use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
-use tokio_stream::Stream;
 
-type ResponseStream = Pin<Box<dyn Stream<Item = Result<BeaconPacket, Status>> + Send>>;
+type ResponseStream = futures::channel::mpsc::UnboundedReceiver<Result<BeaconPacket, Status>>;
 
 /// Implementor for [`Protocol`] trait for use with ProtocolServer
 pub struct ProtocolHandler(Arc<Daemon>);
@@ -95,9 +95,53 @@ impl Protocol for ProtocolHandler {
 
     async fn sync_chain(
         &self,
-        _request: Request<SyncRequest>,
+        request: Request<SyncRequest>,
     ) -> Result<Response<Self::SyncChainStream>, Status> {
-        Err(Status::unimplemented("sync_chain: SyncRequest"))
+        let request = request.into_inner();
+
+        let id = request.metadata.as_ref().map_or_else(
+            || Err(Status::data_loss(ERR_METADATA_IS_MISSING)),
+            |meta| Ok(meta.beacon_id.as_str()),
+        )?;
+        debug!("protocol: received follow_chain request for {id}");
+
+        // Get store pointer from beacon process
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.beacons()
+            .cmd(BeaconCmd::Sync(tx), id)
+            .await
+            .map_err(|err| err.to_status(id))?;
+        let store = rx
+            .await
+            .map_err(|err| err.to_status(id))?
+            .map_err(Status::aborted)?;
+
+        let (mut tx, rx) = futures::channel::mpsc::unbounded();
+
+        debug!("starting sync chain for {id}");
+        tokio::spawn(async move {
+            let mut start = request.from_round;
+
+            while let Ok(beacon) = store.get(start).await {
+                let packet = BeaconPacket {
+                    previous_signature: beacon.previous_sig,
+                    round: beacon.round,
+                    signature: beacon.signature,
+                    metadata: request.metadata.clone(),
+                };
+                if tx.send(Ok(packet)).await.is_err() {
+                    let _ = tx.send(Err(Status::ok(""))).await;
+                    return;
+                }
+                start += 1;
+            }
+
+            let _ = tx.send(Err(Status::data_loss("end of stream"))).await;
+        });
+
+        // let out_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+
+        Ok(Response::new(rx))
     }
 
     async fn status(

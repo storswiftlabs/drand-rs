@@ -1,5 +1,4 @@
 use std::path::Path;
-use std::path::PathBuf;
 
 use cursor::RocksCursor;
 use rocksdb::Options;
@@ -92,16 +91,15 @@ impl RocksStore {
 #[async_trait]
 impl NewStore for RocksStore {
     async fn new(config: StorageConfig, requires_previous: bool) -> Result<Self, StorageError> {
-        let path_str = config
+        let path = config
             .path
             .ok_or(StorageError::InvalidConfig("empty path".to_string()))?;
 
-        let path = PathBuf::from(path_str);
+        let path = path.join("rocksdb");
 
         if !path.exists() {
             std::fs::create_dir_all(&path).map_err(|e| StorageError::IoError(e.to_string()))?;
         }
-        let path = path.join(&config.beacon_id);
         let db = open_rocksdb(path)?;
 
         Ok(RocksStore {
