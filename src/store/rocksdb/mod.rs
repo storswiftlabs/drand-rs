@@ -221,6 +221,8 @@ impl Into<StorageError> for rocksdb::Error {
 #[cfg(test)]
 mod tests {
 
+    use std::path::PathBuf;
+
     use tempfile::tempdir;
 
     use crate::store::testing::{test_cursor, test_store};
@@ -236,7 +238,7 @@ mod tests {
 
             let mut store = RocksStore::new(
                 StorageConfig {
-                    path: Some(path.to_str().unwrap().to_string()),
+                    path: Some(PathBuf::from(path)),
                     beacon_id: "beacon_id".to_string(),
                     ..Default::default()
                 },
