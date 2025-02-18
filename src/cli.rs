@@ -145,7 +145,7 @@ async fn keygen_cmd(config: &KeyGenConfig) -> Result<()> {
     }
 
     // Note: Loading keys into the daemon at `keygen_cmd` is disabled in tests.
-    //       Testing [`ControlClient::load_beacon`] should be done outside this function.
+    //       Testing [`ControlClient::load_beacon`] is done outside this function.
     #[cfg(not(test))]
     // If keys were generated successfully, daemon needs to load them.
     match control::ControlClient::new(&config.control).await {

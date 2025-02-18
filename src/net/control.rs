@@ -82,7 +82,7 @@ impl Control for ControlHandler {
     /// PingPong simply responds with an empty packet,
     /// proving that this drand node is up and alive.
     async fn ping_pong(&self, _request: Request<Ping>) -> Result<Response<Pong>, Status> {
-        debug!("control listener: received ping_pon request");
+        debug!("control listener: received ping_pong request");
         let metadata = Metadata::with_default();
 
         Ok(Response::new(Pong { metadata }))

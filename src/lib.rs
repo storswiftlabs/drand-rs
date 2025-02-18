@@ -7,4 +7,6 @@ pub mod net;
 #[allow(clippy::empty_docs)]
 pub mod protobuf;
 pub mod store;
+#[cfg(test)]
+mod test;
 pub mod transport;
