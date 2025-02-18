@@ -18,6 +18,7 @@ fn main() {
     tonic_build::configure()
         .build_server(true)
         .out_dir(PROTO_DIR)
+        .emit_rerun_if_changed(false)
         .compile_protos(&proto_files, &["."])
         .unwrap_or_else(|err| panic!("protobuf compile error: {err}"));
     for proto_file in proto_files {

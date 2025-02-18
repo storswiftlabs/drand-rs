@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use thiserror::Error;
 use tonic::async_trait;
 
@@ -72,8 +74,8 @@ pub trait NewStore: Sized {
 
 #[derive(Debug, Clone, Default)]
 pub struct StorageConfig {
-    pub path: Option<String>, // Path for rocksdb
-    pub uri: Option<String>,  // URI for postgres
+    pub path: Option<PathBuf>, // Path for rocksdb
+    pub uri: Option<String>,   // URI for postgres
     pub beacon_id: String,
 }
 

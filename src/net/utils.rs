@@ -76,6 +76,10 @@ impl Seconds {
     pub fn new(value: u32) -> Self {
         Self { value }
     }
+
+    pub fn get_value(&self) -> u32 {
+        self.value
+    }
 }
 
 impl From<u32> for Seconds {
@@ -152,6 +156,35 @@ impl Metadata {
         };
 
         Some(metadata)
+    }
+
+    pub fn with_chain_hash(beacon_id: &str, chain_hash: &str) -> anyhow::Result<Self> {
+        let metadata = Self {
+            node_version: Some(VERSION),
+            beacon_id: beacon_id.into(),
+            chain_hash: hex::decode(chain_hash)?,
+        };
+
+        Ok(metadata)
+    }
+
+    pub fn mimic_version(
+        major: u32,
+        minor: u32,
+        patch: u32,
+        beacon_id: &str,
+        chain_hash: &[u8],
+    ) -> Self {
+        Metadata {
+            node_version: Some(NodeVersion {
+                major,
+                minor,
+                patch,
+                prerelease: String::new(),
+            }),
+            beacon_id: beacon_id.into(),
+            chain_hash: chain_hash.into(),
+        }
     }
 }
 
@@ -242,6 +275,12 @@ impl ToStatus for ConversionError {
     /// TODO: well-define error values, see [`ConversionError`]
     fn to_status(&self, id: &str) -> Status {
         Status::invalid_argument(format!("beacon id '{id}', conversion error: {self}"))
+    }
+}
+
+impl ToStatus for InvalidAddress {
+    fn to_status(&self, id: &str) -> Status {
+        Status::invalid_argument(format!("beacon id '{id}', {}", self.0))
     }
 }
 
