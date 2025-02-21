@@ -1,5 +1,6 @@
 //! This module provides client and server implementations for Control.
 
+use crate::net::dkg_control::DkgControlHandler;
 use crate::net::protocol::ProtocolClient;
 use crate::net::utils::Address;
 use crate::net::utils::ConnectionError;
@@ -12,6 +13,7 @@ use crate::cli::SyncConfig;
 use crate::core::beacon::BeaconCmd;
 use crate::core::daemon::Daemon;
 use crate::net::utils::URI_SCHEME;
+use crate::protobuf::dkg::dkg_control_server::DkgControlServer;
 use crate::protobuf::drand as protobuf;
 use crate::protobuf::drand::public_client::PublicClient;
 use crate::store::Store;
@@ -359,7 +361,8 @@ pub async fn start_server<N: NewTcpListener>(
     let cancel = daemon.token.clone();
 
     Server::builder()
-        .add_service(ControlServer::new(ControlHandler(daemon)))
+        .add_service(ControlServer::new(ControlHandler(daemon.clone())))
+        .add_service(DkgControlServer::new(DkgControlHandler::new(daemon)))
         .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async move {
             debug!("Control server started");
             let _ = cancel.cancelled().await;

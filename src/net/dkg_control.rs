@@ -1,9 +1,10 @@
-//! This module provides server implementations for DkgControl.
+//! This module provides server implementations for DkgControl and DkgPublic.
 
 use crate::core::daemon::Daemon;
 use crate::protobuf::dkg as protobuf;
 
 use protobuf::dkg_control_server::DkgControl;
+use protobuf::dkg_public_server::DkgPublic;
 use protobuf::DkgCommand;
 use protobuf::DkgPacket;
 use protobuf::DkgStatusRequest;
@@ -20,6 +21,12 @@ use tonic::Status;
 /// Implementor for [`DkgControl`] trait for use with DkgControlServer
 pub struct DkgControlHandler(Arc<Daemon>);
 
+impl DkgControlHandler {
+    pub(super) fn new(daemon: Arc<Daemon>) -> Self {
+        Self(daemon)
+    }
+}
+
 #[tonic::async_trait]
 impl DkgControl for DkgControlHandler {
     async fn command(
@@ -29,18 +36,30 @@ impl DkgControl for DkgControlHandler {
         Err(Status::unimplemented("command: DkgCommand"))
     }
 
-    async fn packet(
-        &self,
-        _request: Request<GossipPacket>,
-    ) -> Result<Response<EmptyDkgResponse>, Status> {
-        Err(Status::unimplemented("packet: GossipPacket"))
-    }
-
     async fn dkg_status(
         &self,
         _request: Request<DkgStatusRequest>,
     ) -> Result<Response<DkgStatusResponse>, tonic::Status> {
         Err(Status::unimplemented("dkg_status: DkgStatusRequest"))
+    }
+}
+
+/// Implementor for [`DkgPublic`] trait for use with DkgPublicServer
+pub struct DkgPublicHandler(Arc<Daemon>);
+
+impl DkgPublicHandler {
+    pub(super) fn new(daemon: Arc<Daemon>) -> Self {
+        Self(daemon)
+    }
+}
+
+#[tonic::async_trait]
+impl DkgPublic for DkgPublicHandler {
+    async fn packet(
+        &self,
+        _request: Request<GossipPacket>,
+    ) -> Result<Response<EmptyDkgResponse>, Status> {
+        Err(Status::unimplemented("packet: GossipPacket"))
     }
 
     async fn broadcast_dkg(
@@ -52,6 +71,14 @@ impl DkgControl for DkgControlHandler {
 }
 
 impl Deref for DkgControlHandler {
+    type Target = Daemon;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Deref for DkgPublicHandler {
     type Target = Daemon;
 
     fn deref(&self) -> &Self::Target {

@@ -7,8 +7,11 @@ import "src/protobuf/dkg.proto";
 
 service DKGControl {
   rpc Command(DKGCommand) returns (EmptyDKGResponse) {}
-  rpc Packet(GossipPacket) returns (EmptyDKGResponse) {}
   rpc DKGStatus(DKGStatusRequest) returns (DKGStatusResponse) {}
+}
+
+service DKGPublic {
+  rpc Packet(GossipPacket) returns (EmptyDKGResponse) {}
   rpc BroadcastDKG(DKGPacket) returns (EmptyDKGResponse) {}
 }
 
