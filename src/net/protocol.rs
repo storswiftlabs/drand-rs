@@ -1,4 +1,5 @@
 //! This module provides server implementations for Protocol.
+use crate::net::dkg_control::DkgPublicHandler;
 use crate::net::public::PublicHandler;
 use crate::net::utils::Address;
 use crate::net::utils::ConnectionError;
@@ -8,6 +9,7 @@ use crate::net::utils::ToStatus;
 use crate::net::utils::ERR_METADATA_IS_MISSING;
 use crate::net::utils::URI_SCHEME;
 
+use crate::protobuf::dkg::dkg_public_server::DkgPublicServer;
 use crate::protobuf::drand as protobuf;
 use crate::protobuf::drand::public_server::PublicServer;
 use crate::protobuf::drand::Metadata;
@@ -166,7 +168,8 @@ pub async fn start_server<N: NewTcpListener>(
     let (_health_reporter, health_service) = tonic_health::server::health_reporter();
     Server::builder()
         .add_service(ProtocolServer::new(ProtocolHandler(daemon.clone())))
-        .add_service(PublicServer::new(PublicHandler::new(daemon)))
+        .add_service(PublicServer::new(PublicHandler::new(daemon.clone())))
+        .add_service(DkgPublicServer::new(DkgPublicHandler::new(daemon)))
         .add_service(health_service)
         .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async move {
             debug!("Node server started");
@@ -179,6 +182,7 @@ pub async fn start_server<N: NewTcpListener>(
             StartServerError::FailedToStartNode
         })?;
     debug!("Node server is shutting down");
+    
     Ok(())
 }
 
