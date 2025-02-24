@@ -3,12 +3,9 @@
 use super::Scheme;
 use crate::protobuf::drand::IdentityResponse;
 
-use anyhow::Error;
-use anyhow::Result;
 use energon::traits::Affine;
 
-/// (TODO: energon) return cheap error type and log the details.
-pub type ConversionError = anyhow::Error;
+pub type ConversionError = energon::drand::traits::SchemeError;
 
 // Transport::Identity -> Identity<S>
 impl<S: Scheme> TryFrom<crate::transport::drand::Identity> for super::keys::Identity<S> {
@@ -30,13 +27,13 @@ impl<S: Scheme> TryFrom<crate::transport::drand::Identity> for super::keys::Iden
 
 // Identity<S> -> proto::IdentityResponse
 impl<S: Scheme> TryFrom<&super::keys::Identity<S>> for IdentityResponse {
-    type Error = Error;
+    type Error = ConversionError;
 
     fn try_from(identity: &super::keys::Identity<S>) -> Result<Self, Self::Error> {
         let address = identity.address().to_string();
         let scheme_name = S::ID.to_string();
-        let key = identity.key().serialize()?;
-        let signature = identity.signature().serialize()?;
+        let key = identity.key().serialize()?.into();
+        let signature = identity.signature().serialize()?.into();
 
         Ok(Self {
             address,
