@@ -25,13 +25,6 @@ sha2 = "0.10.7"
 http = "1.2.0"
 toml_edit = "0.22.22"
 hex = "0.4.3"
-sqlx = { version = "0.8", optional = true, features = [
-    "runtime-tokio",
-    "postgres",
-] }
-rocksdb = { version = "0.23.0", optional = true, default-features = false, features = [
-    "lz4",
-] }
 home = "0.5.11"
 anyhow = "1.0.95"
 tokio-util = { version = "0.7.13", features = ["rt"] }
@@ -52,9 +45,6 @@ codegen-units = 1
 
 [features]
 default = ["memstore", "blstrs"]
-rocksdb = ["dep:rocksdb"]
-postgres = ["dep:sqlx"]
-# for development only
 memstore = []
 blstrs = ["energon/bls12381_blstrs", "energon/bn254_arkworks"]
 arkworks = ["energon/bls12381_arkworks", "energon/bn254_arkworks"]
