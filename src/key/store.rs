@@ -49,6 +49,8 @@ pub enum FileStoreError {
     BeaconNotFound,
     #[error("beacon id is failed to init, unknown scheme")]
     FailedInitID,
+    #[error("chain_store error: {0}")]
+    ChainStore(String),
 }
 
 /// FileStore holds absolute path of **beacon_id** and abstracts the

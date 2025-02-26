@@ -119,7 +119,7 @@ impl PublicClient {
     }
 
     pub async fn chain_info(&mut self, beacon_id: &str) -> anyhow::Result<ChainInfoPacket> {
-        let metadata = Some(Metadata::mimic_version(2, 0, 4, beacon_id, &[]));
+        let metadata = Some(Metadata::mimic_version(beacon_id, &[]));
         let request = ChainInfoRequest { metadata };
         let responce = self.client.chain_info(request).await?.into_inner();
 
