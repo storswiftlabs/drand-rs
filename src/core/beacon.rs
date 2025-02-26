@@ -12,16 +12,13 @@ use crate::protobuf::drand::ChainInfoPacket;
 use crate::protobuf::drand::IdentityResponse;
 use crate::store::ChainStore;
 use crate::store::NewStore;
-use crate::store::StorageConfig;
 
 use tracing::debug;
 use tracing::error;
-use tracing::info;
 use tracing::info_span;
 use tracing::Span;
 
 use energon::drand::traits::BeaconDigest;
-use std::io::ErrorKind;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::task::TaskTracker;
@@ -86,43 +83,14 @@ impl BeaconID {
 pub struct BeaconProcess<S: Scheme>(Arc<InnerNode<S>>);
 
 impl<S: Scheme> BeaconProcess<S> {
-    fn from_arc(node: Arc<InnerNode<S>>) -> Self {
-        Self(node)
-    }
-
-    pub fn tracker(&self) -> &TaskTracker {
-        &self.tracker
-    }
-
-    pub fn run(fs: FileStore, pair: PairToml, id: &str) -> Result<BeaconHandler, FileStoreError> {
+    fn new(fs: FileStore, pair: PairToml, id: &str) -> Result<Self, FileStoreError> {
         let keypair: Pair<S> = Toml::toml_decode(&pair).ok_or(FileStoreError::TomlError)?;
-        let (tx, mut rx) = mpsc::channel::<BeaconCmd>(30);
-
-        let chain: Option<ChainHandler> = match fs.load_group() {
-            // TODO: load share, db
-            Ok(groupfile) => Some(ChainHandler::new(groupfile)),
-            Err(err) => match err {
-                // Ignore IO error `NotFound`.
-                FileStoreError::IO(error) => {
-                    if error.kind() == ErrorKind::NotFound {
-                        info!("beacon id [{id}]: will run as fresh install -> expect to run DKG.");
-                        None
-                    } else {
-                        return Err(FileStoreError::IO(error));
-                    }
-                }
-                _ => return Err(err),
-            },
-        };
-
         let span = info_span!(
             "",
             id = format!("{}.{id}", keypair.public_identity().address())
         );
 
-        let db_path = fs.db_path();
-
-        let beacon_node = Self(Arc::new(InnerNode {
+        let process = Self(Arc::new(InnerNode {
             beacon_id: BeaconID::new(id),
             fs,
             keypair,
@@ -130,24 +98,21 @@ impl<S: Scheme> BeaconProcess<S> {
             span,
         }));
 
-        let node = Self::from_arc(beacon_node.0.clone());
-        beacon_node.tracker().spawn(async move {
-            // Attempt to load database
-            let mut store = if chain.is_some() {
-                let store = ChainStore::new(
-                    StorageConfig {
-                        path: Some(db_path.clone()), // TODO: postgres config
-                        ..Default::default()
-                    },
-                    S::Beacon::is_chained(),
-                )
-                .await
-                .unwrap();
-                Some(Arc::new(store))
-            } else {
-                None
-            };
+        Ok(process)
+    }
 
+    pub fn tracker(&self) -> &TaskTracker {
+        &self.tracker
+    }
+
+    pub fn run(fs: FileStore, pair: PairToml, id: &str) -> Result<BeaconHandler, FileStoreError> {
+        let chain_handler = ChainHandler::try_init(&fs, id)?;
+        let chain_store = Arc::new(ChainStore::new(&fs.db_path(), S::Beacon::is_chained())?);
+        let node = Self::new(fs, pair, id)?;
+        let tracker = node.tracker().to_owned();
+
+        let (tx, mut rx) = mpsc::channel::<BeaconCmd>(5);
+        tracker.spawn(async move {
             while let Some(cmd) = rx.recv().await {
                 match cmd {
                     BeaconCmd::Shutdown(callback) => {
@@ -161,50 +126,23 @@ impl<S: Scheme> BeaconProcess<S> {
                             error!("failed to send identity responce, {err}")
                         }
                     }
-                    BeaconCmd::Sync(callback) => match &store {
-                        Some(store) => {
-                            if callback.send(Ok(Arc::clone(store))).is_err() {
-                                error!("failed to proceed sync request")
-                            }
+                    BeaconCmd::Sync(callback) => {
+                        if callback.send(Ok(Arc::clone(&chain_store))).is_err() {
+                            error!("failed to proceed sync request")
                         }
-                        None => {
-                            let new_store = Arc::new(
-                                ChainStore::new(
-                                    StorageConfig {
-                                        path: Some(db_path.clone()), // TODO: postgres config
-                                        ..Default::default()
-                                    },
-                                    S::Beacon::is_chained(),
-                                )
-                                .await
-                                .unwrap(),
-                            );
-                            store = Some(new_store.clone());
-
-                            if callback.send(Ok(new_store)).is_err() {
-                                error!("failed to send chain_info, receiver is dropped")
-                            }
+                    }
+                    BeaconCmd::ChainInfo(callback) => {
+                        if callback.send(Ok(chain_handler.chain_info())).is_err() {
+                            error!("failed to send chain_info, receiver is dropped")
                         }
-                    },
-                    BeaconCmd::ChainInfo(callback) => match chain.as_ref() {
-                        Some(chain_handler) => {
-                            if callback.send(Ok(chain_handler.chain_info())).is_err() {
-                                error!("failed to send chain_info, receiver is dropped")
-                            }
-                        }
-                        None => {
-                            if callback.send(Err("no dkg group setup yet")).is_err() {
-                                error!("failed to send chain_info, receiver is dropped")
-                            }
-                        }
-                    },
+                    }
                 }
             }
         });
 
         Ok(BeaconHandler {
             beacon_id: BeaconID::new(id),
-            tracker: beacon_node.tracker().clone(),
+            tracker,
             tx,
         })
     }

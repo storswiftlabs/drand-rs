@@ -255,6 +255,7 @@ impl From<Node> for crate::protobuf::drand::Node {
     }
 }
 
+#[derive(Default)]
 pub struct GroupPacket {
     pub nodes: Vec<Node>,
     pub threshold: u32,

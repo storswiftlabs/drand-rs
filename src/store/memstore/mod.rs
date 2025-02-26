@@ -1,9 +1,10 @@
 use cursor::MemDbCursor;
 use std::collections::BTreeMap;
+use std::path::Path;
 use tokio::sync::RwLock;
 use tonic::async_trait;
 
-use super::{Beacon, NewStore, StorageConfig, StorageError, Store};
+use super::{Beacon, NewStore, StorageError, Store};
 
 pub mod cursor;
 
@@ -62,9 +63,8 @@ impl MemStore {
     }
 }
 
-#[async_trait]
 impl NewStore for MemStore {
-    async fn new(_config: StorageConfig, requires_previous: bool) -> Result<Self, StorageError> {
+    fn new(_path: &Path, requires_previous: bool) -> Result<Self, StorageError> {
         Ok(MemStore {
             data: RwLock::new(BTreeMap::new()),
             requires_previous,
@@ -162,7 +162,7 @@ mod tests {
     fn test_memstore() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let mut store = MemStore::new(StorageConfig::default(), true).await.unwrap();
+            let mut store = MemStore::new(Path::new("unused"), true).unwrap();
             test_store(&store).await;
 
             store.requires_previous = false;

@@ -44,14 +44,16 @@ pub struct Daemon {
 }
 
 impl Daemon {
-    pub async fn new(c: &Config) -> Result<Arc<Self>, DaemonError> {
+    pub async fn new(config: &Config) -> Result<Arc<Self>, DaemonError> {
         let tracker: TaskTracker = TaskTracker::new();
         let token: CancellationToken = CancellationToken::new();
 
-        let logger = Logger::register_node(&c.private_listen);
-        debug!(parent: &logger.span, "DrandDaemon initializing: private_listen: {}, control_port: {}, folder: {}", c.private_listen, c.control, c.folder);
+        let logger = Logger::register_node(&config.private_listen);
+        debug!(parent: &logger.span,
+              "DrandDaemon initializing: private_listen: {}, control_port: {}, folder: {}", 
+              config.private_listen, config.control, config.folder);
 
-        let (multibeacon_path, beacons) = MultiBeacon::new(&c.folder, c.id.as_deref())?;
+        let (multibeacon_path, beacons) = MultiBeacon::new(config)?;
         let daemon = Arc::new(Self {
             tracker,
             token,

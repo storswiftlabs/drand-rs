@@ -2,6 +2,7 @@ use super::beacon::BeaconCmd;
 use super::beacon::BeaconID;
 use super::beacon::BeaconProcess;
 
+use crate::cli::Config;
 use crate::key::store::FileStore;
 use crate::key::store::FileStoreError;
 use crate::key::Scheme;
@@ -61,10 +62,10 @@ pub struct MultiBeacon(ArcSwapAny<Arc<Vec<BeaconHandler>>>);
 impl MultiBeacon {
     /// This call is success only if *all* detected storages has minimal valid structure.
     /// Succesfull value contains a turple with valid absolute path to multibeacon folder.
-    pub fn new(folder: &str, id: Option<&str>) -> Result<(PathBuf, Self), FileStoreError> {
-        let (multibeacon_path, fstores) = FileStore::read_multibeacon_folder(folder)?;
+    pub fn new(config: &Config) -> Result<(PathBuf, Self), FileStoreError> {
+        let (multibeacon_path, fstores) = FileStore::read_multibeacon_folder(&config.folder)?;
         let mut handlers = vec![];
-        match id {
+        match &config.id {
             // Non-empty value means request to load single beacon id
             Some(id) => {
                 let fs = fstores

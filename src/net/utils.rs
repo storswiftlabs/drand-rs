@@ -168,18 +168,13 @@ impl Metadata {
         Ok(metadata)
     }
 
-    pub fn mimic_version(
-        major: u32,
-        minor: u32,
-        patch: u32,
-        beacon_id: &str,
-        chain_hash: &[u8],
-    ) -> Self {
+    /// Bypass go-version check. This is weird and should be aligned.
+    pub fn mimic_version(beacon_id: &str, chain_hash: &[u8]) -> Self {
         Metadata {
             node_version: Some(NodeVersion {
-                major,
-                minor,
-                patch,
+                major: 2,
+                minor: 1,
+                patch: 0,
                 prerelease: String::new(),
             }),
             beacon_id: beacon_id.into(),

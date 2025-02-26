@@ -1,10 +1,10 @@
-use std::path::PathBuf;
+use std::path::Path;
 
 use thiserror::Error;
 use tonic::async_trait;
 
+use crate::key::store::FileStoreError;
 use crate::protobuf::drand::BeaconPacket;
-
 // #[cfg(feature = "postgres")]
 // pub mod postgres;
 
@@ -14,7 +14,7 @@ use crate::protobuf::drand::BeaconPacket;
 #[cfg(feature = "memstore")]
 pub mod memstore;
 
-pub mod append_store;
+// pub mod append_store;
 
 // #[cfg(feature = "rocksdb")]
 // pub type ChainStore = rocksdb::RocksStore;
@@ -25,7 +25,7 @@ pub mod append_store;
 #[cfg(feature = "memstore")]
 pub type ChainStore = memstore::MemStore;
 
-pub type AppendStore = append_store::AppendStore<ChainStore>;
+// pub type AppendStore = append_store::AppendStore<ChainStore>;
 
 #[cfg(test)]
 mod testing;
@@ -69,14 +69,7 @@ pub trait Store {
 
 #[async_trait]
 pub trait NewStore: Sized {
-    async fn new(config: StorageConfig, requires_previous: bool) -> Result<Self, StorageError>;
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct StorageConfig {
-    pub path: Option<PathBuf>, // Path for rocksdb
-    pub uri: Option<String>,   // URI for postgres
-    pub beacon_id: String,
+    fn new(path: &Path, requires_previous: bool) -> Result<Self, StorageError>;
 }
 
 #[derive(Debug, Error)]
@@ -97,6 +90,12 @@ pub enum StorageError {
     InvalidConfig(String),
     #[error("Migrate error: {0}")]
     MigrateError(String),
+}
+
+impl From<StorageError> for FileStoreError {
+    fn from(value: StorageError) -> Self {
+        Self::ChainStore(value.to_string())
+    }
 }
 
 #[async_trait]

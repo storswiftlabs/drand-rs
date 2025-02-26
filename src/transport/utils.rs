@@ -167,8 +167,7 @@ mod proto_impl {
             let public_key = match self.dist_key.first() {
                 Some(key) => key.to_owned(),
                 None => {
-                    // Should not be possible
-                    error!("chain info: failed to hash pubkey, the key is missing");
+                    error!("chain info: failed to hash pubkey, the key is missing, this should be possible only in fresh-node tests");
                     vec![]
                 }
             };
@@ -188,14 +187,8 @@ mod proto_impl {
                 hash: hash.to_owned(),
                 group_hash: group_hash.into(),
                 scheme_id: self.scheme_id.to_owned(),
-                // insert at server side
-                metadata: Some(Metadata::mimic_version(
-                    2,
-                    0,
-                    4,
-                    &self.metadata.beacon_id,
-                    &hash,
-                )),
+
+                metadata: Some(Metadata::mimic_version(&self.metadata.beacon_id, &hash)),
             }
         }
     }
