@@ -15,7 +15,7 @@ pub use protobuf::drand::NodeVersion;
 pub use protobuf::drand::SyncProgress;
 
 use super::utils::*;
-use crate::dkg::state_machine::state::Status as DkgStatus;
+use crate::dkg::state_machine::status::Status as DkgStatus;
 use crate::net::utils::Address;
 use crate::net::utils::Seconds;
 use crate::protobuf;
