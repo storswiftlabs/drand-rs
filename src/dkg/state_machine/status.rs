@@ -73,6 +73,39 @@ impl TryFrom<u32> for Status {
     }
 }
 
+impl Status {
+    #[rustfmt::skip]
+    pub fn is_valid_state_change(&self, next: Self) -> Result<(), StateError> {
+        use self::Status::*;
+
+        let is_valid = match self {
+            Fresh => matches!(next, Proposing | Proposed),
+            Joined => matches!(next, Left | Executing | Aborted | TimedOut),
+            Proposing => matches!(next, Executing | Aborted | TimedOut),            
+            Proposed => matches!(next, Accepted | Rejected | Joined | Left | Aborted | TimedOut),
+            Accepted => matches!(next, Executing | Aborted | TimedOut),
+            Rejected => matches!(next, Aborted | TimedOut),
+            Executing => matches!(next, Complete | TimedOut | Failed),
+            Complete => matches!(next, Proposing | Proposed),
+            Left => matches!(next, Joined | Aborted | Proposed),
+            Aborted => matches!(next, Proposing | Proposed),
+            TimedOut => matches!(next, Proposing | Proposed | Aborted),
+            // XXX: a node can be `Failed` but still be included in the group file under some ?? circumstances.
+            // 	    In such a case, it should be added as a remainer on the next DKG rather than a joiner.
+            Failed => matches!(next, Proposing | Proposed | Left | Aborted),
+        };
+
+        if !is_valid {
+            return Err(StateError::InvalidStateChange {
+                from: *self,
+                to: next,
+            });
+        };
+
+        Ok(())
+    }
+}
+
 impl std::fmt::Display for Status {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{self:?}")
