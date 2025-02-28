@@ -8,10 +8,14 @@ use crate::key::toml::PairToml;
 use crate::key::toml::Toml;
 use crate::key::ConversionError;
 use crate::key::Scheme;
-use crate::protobuf::drand::ChainInfoPacket;
-use crate::protobuf::drand::IdentityResponse;
+
+use crate::dkg::dkg_handler::DkgActions;
+use crate::dkg::dkg_handler::DkgHandler;
 use crate::store::ChainStore;
 use crate::store::NewStore;
+
+use crate::protobuf::drand::ChainInfoPacket;
+use crate::protobuf::drand::IdentityResponse;
 
 use tracing::debug;
 use tracing::error;
@@ -44,6 +48,7 @@ pub enum BeaconCmd {
     IdentityRequest(Callback<IdentityResponse, ConversionError>),
     Sync(Callback<Arc<ChainStore>, &'static str>),
     ChainInfo(Callback<ChainInfoPacket, &'static str>),
+    DkgActions(DkgActions),
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -51,7 +56,7 @@ pub enum BeaconCmd {
 #[error("callback receiver has already been dropped")]
 struct SendError;
 
-#[derive(PartialEq, Eq, Clone)]
+#[derive(PartialEq, Eq)]
 pub struct BeaconID {
     inner: Arc<str>,
 }
@@ -101,10 +106,6 @@ impl<S: Scheme> BeaconProcess<S> {
         Ok(process)
     }
 
-    pub fn tracker(&self) -> &TaskTracker {
-        &self.tracker
-    }
-
     pub fn run(fs: FileStore, pair: PairToml, id: &str) -> Result<BeaconHandler, FileStoreError> {
         let chain_handler = ChainHandler::try_init(&fs, id)?;
         let chain_store = Arc::new(ChainStore::new(&fs.db_path(), S::Beacon::is_chained())?);
@@ -113,6 +114,8 @@ impl<S: Scheme> BeaconProcess<S> {
 
         let (tx, mut rx) = mpsc::channel::<BeaconCmd>(5);
         tracker.spawn(async move {
+            let dkg_handler = DkgHandler::fresh_install(node.clone());
+
             while let Some(cmd) = rx.recv().await {
                 match cmd {
                     BeaconCmd::Shutdown(callback) => {
@@ -136,6 +139,7 @@ impl<S: Scheme> BeaconProcess<S> {
                             error!("failed to send chain_info, receiver is dropped")
                         }
                     }
+                    BeaconCmd::DkgActions(action) => dkg_handler.new_action(action).await,
                 }
             }
         });
@@ -173,6 +177,14 @@ impl<S: Scheme> BeaconProcess<S> {
 
         Ok(())
     }
+
+    pub fn tracker(&self) -> &TaskTracker {
+        &self.tracker
+    }
+
+    pub fn id(&self) -> &BeaconID {
+        &self.beacon_id
+    }
 }
 
 impl<S: Scheme> std::ops::Deref for BeaconProcess<S> {
@@ -180,5 +192,19 @@ impl<S: Scheme> std::ops::Deref for BeaconProcess<S> {
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl<S: Scheme> Clone for BeaconProcess<S> {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+impl Clone for BeaconID {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
     }
 }

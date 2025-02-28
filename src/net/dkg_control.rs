@@ -1,22 +1,26 @@
-//! This module provides server implementations for DkgControl and DkgPublic.
+//! This module provides client and server implementations for DkgControl service.
 
+use super::utils::ToStatus;
+use crate::core::beacon::BeaconCmd;
 use crate::core::daemon::Daemon;
-use crate::protobuf::dkg as protobuf;
+use crate::dkg::dkg_handler::DkgActions;
 
+use crate::protobuf::dkg as protobuf;
+use protobuf::dkg_control_client::DkgControlClient as _DkgControlClient;
 use protobuf::dkg_control_server::DkgControl;
-use protobuf::dkg_public_server::DkgPublic;
 use protobuf::DkgCommand;
-use protobuf::DkgPacket;
 use protobuf::DkgStatusRequest;
 use protobuf::DkgStatusResponse;
 use protobuf::EmptyDkgResponse;
-use protobuf::GossipPacket;
 
-use std::ops::Deref;
-use std::sync::Arc;
+use tonic::transport::Channel;
 use tonic::Request;
 use tonic::Response;
 use tonic::Status;
+
+use std::ops::Deref;
+use std::sync::Arc;
+use tokio::sync::oneshot;
 
 /// Implementor for [`DkgControl`] trait for use with DkgControlServer
 pub struct DkgControlHandler(Arc<Daemon>);
@@ -38,47 +42,27 @@ impl DkgControl for DkgControlHandler {
 
     async fn dkg_status(
         &self,
-        _request: Request<DkgStatusRequest>,
+        request: Request<DkgStatusRequest>,
     ) -> Result<Response<DkgStatusResponse>, tonic::Status> {
-        Err(Status::unimplemented("dkg_status: DkgStatusRequest"))
+        let id = request.get_ref().beacon_id.as_str();
+        let (tx, rx) = oneshot::channel();
+        self.beacons()
+            .cmd(BeaconCmd::DkgActions(DkgActions::Status(tx)), id)
+            .await
+            .map_err(|err| err.to_status(id))?;
+        let responce = rx
+            .await
+            .map_err(|err| err.to_status(id))?
+            .map_err(|err| err.to_status(id))?;
+        Ok(Response::new(responce))
     }
 }
 
-/// Implementor for [`DkgPublic`] trait for use with DkgPublicServer
-pub struct DkgPublicHandler(Arc<Daemon>);
-
-impl DkgPublicHandler {
-    pub(super) fn new(daemon: Arc<Daemon>) -> Self {
-        Self(daemon)
-    }
-}
-
-#[tonic::async_trait]
-impl DkgPublic for DkgPublicHandler {
-    async fn packet(
-        &self,
-        _request: Request<GossipPacket>,
-    ) -> Result<Response<EmptyDkgResponse>, Status> {
-        Err(Status::unimplemented("packet: GossipPacket"))
-    }
-
-    async fn broadcast_dkg(
-        &self,
-        _request: Request<DkgPacket>,
-    ) -> Result<Response<EmptyDkgResponse>, Status> {
-        Err(Status::unimplemented("broadcast_dkg: DkgPacket"))
-    }
+pub struct DkgControlClient {
+    _client: _DkgControlClient<Channel>,
 }
 
 impl Deref for DkgControlHandler {
-    type Target = Daemon;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl Deref for DkgPublicHandler {
     type Target = Daemon;
 
     fn deref(&self) -> &Self::Target {

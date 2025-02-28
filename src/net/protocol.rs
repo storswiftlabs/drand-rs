@@ -1,5 +1,5 @@
 //! This module provides server implementations for Protocol.
-use crate::net::dkg_control::DkgPublicHandler;
+use crate::net::dkg_public::DkgPublicHandler;
 use crate::net::public::PublicHandler;
 use crate::net::utils::Address;
 use crate::net::utils::ConnectionError;
