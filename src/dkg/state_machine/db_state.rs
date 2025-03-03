@@ -1,6 +1,7 @@
 use super::status::StateError;
 use super::status::Status;
 
+use crate::core::beacon::BeaconID;
 use crate::key::group::minimum_t;
 use crate::key::group::Group;
 use crate::key::keys::Identity;
@@ -17,6 +18,7 @@ use crate::transport::dkg::Timestamp;
 
 use crate::net::utils::Seconds;
 use std::time::SystemTime;
+use tracing::debug;
 
 #[derive(thiserror::Error, Debug)]
 pub enum DBStateError {
@@ -106,7 +108,7 @@ pub enum DBStateError {
     ReceivedRejection,
     #[error("dkg state error: {0}")]
     InvalidStateChange(#[from] StateError),
-    #[error("dkg: conversion: {0}")]
+    #[error("conversion: {0}")]
     ConversionError(#[from] ConversionError),
     #[error("the key's scheme may not match the beacon's scheme")]
     InvalidKeyScheme,
@@ -115,7 +117,7 @@ pub enum DBStateError {
 #[derive(PartialEq)]
 pub struct DBState<S: Scheme> {
     // Parameters
-    beacon_id: String,
+    beacon_id: BeaconID,
     epoch: u32,
     state: Status,
     threshold: u32,
@@ -137,6 +139,10 @@ pub struct DBState<S: Scheme> {
 }
 
 impl<S: Scheme> DBState<S> {
+    pub fn id(&self) -> &BeaconID {
+        &self.beacon_id
+    }
+
     pub fn show_status(&self) -> &super::status::Status {
         &self.state
     }
@@ -152,7 +158,7 @@ impl<S: Scheme> DBState<S> {
     }
 
     /// Returns default DBState representation which is used only at fresh state.
-    pub fn new_fresh(beacon_id: &str) -> Self {
+    pub fn new_fresh(beacon_id: &BeaconID) -> Self {
         Self {
             beacon_id: beacon_id.to_owned(),
             genesis_time: Timestamp {
@@ -223,7 +229,7 @@ impl<S: Scheme> DBState<S> {
             // TODO: Complete entry should be updated if dkg is finished.
             complete: None,
             current: Some(DkgEntry {
-                beacon_id: beacon_id.to_owned(),
+                beacon_id: beacon_id.to_string(),
                 state: *state as u32,
                 epoch: *epoch,
                 threshold: *threshold,
@@ -312,6 +318,7 @@ impl<S: Scheme> DBState<S> {
             return Err(DBStateError::SelfMissingFromProposal);
         }
 
+        debug!("received proposal is valid");
         *self = proposed;
 
         Ok(())
@@ -363,7 +370,7 @@ impl<S: Scheme> TryFrom<ProposalTerms> for DBState<S> {
         } = value;
 
         let state = DBState::<S> {
-            beacon_id,
+            beacon_id: BeaconID::new(beacon_id),
             epoch,
             state: Status::Proposed,
             threshold,

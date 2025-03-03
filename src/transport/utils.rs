@@ -73,13 +73,17 @@ mod proto_impl {
     use crate::net::utils::Seconds;
     use crate::protobuf::drand::ChainInfoPacket;
     use crate::protobuf::drand::Metadata;
+    use crate::transport::dkg::Bundle;
+    use crate::transport::dkg::Command;
+    use crate::transport::dkg::GossipData;
     use crate::transport::drand::Identity;
     use crate::transport::drand::Node;
-    use std::fmt;
 
     use crev_common::blake2b256;
     use sha2::Digest;
     use sha2::Sha256;
+    use std::fmt;
+    use std::fmt::Display;
     use std::str::FromStr;
     use toml_edit::DocumentMut;
     use toml_edit::Table;
@@ -251,6 +255,43 @@ mod proto_impl {
                 hex::encode(group_hash),
                 scheme_id,
             )
+        }
+    }
+
+    impl Display for Command {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Command::Initial(..) => f.write_str("Initial"),
+                Command::Resharing(..) => f.write_str("Resharing"),
+                Command::Join(..) => f.write_str("Join"),
+                Command::Accept(..) => f.write_str("Accept"),
+                Command::Reject(..) => f.write_str("Reject"),
+                Command::Execute(..) => f.write_str("Execute"),
+                Command::Abort(..) => f.write_str("Abort"),
+            }
+        }
+    }
+
+    impl Display for GossipData {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                GossipData::Proposal(..) => f.write_str("Proposal"),
+                GossipData::Accept(..) => f.write_str("Accept"),
+                GossipData::Reject(..) => f.write_str("Reject"),
+                GossipData::Execute(..) => f.write_str("Execute"),
+                GossipData::Abort(..) => f.write_str("Abort"),
+                GossipData::Dkg(packet) => write!(f, "bundle: {}", packet.dkg.bundle),
+            }
+        }
+    }
+
+    impl Display for Bundle {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Bundle::Deal(..) => f.write_str("Deal"),
+                Bundle::Response(..) => f.write_str("Response"),
+                Bundle::Justification(..) => f.write_str("Justification"),
+            }
         }
     }
 }
