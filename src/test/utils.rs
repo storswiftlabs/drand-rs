@@ -62,7 +62,7 @@ impl TestConfig {
         }
     }
 
-    pub async fn _new(control_port: &str, private_listen: &str) -> Self {
+    pub async fn new(control_port: &str, private_listen: &str) -> Self {
         let fs_guard = TempDir::new().unwrap();
         let folder = fs_guard.path().join("test").as_path().display().to_string();
 
