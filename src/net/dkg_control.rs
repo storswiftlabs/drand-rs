@@ -4,6 +4,8 @@ use super::utils::ToStatus;
 use crate::core::beacon::BeaconCmd;
 use crate::core::daemon::Daemon;
 use crate::dkg::dkg_handler::DkgActions;
+use crate::net::control::CONTROL_HOST;
+use crate::net::utils::ConnectionError;
 
 use crate::protobuf::dkg as protobuf;
 use protobuf::dkg_control_client::DkgControlClient as _DkgControlClient;
@@ -19,7 +21,10 @@ use tonic::Response;
 use tonic::Status;
 
 use std::ops::Deref;
+use std::str::FromStr;
 use std::sync::Arc;
+
+use http::Uri;
 use tokio::sync::oneshot;
 
 /// Implementor for [`DkgControl`] trait for use with DkgControlServer
@@ -59,7 +64,31 @@ impl DkgControl for DkgControlHandler {
 }
 
 pub struct DkgControlClient {
-    _client: _DkgControlClient<Channel>,
+    client: _DkgControlClient<Channel>,
+}
+
+impl DkgControlClient {
+    pub async fn new(port: &str) -> anyhow::Result<Self> {
+        let address = format!("grpc://{CONTROL_HOST}:{port}");
+        let uri = Uri::from_str(&address)?;
+        let channel = Channel::builder(uri)
+            .connect()
+            .await
+            .map_err(|error| ConnectionError { address, error })?;
+        let client = _DkgControlClient::new(channel);
+
+        Ok(Self { client })
+    }
+
+    pub async fn dkg_status(&mut self, beacon_id: &str) -> anyhow::Result<DkgStatusResponse> {
+        let request = DkgStatusRequest {
+            beacon_id: beacon_id.to_owned(),
+        };
+        let response = self.client.dkg_status(request).await?;
+        let inner = response.into_inner();
+
+        Ok(inner)
+    }
 }
 
 impl Deref for DkgControlHandler {
