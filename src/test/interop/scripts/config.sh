@@ -11,5 +11,8 @@ BASE="$PWD/src/test/interop/drand_test"
 # Control port
 CONTROL="55555"
 
-# Node address
+# Node-go address
 ADDRESS="127.0.0.1:11111"
+
+# Node-rs address
+ADDRESS_RS="127.0.0.1:22222"

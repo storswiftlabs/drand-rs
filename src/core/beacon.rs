@@ -9,7 +9,7 @@ use crate::key::toml::Toml;
 use crate::key::ConversionError;
 use crate::key::Scheme;
 
-use crate::dkg::dkg_handler::DkgActions;
+use crate::dkg::dkg_handler::Actions;
 use crate::dkg::dkg_handler::DkgHandler;
 use crate::store::ChainStore;
 use crate::store::NewStore;
@@ -48,7 +48,7 @@ pub enum BeaconCmd {
     IdentityRequest(Callback<IdentityResponse, ConversionError>),
     Sync(Callback<Arc<ChainStore>, &'static str>),
     ChainInfo(Callback<ChainInfoPacket, &'static str>),
-    DkgActions(DkgActions),
+    DkgActions(Actions),
 }
 
 #[derive(thiserror::Error, Debug)]
