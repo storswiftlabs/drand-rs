@@ -35,6 +35,26 @@ impl CLI {
             },
         }
     }
+
+    pub(super) fn dkg_join(control: &str, id: &str) -> Self {
+        Self {
+            verbose: true,
+            commands: Cmd::Dkg(crate::cli::Dkg::Join {
+                control: control.to_owned(),
+                id: id.to_owned(),
+            }),
+        }
+    }
+
+    pub(super) fn stop(control: &str, id: Option<&str>) -> Self {
+        Self {
+            verbose: true,
+            commands: Cmd::Stop {
+                control: control.to_owned(),
+                id: id.map(|x| x.to_string()),
+            },
+        }
+    }
 }
 
 /// Initial config for tests,

@@ -1,5 +1,8 @@
-use super::state_machine::db_state::DBState;
-use super::state_machine::db_state::DBStateError;
+use std::fmt::Display;
+
+use super::actions_active as active;
+use super::state::DBStateError;
+use super::state::State;
 
 use crate::core::beacon::BeaconProcess;
 use crate::key::keys::Identity;
@@ -7,7 +10,7 @@ use crate::key::Scheme;
 
 use crate::protobuf::dkg::packet::Bundle;
 use crate::protobuf::dkg::DkgStatusResponse;
-use crate::transport::dkg::DkgCommand;
+use crate::transport::dkg::Command;
 use crate::transport::dkg::GossipData;
 use crate::transport::dkg::GossipPacket;
 
@@ -15,27 +18,48 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tracing::debug;
 use tracing::error;
+use tracing::warn;
 
-/// Callback for all dkg actions
-pub type DkgCallback<T> = tokio::sync::oneshot::Sender<Result<T, DkgActionsError>>;
-
-/// For diagnostic purposes, should be never possible
-const ERR_SEND: &str = "dkg receiver is dropped";
-
-pub struct DkgHandler {
-    sender: mpsc::Sender<DkgActions>,
+/// Callback for DKG actions
+pub struct Callback<T> {
+    inner: oneshot::Sender<Result<T, ActionsError>>,
 }
 
-pub enum DkgActions {
-    Gossip(GossipPacket, DkgCallback<()>),
-    Shutdown(DkgCallback<()>),
-    Command(DkgCommand, DkgCallback<()>),
-    Broadcast(Bundle, DkgCallback<()>),
-    Status(DkgCallback<DkgStatusResponse>),
+/// For diagnostic purposes, this should never happen
+const ERR_SEND: &str = "dkg callback receiver is dropped";
+
+impl<T> Callback<T> {
+    /// Sends a response back through the callback channel.
+    fn reply(self, result: Result<T, ActionsError>) {
+        if let Err(err) = &result {
+            error!("failed to proceed dkg request: {err}")
+        }
+        if self.inner.send(result).is_err() {
+            error!("{ERR_SEND}");
+        };
+    }
+}
+
+impl<T> From<oneshot::Sender<Result<T, ActionsError>>> for Callback<T> {
+    fn from(tx: oneshot::Sender<Result<T, ActionsError>>) -> Self {
+        Self { inner: tx }
+    }
+}
+
+pub struct DkgHandler {
+    sender: mpsc::Sender<Actions>,
+}
+
+pub enum Actions {
+    Gossip(GossipPacket, Callback<()>),
+    Shutdown(Callback<()>),
+    Command(Command, Callback<()>),
+    Broadcast(Bundle, Callback<()>),
+    Status(Callback<DkgStatusResponse>),
 }
 
 #[derive(thiserror::Error, Debug)]
-pub enum DkgActionsError {
+pub enum ActionsError {
     #[error("db state error: {0}")]
     DBState(#[from] DBStateError),
     #[error("TODO: this dkg action is not implemented yet")]
@@ -43,19 +67,19 @@ pub enum DkgActionsError {
 }
 
 impl DkgHandler {
-    pub async fn new_action(&self, action: DkgActions) {
+    pub async fn new_action(&self, action: Actions) {
         if self.sender.send(action).await.is_err() {
             error!("{ERR_SEND}")
         }
     }
 
     pub fn fresh_install<S: Scheme>(bp: BeaconProcess<S>) -> Self {
-        let (sender, mut receiver) = mpsc::channel::<DkgActions>(1);
+        let (sender, mut receiver) = mpsc::channel::<Actions>(1);
         let tracker = bp.tracker().clone();
 
         tracker.spawn(async move {
             let me = bp.keypair.public_identity();
-            let mut db_state = DBState::<S>::new_fresh(bp.id());
+            let mut db_state = State::<S>::new_fresh(bp.id());
 
             while let Some(actions) = receiver.recv().await {
                 handle_actions(&mut db_state, me, actions).await;
@@ -68,59 +92,33 @@ impl DkgHandler {
     }
 }
 
-async fn handle_actions<S: Scheme>(db: &mut DBState<S>, me: &Identity<S>, actions: DkgActions) {
-    match actions {
-        DkgActions::Shutdown(callback) => todo_request(callback, "shutdown"),
-        DkgActions::Status(callback) => status(db, callback),
-        DkgActions::Command(command, callback) => handle_command(command, callback).await,
-        DkgActions::Gossip(gossip, callback) => handle_gossip(db, me, gossip, callback).await,
-        DkgActions::Broadcast(_bundle, callback) => todo_request(callback, "broadcast"),
+async fn handle_actions<S: Scheme>(db: &mut State<S>, me: &Identity<S>, request: Actions) {
+    match request {
+        Actions::Shutdown(callback) => callback.reply(todo_request("shutdown")),
+        Actions::Status(callback) => callback.reply(active::status(db)),
+        Actions::Command(cmd, callback) => callback.reply(active::command(cmd, db, me).await),
+        Actions::Gossip(packet, callback) => callback.reply(gossip(db, me, packet).await),
+        Actions::Broadcast(bundle, callback) => callback.reply(todo_request(&bundle.to_string())),
     }
 }
 
-/// Dkg status request
-fn status<S: Scheme>(db: &mut DBState<S>, callback: DkgCallback<DkgStatusResponse>) {
-    if callback
-        .send(db.status().map_err(|err| {
-            error!("dkg status request, id: {}, error: {err}", db.id());
-            err.into()
-        }))
-        .is_err()
-    {
-        error!("dkg status request, id: {}, error: {ERR_SEND}", db.id());
-    };
-}
-
-async fn handle_command(dkg_command: DkgCommand, callback: DkgCallback<()>) {
-    let _metadata = &dkg_command.metadata;
-    todo_request(callback, dkg_command.command.to_string().as_str())
-}
-
-async fn handle_gossip<S: Scheme>(
-    db: &mut DBState<S>,
+async fn gossip<S: Scheme>(
+    db: &mut State<S>,
     me: &Identity<S>,
-    gossip: crate::transport::dkg::GossipPacket,
-    callback: oneshot::Sender<Result<(), DkgActionsError>>,
-) {
-    let metadata = &gossip.metadata;
-    match gossip.data {
-        GossipData::Proposal(proposal) => {
-            if callback
-                .send(db.proposed(me, proposal, metadata).map_err(|err| {
-                    error!("received dkg proposal, id: {}, error: {err}", db.id());
-                    err.into()
-                }))
-                .is_err()
-            {
-                error!("received dkg proposal, id: {}, error: {ERR_SEND}", db.id());
-            };
-        }
-        _ => todo_request(callback, gossip.data.to_string().as_str()),
+    packet: GossipPacket,
+) -> Result<(), ActionsError> {
+    let meta = &packet.metadata;
+    match packet.data {
+        GossipData::Proposal(proposal) => db.proposed(me, proposal, meta)?,
+        _ => todo_request(&packet.data)?,
     }
+
+    Ok(())
 }
 
-fn todo_request<T>(callback: DkgCallback<T>, kind: &str) {
-    if callback.send(Err(DkgActionsError::TODO)).is_err() {
-        error!("failed to proceed {kind}, error: {ERR_SEND}",);
-    };
+/// Temporary tracker for unfinished logic
+pub fn todo_request<D: Display + ?Sized>(kind: &D) -> Result<(), ActionsError> {
+    warn!("received TODO request: {kind}");
+
+    Err(ActionsError::TODO)
 }

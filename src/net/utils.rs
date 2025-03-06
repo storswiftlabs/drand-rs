@@ -1,5 +1,5 @@
 use crate::core::multibeacon::BeaconHandlerError;
-use crate::dkg::dkg_handler::DkgActionsError;
+use crate::dkg::dkg_handler::ActionsError;
 use crate::key::ConversionError;
 use crate::net::control::CONTROL_HOST;
 use crate::protobuf::drand::Metadata;
@@ -280,14 +280,14 @@ impl ToStatus for InvalidAddress {
     }
 }
 
-impl ToStatus for DkgActionsError {
+impl ToStatus for ActionsError {
     fn to_status(&self, id: &str) -> Status {
         match self {
-            DkgActionsError::DBState(dbstate_error) => {
+            ActionsError::DBState(dbstate_error) => {
                 Status::aborted(format!("beacon id '{id}', {dbstate_error}"))
             }
-            DkgActionsError::TODO => {
-                Status::failed_precondition(format!("beacon id '{id}', {}", DkgActionsError::TODO))
+            ActionsError::TODO => {
+                Status::failed_precondition(format!("beacon id '{id}', {}", ActionsError::TODO))
             }
         }
     }

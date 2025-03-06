@@ -115,7 +115,7 @@ pub enum DBStateError {
 }
 
 #[derive(PartialEq)]
-pub struct DBState<S: Scheme> {
+pub struct State<S: Scheme> {
     // Parameters
     beacon_id: BeaconID,
     epoch: u32,
@@ -138,7 +138,11 @@ pub struct DBState<S: Scheme> {
     key_share: Option<Share<S>>,
 }
 
-impl<S: Scheme> DBState<S> {
+impl<S: Scheme> State<S> {
+    pub fn epoch(&self) -> u32 {
+        self.epoch
+    }
+
     pub fn id(&self) -> &BeaconID {
         &self.beacon_id
     }
@@ -185,7 +189,7 @@ impl<S: Scheme> DBState<S> {
 
     /// TODO: this method should make request to dkg.db
     pub fn status(&self) -> Result<DkgStatusResponse, DBStateError> {
-        let DBState::<S> {
+        let State::<S> {
             beacon_id,
             epoch,
             state,
@@ -323,6 +327,30 @@ impl<S: Scheme> DBState<S> {
 
         Ok(())
     }
+
+    pub fn joined(
+        &mut self,
+        me: &Identity<S>,
+        prev_group: Option<Group<S>>,
+    ) -> Result<(), DBStateError> {
+        self.state.is_valid_state_change(Status::Joined)?;
+
+        if Timestamp::from(SystemTime::now()).seconds >= self.timeout.seconds {
+            return Err(DBStateError::TimeoutReached);
+        }
+
+        if !self.joining.contains(me) {
+            return Err(DBStateError::CannotJoinIfNotInJoining);
+        }
+
+        if let Some(_group) = prev_group {
+            panic!("state::joined: reshape is not implemented yet");
+            // validatePreviousGroupForJoiners
+        }
+        self.state = Status::Joined;
+
+        Ok(())
+    }
 }
 
 fn validate_first_epoch(terms: &ProposalTerms) -> Result<(), DBStateError> {
@@ -349,7 +377,7 @@ fn validate_first_epoch(terms: &ProposalTerms) -> Result<(), DBStateError> {
     Ok(())
 }
 
-impl<S: Scheme> TryFrom<ProposalTerms> for DBState<S> {
+impl<S: Scheme> TryFrom<ProposalTerms> for State<S> {
     type Error = ConversionError;
 
     fn try_from(value: ProposalTerms) -> Result<Self, Self::Error> {
@@ -369,7 +397,7 @@ impl<S: Scheme> TryFrom<ProposalTerms> for DBState<S> {
             leaving,
         } = value;
 
-        let state = DBState::<S> {
+        let state = State::<S> {
             beacon_id: BeaconID::new(beacon_id),
             epoch,
             state: Status::Proposed,

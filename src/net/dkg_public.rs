@@ -6,7 +6,7 @@ use super::utils::URI_SCHEME;
 
 use crate::core::beacon::BeaconCmd;
 use crate::core::daemon::Daemon;
-use crate::dkg::dkg_handler::DkgActions;
+use crate::dkg::dkg_handler::Actions;
 use crate::transport::ConvertProto;
 
 use crate::protobuf::dkg as protobuf;
@@ -50,7 +50,10 @@ impl DkgPublic for DkgPublicHandler {
 
         let (tx, rx) = oneshot::channel();
         self.beacons()
-            .cmd(BeaconCmd::DkgActions(DkgActions::Gossip(packet, tx)), &id)
+            .cmd(
+                BeaconCmd::DkgActions(Actions::Gossip(packet, tx.into())),
+                &id,
+            )
             .await
             .map_err(|err| err.to_status(&id))?;
         rx.await
@@ -70,7 +73,7 @@ impl DkgPublic for DkgPublicHandler {
         let (tx, rx) = oneshot::channel();
         self.beacons()
             .cmd(
-                BeaconCmd::DkgActions(DkgActions::Broadcast(packet.bundle, tx)),
+                BeaconCmd::DkgActions(Actions::Broadcast(packet.bundle, tx.into())),
                 id,
             )
             .await
@@ -82,6 +85,7 @@ impl DkgPublic for DkgPublicHandler {
     }
 }
 
+#[allow(dead_code)]
 pub struct DkgPublicClient {
     client: _DkgPublicClient<Channel>,
 }

@@ -3,17 +3,20 @@
 use super::utils::ToStatus;
 use crate::core::beacon::BeaconCmd;
 use crate::core::daemon::Daemon;
-use crate::dkg::dkg_handler::DkgActions;
+use crate::dkg::dkg_handler::Actions;
 use crate::net::control::CONTROL_HOST;
 use crate::net::utils::ConnectionError;
 
 use crate::protobuf::dkg as protobuf;
+use crate::transport::ConvertProto;
 use protobuf::dkg_control_client::DkgControlClient as _DkgControlClient;
 use protobuf::dkg_control_server::DkgControl;
+use protobuf::CommandMetadata;
 use protobuf::DkgCommand;
 use protobuf::DkgStatusRequest;
 use protobuf::DkgStatusResponse;
 use protobuf::EmptyDkgResponse;
+use protobuf::JoinOptions;
 
 use tonic::transport::Channel;
 use tonic::Request;
@@ -40,9 +43,23 @@ impl DkgControlHandler {
 impl DkgControl for DkgControlHandler {
     async fn command(
         &self,
-        _request: Request<DkgCommand>,
+        request: Request<DkgCommand>,
     ) -> Result<Response<EmptyDkgResponse>, Status> {
-        Err(Status::unimplemented("command: DkgCommand"))
+        let inner = request.into_inner().validate()?;
+        let id = inner.metadata.beacon_id.as_str();
+        let (tx, rx) = oneshot::channel();
+        let cmd = Actions::Command(inner.command, tx.into());
+
+        self.beacons()
+            .cmd(BeaconCmd::DkgActions(cmd), id)
+            .await
+            .map_err(|err| err.to_status(id))?;
+
+        rx.await
+            .map_err(|err| err.to_status(id))?
+            .map_err(|err| err.to_status(id))?;
+
+        Ok(Response::new(EmptyDkgResponse {}))
     }
 
     async fn dkg_status(
@@ -51,10 +68,12 @@ impl DkgControl for DkgControlHandler {
     ) -> Result<Response<DkgStatusResponse>, tonic::Status> {
         let id = request.get_ref().beacon_id.as_str();
         let (tx, rx) = oneshot::channel();
+
         self.beacons()
-            .cmd(BeaconCmd::DkgActions(DkgActions::Status(tx)), id)
+            .cmd(BeaconCmd::DkgActions(Actions::Status(tx.into())), id)
             .await
             .map_err(|err| err.to_status(id))?;
+
         let responce = rx
             .await
             .map_err(|err| err.to_status(id))?
@@ -88,6 +107,20 @@ impl DkgControlClient {
         let inner = response.into_inner();
 
         Ok(inner)
+    }
+
+    pub async fn dkg_join(&mut self, beacon_id: &str) -> anyhow::Result<()> {
+        let request = DkgCommand {
+            metadata: Some(CommandMetadata {
+                beacon_id: beacon_id.to_owned(),
+            }),
+            command: Some(protobuf::dkg_command::Command::Join(JoinOptions {
+                group_file: vec![],
+            })),
+        };
+        let _ = self.client.command(request).await?;
+
+        Ok(())
     }
 }
 

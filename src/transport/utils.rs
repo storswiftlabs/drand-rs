@@ -1,4 +1,4 @@
-use crate::dkg::state_machine::status::StateError;
+use crate::dkg::status::StateError;
 use crate::net::utils::InvalidAddress;
 
 use tonic::Status;

@@ -7,16 +7,19 @@ use crate::key::Scheme;
 
 use crate::net::control;
 use crate::net::control::ControlClient;
+use crate::net::dkg_control::DkgControlClient;
 use crate::net::protocol;
 use crate::net::utils::Address;
 use crate::net::utils::ControlListener;
 use crate::net::utils::NodeListener;
 
-use anyhow::bail;
-use anyhow::Result;
 use clap::arg;
 use clap::command;
 use clap::Parser;
+use clap::Subcommand;
+
+use anyhow::bail;
+use anyhow::Result;
 use energon::drand::schemes::*;
 
 /// Generate the long-term keypair (drand.private, drand.public) for this node, and load it on the drand daemon if it is up and running
@@ -39,7 +42,7 @@ pub struct KeyGenConfig {
 }
 
 /// Start the drand daemon.
-#[derive(Debug, Parser, Clone)] //TODO: mv Clone to tests
+#[derive(Debug, Parser, Clone)]
 pub struct Config {
     /// Folder to keep all drand cryptographic information, with absolute path.
     #[arg(long, default_value_t = FileStore::drand_home())]
@@ -81,6 +84,19 @@ pub struct SyncConfig {
     pub follow: bool,
 }
 
+#[derive(Subcommand, Clone, Debug)]
+/// Commands for interacting with the DKG
+pub enum Dkg {
+    Join {
+        /// Set the port you want to listen to for control port commands. If not specified, we will use the default value.
+        #[arg(long, default_value = control::DEFAULT_CONTROL_PORT)]
+        control: String,
+        /// Indicates the id for the randomness generation process which will be started
+        #[arg(long)]
+        id: String,
+    },
+}
+
 #[derive(Debug, Parser, Clone)]
 #[command(name = "git")]
 #[command(about = "", long_about = None)]
@@ -114,6 +130,8 @@ pub enum Cmd {
         id: String,
     },
     Sync(SyncConfig),
+    #[command(subcommand)]
+    Dkg(Dkg),
 }
 
 impl CLI {
@@ -128,6 +146,9 @@ impl CLI {
             Cmd::Load { control, id } => load_cmd(&control, &id).await?,
             Cmd::Stop { control, id } => stop_cmd(&control, id.as_deref()).await?,
             Cmd::Sync(config) => sync_cmd(config).await?,
+            Cmd::Dkg(dkg) => match dkg {
+                Dkg::Join { control, id } => join_cmd(&control, &id).await?,
+            },
         }
 
         Ok(())
@@ -200,7 +221,7 @@ async fn load_cmd(control_port: &str, beacon_id: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn stop_cmd(control_port: &str, beacon_id: Option<&str>) -> anyhow::Result<()> {
+async fn stop_cmd(control_port: &str, beacon_id: Option<&str>) -> anyhow::Result<()> {
     let mut conn = ControlClient::new(control_port).await?;
 
     match conn.shutdown(beacon_id).await {
@@ -226,6 +247,13 @@ pub async fn stop_cmd(control_port: &str, beacon_id: Option<&str>) -> anyhow::Re
 async fn sync_cmd(config: SyncConfig) -> Result<()> {
     let mut client = ControlClient::new(&config.control).await?;
     client.sync(config).await?;
+
+    Ok(())
+}
+
+async fn join_cmd(control_port: &str, beacon_id: &str) -> Result<()> {
+    let mut client = DkgControlClient::new(control_port).await?;
+    client.dkg_join(beacon_id).await?;
 
     Ok(())
 }

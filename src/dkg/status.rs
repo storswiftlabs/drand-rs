@@ -1,3 +1,5 @@
+use tracing::error;
+
 #[derive(Debug, Copy, Clone, PartialEq)]
 #[repr(u8)]
 /// Status is pre-auth layer for any interaction with [`DBState`]
