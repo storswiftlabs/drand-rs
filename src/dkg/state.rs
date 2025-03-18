@@ -6,9 +6,12 @@ use crate::key::group::minimum_t;
 use crate::key::group::Group;
 use crate::key::keys::Identity;
 use crate::key::keys::Share;
+use crate::key::toml::Toml;
 use crate::key::ConversionError;
 use crate::key::Scheme;
 
+use crate::net::utils::Address;
+use crate::net::utils::Seconds;
 use crate::protobuf::dkg::DkgEntry;
 use crate::protobuf::dkg::DkgStatusResponse;
 use crate::protobuf::dkg::Participant;
@@ -16,7 +19,12 @@ use crate::transport::dkg::GossipMetadata;
 use crate::transport::dkg::ProposalTerms;
 use crate::transport::dkg::Timestamp;
 
-use crate::net::utils::Seconds;
+use toml_edit::ArrayOfTables;
+use toml_edit::DocumentMut;
+use toml_edit::Item;
+use toml_edit::Table;
+
+use std::str::FromStr;
 use std::time::SystemTime;
 use tracing::debug;
 
@@ -435,4 +443,144 @@ fn into_participants<S: Scheme>(
     participants: &[Identity<S>],
 ) -> Result<Vec<Participant>, ConversionError> {
     participants.iter().map(TryInto::try_into).collect()
+}
+
+impl Toml for Participant {
+    type Inner = Table;
+
+    fn toml_encode(&self) -> Option<Self::Inner> {
+        let mut table = Self::Inner::new();
+        let _ = table.insert("Address", self.address.as_str().into());
+        let _ = table.insert("Key", hex::encode(&self.key).into());
+        let _ = table.insert("Signature", hex::encode(&self.signature).into());
+
+        Some(table)
+    }
+
+    fn toml_decode(table: &Self::Inner) -> Option<Self> {
+        let address = Address::precheck(table.get("Address")?.as_str()?).ok()?;
+        let key = hex::decode(table.get("Key")?.as_str()?).ok()?;
+        let signature = hex::decode(table.get("Signature")?.as_str()?).ok()?;
+
+        Some(Self {
+            address,
+            key,
+            signature,
+        })
+    }
+}
+
+impl<S: Scheme> Toml for State<S> {
+    type Inner = DocumentMut;
+
+    fn toml_encode(&self) -> Option<Self::Inner> {
+        fn to_array(items: &[Participant]) -> Option<ArrayOfTables> {
+            let mut array = ArrayOfTables::new();
+            for i in items.iter() {
+                array.push(i.toml_encode()?);
+            }
+            Some(array)
+        }
+
+        let mut doc = Self::Inner::new();
+        doc.insert("BeaconID", self.beacon_id.as_str().into());
+        doc.insert("State", (self.status as i64).into());
+
+        // Do not store default values at Fresh state. Decoding is simplified accordingly.
+        if self.status == Status::Fresh {
+            return Some(doc);
+        }
+        doc.insert("Epoch", (self.epoch as i64).into());
+        doc.insert("Threshold", (self.threshold as i64).into());
+        doc.insert("Timeout", (self.timeout.to_string()).into());
+        doc.insert("GenesisTime", (self.genesis_time.to_string()).into());
+        doc.insert("GenesisSeed", hex::encode(&self.genesis_seed).into());
+        doc.insert("CatchupPeriod", self.catchup_period.to_string().into());
+        doc.insert("BeaconPeriod", self.beacon_period.to_string().into());
+        doc.insert("Leader", Item::Table(self.leader.toml_encode()?));
+        doc.insert("Remaining", Item::ArrayOfTables(to_array(&self.remaining)?));
+        doc.insert("Joining", Item::ArrayOfTables(to_array(&self.joining)?));
+        doc.insert("Leaving", Item::ArrayOfTables(to_array(&self.leaving)?));
+        doc.insert("Acceptors", Item::ArrayOfTables(to_array(&self.acceptors)?));
+        doc.insert("Rejectors", Item::ArrayOfTables(to_array(&self.rejectors)?));
+        doc.insert(
+            "FinalGroup",
+            match &self.final_group {
+                Some(group) => group.toml_encode()?.as_item().into(),
+                None => Item::None,
+            },
+        );
+        doc.insert(
+            "KeyShare",
+            match &self.key_share {
+                Some(share) => share.toml_encode()?.as_item().into(),
+                None => Item::None,
+            },
+        );
+
+        Some(doc)
+    }
+
+    fn toml_decode(table: &Self::Inner) -> Option<Self> {
+        fn from_array(role: &str, table: &Table) -> Option<Vec<Participant>> {
+            match table.get(role) {
+                Some(item) => item
+                    .as_array_of_tables()?
+                    .iter()
+                    .map(Participant::toml_decode)
+                    .collect::<Option<Vec<_>>>(),
+                None => Some(vec![]),
+            }
+        }
+
+        let beacon_id = table.get("BeaconID")?.as_str()?;
+        let state = Status::try_from(table.get("State")?.as_integer()? as u32).ok()?;
+        if state == Status::Fresh {
+            // Other values are default.
+            return Some(Self::fresh(beacon_id));
+        }
+
+        let catchup_period = table
+            .get("CatchupPeriod")?
+            .as_str()
+            .map(Seconds::from_str)?
+            .ok()?;
+
+        let beacon_period = table
+            .get("BeaconPeriod")?
+            .as_str()
+            .map(Seconds::from_str)?
+            .ok()?;
+
+        // Missing `Group` and `Share` is not an error at this layer.
+        let final_group = match table.get("FinalGroup") {
+            Some(item) => Group::toml_decode(&item.as_table()?.to_owned().into()),
+            None => None,
+        };
+
+        let key_share = match table.get("KeyShare") {
+            Some(item) => Share::toml_decode(&item.as_table()?.to_owned().into()),
+            None => None,
+        };
+
+        Some(Self {
+            beacon_id: beacon_id.into(),
+            epoch: table.get("Epoch")?.as_integer()? as u32,
+            status: state,
+            catchup_period,
+            beacon_period,
+            threshold: table.get("Threshold")?.as_integer()? as u32,
+            timeout: Timestamp::from_str(table.get("Timeout")?.as_str()?).ok()?,
+            genesis_time: Timestamp::from_str(table.get("GenesisTime")?.as_str()?).ok()?,
+            genesis_seed: table.get("GenesisSeed")?.as_str().map(hex::decode)?.ok()?,
+            leader: Participant::toml_decode(table.get("Leader")?.as_table()?)?,
+            remaining: from_array("Remaining", table)?,
+            joining: from_array("Joining", table)?,
+            leaving: from_array("Leaving", table)?,
+            acceptors: from_array("Acceptors", table)?,
+            rejectors: from_array("Rejectors", table)?,
+            final_group,
+            key_share,
+        })
+    }
 }
