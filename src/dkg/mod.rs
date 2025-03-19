@@ -4,3 +4,4 @@ pub mod dkg_handler;
 pub mod state;
 pub mod status;
 pub (super) mod actions_signing;
+pub (super) mod store;
