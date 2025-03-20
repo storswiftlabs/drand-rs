@@ -5,8 +5,7 @@ pub mod node;
 pub mod store;
 pub mod toml;
 
-pub use convert::ConversionError;
-/// Re-export often used types
+pub use convert::PointSerDeError;
 pub use energon::drand::traits::DrandScheme as Scheme;
 pub use energon::points::KeyPoint;
 pub use energon::points::SigPoint;

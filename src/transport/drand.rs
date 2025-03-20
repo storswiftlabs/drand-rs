@@ -148,40 +148,6 @@ pub struct Identity {
     pub signature: Vec<u8>,
 }
 
-impl ConvertProto for crate::protobuf::dkg::Participant {
-    type Inner = Identity;
-
-    fn validate(self) -> Result<Self::Inner, TransportError> {
-        let Self {
-            ref address,
-            key,
-            signature,
-        } = self;
-
-        Ok(Self::Inner {
-            address: Address::precheck(address)?,
-            key,
-            signature,
-        })
-    }
-}
-
-impl From<Identity> for crate::protobuf::dkg::Participant {
-    fn from(value: Identity) -> Self {
-        let Identity {
-            ref address,
-            key,
-            signature,
-        } = value;
-
-        Self {
-            address: address.as_str().into(),
-            key,
-            signature,
-        }
-    }
-}
-
 impl ConvertProto for crate::protobuf::drand::Identity {
     type Inner = Identity;
 

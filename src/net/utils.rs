@@ -1,6 +1,7 @@
 use crate::core::multibeacon::BeaconHandlerError;
-use crate::dkg::dkg_handler::ActionsError;
-use crate::key::ConversionError;
+
+use crate::dkg::actions::ActionsError;
+use crate::key::PointSerDeError;
 use crate::net::control::CONTROL_HOST;
 use crate::protobuf::drand::Metadata;
 use crate::protobuf::drand::NodeVersion;
@@ -68,7 +69,7 @@ const VERSION: NodeVersion = NodeVersion {
     prerelease: String::new(),
 };
 
-#[derive(Debug, Default, PartialEq)]
+#[derive(Debug, Default, PartialEq, Clone)]
 pub struct Seconds {
     value: u32,
 }
@@ -267,7 +268,7 @@ impl ToStatus for BeaconHandlerError {
     }
 }
 
-impl ToStatus for ConversionError {
+impl ToStatus for PointSerDeError {
     /// TODO: well-define error values, see [`ConversionError`]
     fn to_status(&self, id: &str) -> Status {
         Status::invalid_argument(format!("beacon id '{id}', conversion error: {self}"))
@@ -283,23 +284,29 @@ impl ToStatus for InvalidAddress {
 impl ToStatus for ActionsError {
     fn to_status(&self, id: &str) -> Status {
         match self {
-            ActionsError::DBState(dbstate_error) => {
-                Status::aborted(format!("beacon id '{id}', {dbstate_error}"))
-            }
+            ActionsError::DBState(err) => Status::aborted(format!("beacon id '{id}', {err}")),
             ActionsError::TODO => {
                 Status::failed_precondition(format!("beacon id '{id}', {}", ActionsError::TODO))
             }
+            ActionsError::DKGStore(err) => Status::aborted(format!("beacon id '{id}', {err}")),
+            ActionsError::GossipSignatureLen => Status::data_loss(format!(
+                "beacon id '{id}', {}",
+                ActionsError::GossipSignatureLen
+            )),
+            ActionsError::MissingParticipant => Status::aborted(format!(
+                "beacon id '{id}', {}",
+                ActionsError::MissingParticipant
+            )),
+            ActionsError::InvalidSignature => Status::aborted(format!(
+                "beacon id '{id}', {}",
+                ActionsError::InvalidSignature
+            )),
         }
     }
 }
 
-#[cfg(test)]
-mod default_impl {
-    use super::*;
-
-    impl Default for Address {
-        fn default() -> Self {
-            Self(Authority::from_static("test:1"))
-        }
+impl Default for Address {
+    fn default() -> Self {
+        Self(Authority::from_static("default:1"))
     }
 }

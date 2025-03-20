@@ -51,6 +51,8 @@ pub enum FileStoreError {
     FailedInitID,
     #[error("chain_store error: {0}")]
     ChainStore(String),
+    #[error("dkg_store error: {0}")]
+    DkgStore(#[from] crate::dkg::store::DkgStoreError),
 }
 
 /// FileStore holds absolute path of **beacon_id** and abstracts the
@@ -209,6 +211,18 @@ impl FileStore {
             None => {
                 panic!("Couldn't get home directory")
             }
+        }
+    }
+
+    pub fn is_fresh_run(&self) -> Result<bool, FileStoreError> {
+        match (
+            self.group_file().exists(),
+            self.private_share_file().exists(),
+        ) {
+            (true, true) => Ok(false),
+            (false, false) => Ok(true),
+            (true, false) => Err(FileStoreError::FileNotFound(self.private_share_file())),
+            (false, true) => Err(FileStoreError::FileNotFound(self.group_file())),
         }
     }
 

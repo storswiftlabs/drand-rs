@@ -1,10 +1,11 @@
+//! DRAFT!
+
 use crate::key::store::FileStore;
 use crate::key::store::FileStoreError;
 use crate::protobuf::drand::ChainInfoPacket;
 use crate::protobuf::drand::Metadata;
 use crate::transport::drand::GroupPacket;
 use std::io::ErrorKind;
-use tracing::info;
 
 pub struct ChainHandler {
     group: Box<GroupPacket>,
@@ -23,10 +24,8 @@ impl ChainHandler {
                 FileStoreError::IO(error) => {
                     // NotFound error is expected for groupfile loading and means that node is fresh.
                     if error.kind() == ErrorKind::NotFound {
-                        info!(
-                            "beacon id [{beacon_id}]: will run as fresh install -> expect to run DKG.");
+                        // TODO: align this once DKG is ready
                         let mut group = GroupPacket::default();
-
                         group.metadata = Metadata::mimic_version(beacon_id, &[]);
                         Self {
                             group: group.into(),

@@ -46,7 +46,7 @@ impl<S: Scheme> Pair<S> {
 /// public / private key pair.
 #[derive(Debug, PartialEq)]
 pub struct Identity<S: Scheme> {
-    address: Address,
+    pub address: Address,
     key: KeyPoint<S>,
     signature: SigPoint<S>,
 }

@@ -16,7 +16,6 @@ pub use protobuf::dkg::ExecutionOptions;
 pub use protobuf::dkg::JoinOptions;
 pub use protobuf::dkg::RejectOptions;
 
-use super::drand::Identity;
 use super::utils::*;
 use protobuf::drand::Metadata;
 
@@ -24,6 +23,48 @@ use crate::net::utils::Address;
 use crate::net::utils::Seconds;
 use crate::protobuf;
 
+#[derive(Debug, Default, PartialEq, Clone)]
+pub struct Participant {
+    pub address: Address,
+    pub key: Vec<u8>,
+    pub signature: Vec<u8>,
+}
+
+impl ConvertProto for crate::protobuf::dkg::Participant {
+    type Inner = Participant;
+
+    fn validate(self) -> Result<Self::Inner, TransportError> {
+        let Self {
+            ref address,
+            key,
+            signature,
+        } = self;
+
+        Ok(Self::Inner {
+            address: Address::precheck(address)?,
+            key,
+            signature,
+        })
+    }
+}
+
+impl From<Participant> for crate::protobuf::dkg::Participant {
+    fn from(value: Participant) -> Self {
+        let Participant {
+            ref address,
+            key,
+            signature,
+        } = value;
+
+        Self {
+            address: address.as_str().into(),
+            key,
+            signature,
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct GossipMetadata {
     pub beacon_id: String,
     pub address: Address,
@@ -69,10 +110,11 @@ impl From<GossipMetadata> for protobuf::dkg::GossipMetadata {
         }
     }
 }
+#[derive(Clone)]
 pub struct ProposalTerms {
     pub beacon_id: String,
     pub epoch: u32,
-    pub leader: Identity,
+    pub leader: Participant,
     pub threshold: u32,
     pub timeout: Timestamp,
     pub catchup_period_seconds: Seconds,
@@ -80,9 +122,9 @@ pub struct ProposalTerms {
     pub scheme_id: String,
     pub genesis_time: Timestamp,
     pub genesis_seed: Vec<u8>,
-    pub joining: Vec<Identity>,
-    pub remaining: Vec<Identity>,
-    pub leaving: Vec<Identity>,
+    pub joining: Vec<Participant>,
+    pub remaining: Vec<Participant>,
+    pub leaving: Vec<Participant>,
 }
 
 impl ConvertProto for protobuf::dkg::ProposalTerms {
@@ -159,8 +201,9 @@ impl From<ProposalTerms> for protobuf::dkg::ProposalTerms {
     }
 }
 
+#[derive(Clone)]
 pub struct AcceptProposal {
-    pub acceptor: Identity,
+    pub acceptor: Participant,
 }
 
 impl ConvertProto for protobuf::dkg::AcceptProposal {
@@ -181,8 +224,9 @@ impl From<AcceptProposal> for protobuf::dkg::AcceptProposal {
     }
 }
 
+#[derive(Clone)]
 pub struct RejectProposal {
-    pub rejector: Identity,
+    pub rejector: Participant,
     pub reason: String,
     pub secret: Vec<u8>,
     pub previous_group_hash: Vec<u8>,
@@ -230,6 +274,7 @@ impl From<RejectProposal> for protobuf::dkg::RejectProposal {
         }
     }
 }
+#[derive(Clone)]
 pub struct StartExecution {
     pub time: Timestamp,
 }
@@ -252,6 +297,7 @@ impl From<StartExecution> for protobuf::dkg::StartExecution {
     }
 }
 
+#[derive(Clone)]
 pub struct Packet {
     pub metadata: Metadata,
     pub bundle: Bundle,
@@ -281,6 +327,7 @@ impl From<Packet> for protobuf::dkg::Packet {
     }
 }
 
+#[derive(Clone)]
 pub struct DkgPacket {
     pub dkg: Packet,
 }
@@ -303,6 +350,7 @@ impl From<DkgPacket> for protobuf::dkg::DkgPacket {
     }
 }
 
+#[derive(Clone)]
 pub enum GossipData {
     Proposal(ProposalTerms),
     Accept(AcceptProposal),
@@ -344,6 +392,7 @@ impl From<GossipData> for protobuf::dkg::gossip_packet::Packet {
     }
 }
 
+#[derive(Clone)]
 pub struct GossipPacket {
     pub data: GossipData,
     pub metadata: GossipMetadata,
@@ -354,11 +403,10 @@ impl ConvertProto for protobuf::dkg::GossipPacket {
 
     fn validate(self) -> Result<Self::Inner, TransportError> {
         let Self { metadata, packet } = self;
+        let data = packet.require_some()?.validate()?;
+        let metadata = metadata.require_some()?.validate()?;
 
-        Ok(Self::Inner {
-            data: packet.require_some()?.validate()?,
-            metadata: metadata.require_some()?.validate()?,
-        })
+        Ok(Self::Inner { data, metadata })
     }
 }
 
@@ -380,7 +428,7 @@ pub struct FirstProposalOptions {
     pub scheme: String,
     pub catchup_period_seconds: Seconds,
     pub genesis_time: Timestamp,
-    pub joining: Vec<Identity>,
+    pub joining: Vec<Participant>,
 }
 
 impl ConvertProto for protobuf::dkg::FirstProposalOptions {
@@ -437,9 +485,9 @@ pub struct ProposalOptions {
     pub timeout: Timestamp,
     pub threshold: u32,
     pub catchup_period_seconds: Seconds,
-    pub joining: Vec<Identity>,
-    pub leaving: Vec<Identity>,
-    pub remaining: Vec<Identity>,
+    pub joining: Vec<Participant>,
+    pub leaving: Vec<Participant>,
+    pub remaining: Vec<Participant>,
 }
 
 impl ConvertProto for protobuf::dkg::ProposalOptions {
@@ -569,12 +617,12 @@ pub struct DkgEntry {
     pub timeout: Timestamp,
     pub genesis_time: Timestamp,
     pub genesis_seed: Vec<u8>,
-    pub leader: Identity,
-    pub remaining: Vec<Identity>,
-    pub joining: Vec<Identity>,
-    pub leaving: Vec<Identity>,
-    pub acceptors: Vec<Identity>,
-    pub rejectors: Vec<Identity>,
+    pub leader: Participant,
+    pub remaining: Vec<Participant>,
+    pub joining: Vec<Participant>,
+    pub leaving: Vec<Participant>,
+    pub acceptors: Vec<Participant>,
+    pub rejectors: Vec<Participant>,
     pub final_group: Vec<String>,
 }
 
