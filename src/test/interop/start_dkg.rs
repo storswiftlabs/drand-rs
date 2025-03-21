@@ -6,7 +6,7 @@
 //! [x] 2. Initiate dkg from node-go.
 //! [x] 3. Verify the status-rs is changed into Proposed.
 //! [x] 4. Join the dkg from node-rs and verify status-rs to be Joined.
-//! [x] 5. Execute the dkg from node-go, verify status-go to be Executing.
+//! [x] 5. Execute the dkg from node-go, verify status-rs to be Executing.
 //! [x] 6. Shutdown nodes
 //! [ ] Finish
 //! [ ] Finish for all supported schemes
@@ -84,9 +84,11 @@ async fn initial_dkg() {
     assert!(CLI::dkg_join(control_rs, beacon_id).run().await.is_ok());
     assert_status(control_rs, beacon_id, Status::Joined).await;
 
-    //_______ [x] 5. Execute the dkg from node-go, verify status-rs to be Executing.
+    //_______ [x] 5. Execute the dkg from node-go.
     cmd_golang(EXECUTE).await;
+    // DKG statuses should match the expected.
     assert_status(control_go, beacon_id, Status::Executing).await;
+    assert_status(control_rs, beacon_id, Status::Executing).await;
 
     //_______ [x] 6. Shutdown nodes
     //
