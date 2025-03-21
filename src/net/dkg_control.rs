@@ -3,7 +3,7 @@
 use super::utils::ToStatus;
 use crate::core::beacon::BeaconCmd;
 use crate::core::daemon::Daemon;
-use crate::dkg::dkg_handler::Actions;
+use crate::dkg::process::Actions;
 use crate::net::control::CONTROL_HOST;
 use crate::net::utils::ConnectionError;
 

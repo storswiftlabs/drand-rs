@@ -1,79 +1,58 @@
 use super::chain::ChainHandler;
 use super::multibeacon::BeaconHandler;
 
+use crate::key::keys::Identity;
 use crate::key::keys::Pair;
 use crate::key::store::FileStore;
 use crate::key::store::FileStoreError;
 use crate::key::toml::PairToml;
 use crate::key::toml::Toml;
-use crate::key::ConversionError;
+use crate::key::PointSerDeError;
 use crate::key::Scheme;
 
-use crate::dkg::dkg_handler::Actions;
-use crate::dkg::dkg_handler::DkgHandler;
+use crate::dkg::process::Actions;
+use crate::dkg::process::DkgProcess;
+use crate::store::memstore::MemStore;
 use crate::store::ChainStore;
 use crate::store::NewStore;
 
 use crate::protobuf::drand::ChainInfoPacket;
 use crate::protobuf::drand::IdentityResponse;
 
+use energon::drand::traits::BeaconDigest;
+use std::path::Path;
+use std::sync::Arc;
+use tokio::sync::mpsc;
+use tokio::sync::oneshot;
+use tokio_util::task::TaskTracker;
 use tracing::debug;
 use tracing::error;
+use tracing::info;
 use tracing::info_span;
 use tracing::Span;
 
-use energon::drand::traits::BeaconDigest;
-use std::sync::Arc;
-use tokio::sync::mpsc;
-use tokio_util::task::TaskTracker;
-
 pub const DEFAULT_BEACON_ID: &str = "default";
 
+/// Callback for [`BeaconCmd`]
+pub type Callback<T, E> = oneshot::Sender<Result<T, E>>;
+
+/// There is a direct relationship between an empty string and the reserved id "default".
 pub fn is_default_beacon_id(beacon_id: &str) -> bool {
     beacon_id == DEFAULT_BEACON_ID || beacon_id.is_empty()
 }
-
-pub type Callback<T, E> = tokio::sync::oneshot::Sender<Result<T, E>>;
-
-pub struct InnerNode<S: Scheme> {
-    pub beacon_id: BeaconID,
-    pub fs: FileStore,
-    pub keypair: Pair<S>,
-    pub tracker: TaskTracker,
-    pub span: Span,
-}
-
-pub enum BeaconCmd {
-    Shutdown(Callback<(), ()>),
-    IdentityRequest(Callback<IdentityResponse, ConversionError>),
-    Sync(Callback<Arc<ChainStore>, &'static str>),
-    ChainInfo(Callback<ChainInfoPacket, &'static str>),
-    DkgActions(Actions),
-}
-
-#[derive(thiserror::Error, Debug)]
-/// For diagnostic, should not be possible.
-#[error("callback receiver has already been dropped")]
-struct SendError;
 
 #[derive(PartialEq, Eq)]
 pub struct BeaconID {
     inner: Arc<str>,
 }
 
-impl std::fmt::Display for BeaconID {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        self.inner.fmt(f)
-    }
-}
-
 impl BeaconID {
-    pub fn is_default(&self) -> bool {
-        &*self.inner == DEFAULT_BEACON_ID
-    }
-
     pub fn new(id: impl Into<Arc<str>>) -> Self {
         Self { inner: id.into() }
+    }
+
+    pub fn is_default(&self) -> bool {
+        &*self.inner == DEFAULT_BEACON_ID
     }
 
     pub fn as_str(&self) -> &str {
@@ -85,7 +64,27 @@ impl BeaconID {
     }
 }
 
-pub struct BeaconProcess<S: Scheme>(Arc<InnerNode<S>>);
+/// Commands for communication between server-side and [`BeaconProcess`]
+pub enum BeaconCmd {
+    Shutdown(Callback<(), ()>),
+    IdentityRequest(Callback<IdentityResponse, PointSerDeError>),
+    Sync(Callback<Arc<ChainStore>, &'static str>),
+    ChainInfo(Callback<ChainInfoPacket, &'static str>),
+    DkgActions(Actions),
+}
+
+/// BeaconProcess is the main logic of the BeaconID. It reads the keys / group file, it
+/// can start the DKG, read/write shares to files and can initiate/respond to tBLS
+/// signature requests.
+pub struct BeaconProcess<S: Scheme> {
+    beacon_id: BeaconID,
+    tracker: TaskTracker,
+    fs: FileStore,
+    keypair: Pair<S>,
+    span: Span,
+    chain_handler: ChainHandler,
+    chain_store: Arc<MemStore>,
+}
 
 impl<S: Scheme> BeaconProcess<S> {
     fn new(fs: FileStore, pair: PairToml, id: &str) -> Result<Self, FileStoreError> {
@@ -95,51 +94,61 @@ impl<S: Scheme> BeaconProcess<S> {
             id = format!("{}.{id}", keypair.public_identity().address())
         );
 
-        let process = Self(Arc::new(InnerNode {
+        let chain_handler = ChainHandler::try_init(&fs, id)?;
+        let chain_store = Arc::new(ChainStore::new(&fs.db_path(), S::Beacon::is_chained())?);
+        let process = Self {
             beacon_id: BeaconID::new(id),
             fs,
+            chain_store,
+            chain_handler,
             keypair,
-            tracker: TaskTracker::new(),
             span,
-        }));
+            tracker: TaskTracker::new(),
+        };
 
         Ok(process)
     }
 
     pub fn run(fs: FileStore, pair: PairToml, id: &str) -> Result<BeaconHandler, FileStoreError> {
-        let chain_handler = ChainHandler::try_init(&fs, id)?;
-        let chain_store = Arc::new(ChainStore::new(&fs.db_path(), S::Beacon::is_chained())?);
-        let node = Self::new(fs, pair, id)?;
-        let tracker = node.tracker().to_owned();
+        let is_new_node = fs.is_fresh_run()?;
+        let bp = Box::new(Self::new(fs, pair, id)?);
+        let dkg = DkgProcess::init(&bp, is_new_node)?;
 
-        let (tx, mut rx) = mpsc::channel::<BeaconCmd>(5);
+        let tracker = bp.tracker().to_owned();
+        let (tx, mut rx) = mpsc::channel::<BeaconCmd>(1);
+        if is_new_node {
+            info!(parent: &bp.span, "beacon id [{id}]: will run as fresh install -> expect to run DKG.");
+        }
+
         tracker.spawn(async move {
-            let dkg_handler = DkgHandler::fresh_install(node.clone());
-
             while let Some(cmd) = rx.recv().await {
                 match cmd {
                     BeaconCmd::Shutdown(callback) => {
-                        if let Err(err) = node.shutdown(callback) {
+                        if let Err(err) = bp.shutdown(callback) {
                             error!("failed to shutdown gracefully, {err}")
                         };
                         break;
                     }
                     BeaconCmd::IdentityRequest(callback) => {
-                        if let Err(err) = node.identity_request(callback) {
+                        if let Err(err) = bp.identity_request(callback) {
                             error!("failed to send identity responce, {err}")
                         }
                     }
                     BeaconCmd::Sync(callback) => {
-                        if callback.send(Ok(Arc::clone(&chain_store))).is_err() {
+                        if callback.send(Ok(Arc::clone(&bp.chain_store))).is_err() {
                             error!("failed to proceed sync request")
                         }
                     }
                     BeaconCmd::ChainInfo(callback) => {
-                        if callback.send(Ok(chain_handler.chain_info())).is_err() {
+                        if callback.send(Ok(bp.chain_handler.chain_info())).is_err() {
                             error!("failed to send chain_info, receiver is dropped")
                         }
                     }
-                    BeaconCmd::DkgActions(action) => dkg_handler.new_action(action).await,
+                    BeaconCmd::DkgActions(action) => {
+                        if dkg.send(action).await.is_err() {
+                            error!("{}", crate::dkg::process::ERR_SEND)
+                        }
+                    }
                 }
             }
         });
@@ -167,11 +176,9 @@ impl<S: Scheme> BeaconProcess<S> {
 
     fn identity_request(
         &self,
-        sender: Callback<IdentityResponse, ConversionError>,
+        sender: Callback<IdentityResponse, PointSerDeError>,
     ) -> anyhow::Result<()> {
         sender
-            // From generic into raw types: crate::key::conversion
-            // TODO: Error details should be logged from backends, well-defined err values
             .send(self.keypair.public_identity().try_into())
             .map_err(|_| SendError)?;
 
@@ -185,19 +192,15 @@ impl<S: Scheme> BeaconProcess<S> {
     pub fn id(&self) -> &BeaconID {
         &self.beacon_id
     }
-}
 
-impl<S: Scheme> std::ops::Deref for BeaconProcess<S> {
-    type Target = InnerNode<S>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
+    /// Returns public identity for BeaconID
+    pub fn identity(&self) -> &Identity<S> {
+        self.keypair.public_identity()
     }
-}
 
-impl<S: Scheme> Clone for BeaconProcess<S> {
-    fn clone(&self) -> Self {
-        Self(Arc::clone(&self.0))
+    /// Returns absolute path to BeaconID folder
+    pub fn path(&self) -> &Path {
+        self.fs.beacon_path.as_path()
     }
 }
 
@@ -208,3 +211,14 @@ impl Clone for BeaconID {
         }
     }
 }
+
+impl std::fmt::Display for BeaconID {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
+#[derive(thiserror::Error, Debug)]
+/// Diagnostic error type.
+#[error("callback receiver has already been dropped")]
+struct SendError;

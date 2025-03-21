@@ -1,22 +1,33 @@
+use super::actions::ActionsError;
 use super::status::StateError;
 use super::status::Status;
+use super::utils::enc_participant;
+use super::utils::enc_timestamp;
+use super::utils::GossipAuth;
 
-use crate::core::beacon::BeaconID;
 use crate::key::group::minimum_t;
 use crate::key::group::Group;
-use crate::key::keys::Identity;
 use crate::key::keys::Share;
-use crate::key::ConversionError;
+use crate::key::toml::Toml;
+use crate::key::PointSerDeError;
 use crate::key::Scheme;
 
-use crate::protobuf::dkg::DkgEntry;
-use crate::protobuf::dkg::DkgStatusResponse;
-use crate::protobuf::dkg::Participant;
+use crate::transport::dkg::GossipData;
 use crate::transport::dkg::GossipMetadata;
+use crate::transport::dkg::GossipPacket;
+use crate::transport::dkg::Participant;
 use crate::transport::dkg::ProposalTerms;
 use crate::transport::dkg::Timestamp;
 
+use crate::net::utils::Address;
 use crate::net::utils::Seconds;
+
+use toml_edit::ArrayOfTables;
+use toml_edit::DocumentMut;
+use toml_edit::Item;
+use toml_edit::Table;
+
+use std::str::FromStr;
 use std::time::SystemTime;
 use tracing::debug;
 
@@ -109,33 +120,210 @@ pub enum DBStateError {
     #[error("dkg state error: {0}")]
     InvalidStateChange(#[from] StateError),
     #[error("conversion: {0}")]
-    ConversionError(#[from] ConversionError),
-    #[error("the key's scheme may not match the beacon's scheme")]
-    InvalidKeyScheme,
+    ConversionError(#[from] PointSerDeError),
+    #[error("invalid signature of participant")]
+    ParticipantSignature,
 }
 
 #[derive(PartialEq)]
-pub struct State<S: Scheme> {
+pub(super) struct State<S: Scheme> {
     // Parameters
-    beacon_id: BeaconID,
+    beacon_id: String,
     epoch: u32,
-    state: Status,
+    pub status: Status,
     threshold: u32,
     timeout: Timestamp,
     genesis_time: Timestamp,
     genesis_seed: Vec<u8>,
     catchup_period: Seconds,
     beacon_period: Seconds,
-    leader: Option<Identity<S>>,
+    leader: Participant,
     // Participants
-    remaining: Vec<Identity<S>>,
-    joining: Vec<Identity<S>>,
-    leaving: Vec<Identity<S>>,
-    acceptors: Vec<Identity<S>>,
-    rejectors: Vec<Identity<S>>,
-    // Result
+    pub remaining: Vec<Participant>,
+    pub joining: Vec<Participant>,
+    leaving: Vec<Participant>,
+    acceptors: Vec<Participant>,
+    rejectors: Vec<Participant>,
+
+    // DEV: it would be nice to move out the generic part
     final_group: Option<Group<S>>,
     key_share: Option<Share<S>>,
+}
+
+impl Toml for Participant {
+    type Inner = Table;
+
+    fn toml_encode(&self) -> Option<Self::Inner> {
+        let mut table = Self::Inner::new();
+        let _ = table.insert("Address", self.address.as_str().into());
+        let _ = table.insert("Key", hex::encode(&self.key).into());
+        let _ = table.insert("Signature", hex::encode(&self.signature).into());
+
+        Some(table)
+    }
+
+    fn toml_decode(table: &Self::Inner) -> Option<Self> {
+        let address = Address::precheck(table.get("Address")?.as_str()?).ok()?;
+        let key = hex::decode(table.get("Key")?.as_str()?).ok()?;
+        let signature = hex::decode(table.get("Signature")?.as_str()?).ok()?;
+
+        Some(Self {
+            address,
+            key,
+            signature,
+        })
+    }
+}
+
+impl<S: Scheme> Toml for State<S> {
+    type Inner = DocumentMut;
+
+    fn toml_encode(&self) -> Option<Self::Inner> {
+        fn to_array(items: &[Participant]) -> Option<ArrayOfTables> {
+            let mut array = ArrayOfTables::new();
+            for i in items.iter() {
+                array.push(i.toml_encode()?);
+            }
+            Some(array)
+        }
+
+        let mut doc = Self::Inner::new();
+        doc.insert("BeaconID", self.beacon_id.as_str().into());
+        doc.insert("State", (self.status as i64).into());
+
+        // Do not store default values at Fresh state. Decoding is simplified accordingly.
+        if self.status == Status::Fresh {
+            return Some(doc);
+        }
+        doc.insert("Epoch", (self.epoch as i64).into());
+        doc.insert("Threshold", (self.threshold as i64).into());
+        doc.insert("Timeout", (self.timeout.to_string()).into());
+        doc.insert("GenesisTime", (self.genesis_time.to_string()).into());
+        doc.insert("GenesisSeed", hex::encode(&self.genesis_seed).into());
+        doc.insert("CatchupPeriod", self.catchup_period.to_string().into());
+        doc.insert("BeaconPeriod", self.beacon_period.to_string().into());
+        doc.insert("Leader", Item::Table(self.leader.toml_encode()?));
+        doc.insert("Remaining", Item::ArrayOfTables(to_array(&self.remaining)?));
+        doc.insert("Joining", Item::ArrayOfTables(to_array(&self.joining)?));
+        doc.insert("Leaving", Item::ArrayOfTables(to_array(&self.leaving)?));
+        doc.insert("Acceptors", Item::ArrayOfTables(to_array(&self.acceptors)?));
+        doc.insert("Rejectors", Item::ArrayOfTables(to_array(&self.rejectors)?));
+        doc.insert(
+            "FinalGroup",
+            match &self.final_group {
+                Some(group) => group.toml_encode()?.as_item().into(),
+                None => Item::None,
+            },
+        );
+        doc.insert(
+            "KeyShare",
+            match &self.key_share {
+                Some(share) => share.toml_encode()?.as_item().into(),
+                None => Item::None,
+            },
+        );
+
+        Some(doc)
+    }
+
+    fn toml_decode(table: &Self::Inner) -> Option<Self> {
+        fn from_array(role: &str, table: &Table) -> Option<Vec<Participant>> {
+            match table.get(role) {
+                Some(item) => item
+                    .as_array_of_tables()?
+                    .iter()
+                    .map(Participant::toml_decode)
+                    .collect::<Option<Vec<_>>>(),
+                None => Some(vec![]),
+            }
+        }
+
+        let beacon_id = table.get("BeaconID")?.as_str()?;
+        let state = Status::try_from(table.get("State")?.as_integer()? as u32).ok()?;
+        if state == Status::Fresh {
+            // Other values are default.
+            return Some(Self::fresh(beacon_id));
+        }
+
+        let catchup_period = table
+            .get("CatchupPeriod")?
+            .as_str()
+            .map(Seconds::from_str)?
+            .ok()?;
+
+        let beacon_period = table
+            .get("BeaconPeriod")?
+            .as_str()
+            .map(Seconds::from_str)?
+            .ok()?;
+
+        // Missing `Group` and `Share` is not an error at this layer.
+        let final_group = match table.get("FinalGroup") {
+            Some(item) => Group::toml_decode(&item.as_table()?.to_owned().into()),
+            None => None,
+        };
+
+        let key_share = match table.get("KeyShare") {
+            Some(item) => Share::toml_decode(&item.as_table()?.to_owned().into()),
+            None => None,
+        };
+
+        Some(Self {
+            beacon_id: beacon_id.into(),
+            epoch: table.get("Epoch")?.as_integer()? as u32,
+            status: state,
+            catchup_period,
+            beacon_period,
+            threshold: table.get("Threshold")?.as_integer()? as u32,
+            timeout: Timestamp::from_str(table.get("Timeout")?.as_str()?).ok()?,
+            genesis_time: Timestamp::from_str(table.get("GenesisTime")?.as_str()?).ok()?,
+            genesis_seed: table.get("GenesisSeed")?.as_str().map(hex::decode)?.ok()?,
+            leader: Participant::toml_decode(table.get("Leader")?.as_table()?)?,
+            remaining: from_array("Remaining", table)?,
+            joining: from_array("Joining", table)?,
+            leaving: from_array("Leaving", table)?,
+            acceptors: from_array("Acceptors", table)?,
+            rejectors: from_array("Rejectors", table)?,
+            final_group,
+            key_share,
+        })
+    }
+}
+
+impl<S: Scheme> GossipAuth for State<S> {
+    fn encode(&self) -> Vec<u8> {
+        let mut ret = [
+            "Proposal:\n".as_bytes(),
+            self.beacon_id.as_bytes(),
+            "\n".as_bytes(),
+            &self.epoch.to_le_bytes(),
+            "\nLeader:".as_bytes(),
+            self.leader.address.as_str().as_bytes(),
+            "\n".as_bytes(),
+            &self.leader.signature,
+            &self.threshold.to_le_bytes(),
+            &enc_timestamp(self.timeout),
+            &self.catchup_period.get_value().to_le_bytes(),
+            &self.beacon_period.get_value().to_le_bytes(),
+            "\nScheme: ".as_bytes(),
+            S::ID.as_bytes(),
+            "\n".as_bytes(),
+            &enc_timestamp(self.genesis_time),
+        ]
+        .concat();
+
+        for j in &self.joining {
+            ret.extend_from_slice(&enc_participant("\nJoiner:", j))
+        }
+        for r in &self.remaining {
+            ret.extend_from_slice(&enc_participant("\nRemainer:", r))
+        }
+        for l in &self.leaving {
+            ret.extend_from_slice(&enc_participant("\nLeaver:", l))
+        }
+
+        ret
+    }
 }
 
 impl<S: Scheme> State<S> {
@@ -143,40 +331,26 @@ impl<S: Scheme> State<S> {
         self.epoch
     }
 
-    pub fn id(&self) -> &BeaconID {
-        &self.beacon_id
+    pub fn status(&self) -> &super::status::Status {
+        &self.status
     }
 
-    pub fn show_status(&self) -> &super::status::Status {
-        &self.state
-    }
-
-    pub fn validate_joiner_signatures(&self) -> Result<(), DBStateError> {
-        for joiner in &self.joining {
-            if !joiner.is_valid_signature() {
-                return Err(DBStateError::InvalidKeyScheme);
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Returns default DBState representation which is used only at fresh state.
-    pub fn new_fresh(beacon_id: &BeaconID) -> Self {
+    /// Fresh is default state representation.
+    pub fn fresh(beacon_id: &str) -> Self {
         Self {
-            beacon_id: beacon_id.to_owned(),
+            beacon_id: beacon_id.to_string(),
             genesis_time: Timestamp {
                 seconds: -62135596800,
                 nanos: 0,
             },
             epoch: 0,
-            state: Status::Fresh,
+            status: Status::Fresh,
             threshold: 0,
             timeout: Timestamp::default(),
             genesis_seed: vec![],
             catchup_period: Seconds::default(),
             beacon_period: Seconds::default(),
-            leader: None,
+            leader: Participant::default(),
             remaining: vec![],
             joining: vec![],
             leaving: vec![],
@@ -187,80 +361,16 @@ impl<S: Scheme> State<S> {
         }
     }
 
-    /// TODO: this method should make request to dkg.db
-    pub fn status(&self) -> Result<DkgStatusResponse, DBStateError> {
-        let State::<S> {
-            beacon_id,
-            epoch,
-            state,
-            threshold,
-            timeout,
-            genesis_time,
-            genesis_seed,
-            catchup_period: _,
-            beacon_period: _,
-            leader,
-            remaining,
-            joining,
-            leaving,
-            acceptors,
-            rejectors,
-            final_group,
-            key_share: _,
-        } = self;
-
-        let leader = if state == &Status::Fresh {
-            None
-        } else {
-            Some(
-                leader
-                    .as_ref()
-                    .ok_or(DBStateError::LeaderNotJoining)?
-                    .try_into()?,
-            )
-        };
-
-        let final_group = match final_group {
-            Some(group) => group
-                .nodes()
-                .iter()
-                .map(|node| node.public().address().to_string())
-                .collect(),
-            None => vec![],
-        };
-
-        let entry = DkgStatusResponse {
-            // TODO: Complete entry should be updated if dkg is finished.
-            complete: None,
-            current: Some(DkgEntry {
-                beacon_id: beacon_id.to_string(),
-                state: *state as u32,
-                epoch: *epoch,
-                threshold: *threshold,
-                timeout: Some(*timeout),
-                genesis_time: Some(*genesis_time),
-                genesis_seed: genesis_seed.to_owned(),
-                leader,
-                remaining: into_participants(remaining)?,
-                joining: into_participants(joining)?,
-                leaving: into_participants(leaving)?,
-                acceptors: into_participants(acceptors)?,
-                rejectors: into_participants(rejectors)?,
-                final_group,
-            }),
-        };
-
-        Ok(entry)
-    }
-
     /// Proposed is used by non-leader nodes to set their own state when they receive a proposal
     pub fn proposed(
         &mut self,
-        me: &Identity<S>,
+        me: &Participant,
         terms: ProposalTerms,
         metadata: &GossipMetadata,
     ) -> Result<(), DBStateError> {
-        self.state.is_valid_state_change(Status::Proposed)?;
+        self.status.is_valid_state_change(Status::Proposed)?;
+
+        validate_joiner_signatures::<S>(terms.joining.as_slice())?;
 
         // it's important to verify that the sender (and by extension the signature of the sender)
         // is the same as the proposed leader, to avoid nodes trying to propose DKGs on behalf of somebody else
@@ -291,17 +401,13 @@ impl<S: Scheme> State<S> {
         }
 
         // aborted or timed out DKGs can be reattempted at the same epoch
-        if terms.epoch == self.epoch
-            && self.state != Status::Aborted
-            && self.state != Status::TimedOut
-            && self.state != Status::Failed
-        {
+        if terms.epoch == self.epoch && !self.status.is_terminal() {
             return Err(DBStateError::InvalidEpoch);
         }
 
         // if we have some leftover state after having left the network, we can accept higher epochs
         if terms.epoch > self.epoch + 1
-            && (self.state != Status::Left && self.state != Status::Fresh)
+            && (self.status != Status::Left && self.status != Status::Fresh)
         {
             return Err(DBStateError::InvalidEpoch);
         }
@@ -312,16 +418,15 @@ impl<S: Scheme> State<S> {
             validate_first_epoch(&terms)?;
         };
 
-        let proposed = Self::try_from(terms)?;
-
         // Local identity should be present in received proposal
-        if !proposed.joining.contains(me)
-            && !proposed.remaining.contains(me)
-            && !proposed.leaving.contains(me)
+        if !terms.joining.contains(me)
+            && !terms.remaining.contains(me)
+            && !terms.leaving.contains(me)
         {
             return Err(DBStateError::SelfMissingFromProposal);
         }
 
+        let proposed = Self::try_from(terms)?;
         debug!("received proposal is valid");
         *self = proposed;
 
@@ -330,10 +435,10 @@ impl<S: Scheme> State<S> {
 
     pub fn joined(
         &mut self,
-        me: &Identity<S>,
+        me: &Participant,
         prev_group: Option<Group<S>>,
     ) -> Result<(), DBStateError> {
-        self.state.is_valid_state_change(Status::Joined)?;
+        self.status.is_valid_state_change(Status::Joined)?;
 
         if Timestamp::from(SystemTime::now()).seconds >= self.timeout.seconds {
             return Err(DBStateError::TimeoutReached);
@@ -347,9 +452,76 @@ impl<S: Scheme> State<S> {
             panic!("state::joined: reshape is not implemented yet");
             // validatePreviousGroupForJoiners
         }
-        self.state = Status::Joined;
+        self.status = Status::Joined;
+        debug!("status changed to Joined");
 
         Ok(())
+    }
+
+    pub(super) async fn apply(
+        &mut self,
+        me: &Participant,
+        packet: GossipPacket,
+    ) -> Result<(), ActionsError> {
+        let metadata = &packet.metadata;
+
+        match packet.data {
+            GossipData::Proposal(terms) => self
+                .proposed(me, terms, metadata)
+                .map_err(ActionsError::DBState),
+            GossipData::Execute(_execute) => {
+                self.executing(me, metadata).map_err(ActionsError::DBState)
+            }
+            GossipData::Accept(_accept_proposal) => todo!(),
+            GossipData::Reject(_reject_proposal) => todo!(),
+            GossipData::Abort(_abort_dkg) => todo!(),
+            GossipData::Dkg(_dkg_packet) => todo!(),
+        }
+    }
+
+    pub fn executing(
+        &mut self,
+        me: &Participant,
+        metadata: &GossipMetadata,
+    ) -> Result<(), DBStateError> {
+        self.status.is_valid_state_change(Status::Executing)?;
+
+        if self.time_expired() {
+            return Err(DBStateError::TimeoutReached);
+        }
+
+        if self.leaving.contains(me) {
+            return self.left(me);
+        }
+
+        if &self.leader.address != metadata.address() {
+            return Err(DBStateError::OnlyLeaderCanTriggerExecute);
+        }
+
+        self.status = Status::Executing;
+
+        Ok(())
+    }
+
+    pub fn left(&mut self, me: &Participant) -> Result<(), DBStateError> {
+        self.status.is_valid_state_change(Status::Left)?;
+
+        if self.time_expired() {
+            return Err(DBStateError::TimeoutReached);
+        }
+
+        if !self.leaving.contains(me) && !self.joining.contains(me) {
+            return Err(DBStateError::CannotLeaveIfNotALeaver);
+        }
+
+        self.status = Status::Left;
+
+        Ok(())
+    }
+
+    /// Timeout check operates at resolution of seconds.
+    pub(super) fn time_expired(&self) -> bool {
+        Timestamp::from(SystemTime::now()).seconds >= self.timeout.seconds
     }
 }
 
@@ -376,41 +548,24 @@ fn validate_first_epoch(terms: &ProposalTerms) -> Result<(), DBStateError> {
 
     Ok(())
 }
-
 impl<S: Scheme> TryFrom<ProposalTerms> for State<S> {
-    type Error = ConversionError;
+    type Error = PointSerDeError;
 
-    fn try_from(value: ProposalTerms) -> Result<Self, Self::Error> {
-        let ProposalTerms {
-            beacon_id,
-            epoch,
-            leader,
-            threshold,
-            timeout,
-            catchup_period_seconds,
-            beacon_period_seconds,
-            scheme_id: _,
-            genesis_time,
-            genesis_seed,
-            joining,
-            remaining,
-            leaving,
-        } = value;
-
+    fn try_from(p: ProposalTerms) -> Result<Self, Self::Error> {
         let state = State::<S> {
-            beacon_id: BeaconID::new(beacon_id),
-            epoch,
-            state: Status::Proposed,
-            threshold,
-            timeout,
-            genesis_time,
-            genesis_seed,
-            catchup_period: catchup_period_seconds,
-            beacon_period: beacon_period_seconds,
-            leader: Some(leader.try_into()?),
-            remaining: from_vec(remaining)?,
-            joining: from_vec(joining)?,
-            leaving: from_vec(leaving)?,
+            beacon_id: p.beacon_id,
+            epoch: p.epoch,
+            status: Status::Proposed,
+            threshold: p.threshold,
+            timeout: p.timeout,
+            genesis_time: p.genesis_time,
+            genesis_seed: p.genesis_seed,
+            catchup_period: p.catchup_period_seconds,
+            beacon_period: p.beacon_period_seconds,
+            leader: p.leader,
+            remaining: p.remaining,
+            joining: p.joining,
+            leaving: p.leaving,
             acceptors: vec![],
             rejectors: vec![],
             final_group: None,
@@ -421,18 +576,52 @@ impl<S: Scheme> TryFrom<ProposalTerms> for State<S> {
     }
 }
 
-/// Abstract mapping raw data into a corresponding generic type
-#[inline(always)]
-fn from_vec<S: Scheme>(
-    v: Vec<crate::transport::drand::Identity>,
-) -> Result<Vec<Identity<S>>, ConversionError> {
-    v.into_iter().map(TryInto::try_into).collect()
+fn validate_joiner_signatures<S: Scheme>(joiners: &[Participant]) -> Result<(), DBStateError> {
+    for j in joiners {
+        if !j.is_valid_signature::<S>() {
+            return Err(DBStateError::ParticipantSignature);
+        }
+    }
+
+    Ok(())
 }
 
-// &[Identity<S>] -> Vec<proto::Participant>
-#[inline(always)]
-fn into_participants<S: Scheme>(
-    participants: &[Identity<S>],
-) -> Result<Vec<Participant>, ConversionError> {
-    participants.iter().map(TryInto::try_into).collect()
+/// Used for status request
+impl<S: Scheme> From<State<S>> for crate::protobuf::dkg::DkgEntry {
+    fn from(s: State<S>) -> Self {
+        fn convert<T, U, I>(iter: I) -> Vec<U>
+        where
+            I: IntoIterator<Item = T>,
+            T: Into<U>,
+        {
+            iter.into_iter().map(Into::into).collect()
+        }
+
+        Self {
+            beacon_id: s.beacon_id,
+            state: s.status as u32,
+            epoch: s.epoch,
+            threshold: s.threshold,
+            timeout: Some(s.timeout),
+            genesis_time: Some(s.genesis_time),
+            genesis_seed: s.genesis_seed,
+            leader: match s.status == Status::Fresh {
+                true => None,
+                false => Some(s.leader.into()),
+            },
+            remaining: convert(s.remaining),
+            joining: convert(s.joining),
+            leaving: convert(s.leaving),
+            acceptors: convert(s.acceptors),
+            rejectors: convert(s.rejectors),
+            final_group: match s.final_group {
+                Some(group) => group
+                    .nodes()
+                    .iter()
+                    .map(|node| node.public().address().to_string())
+                    .collect(),
+                None => vec![],
+            },
+        }
+    }
 }

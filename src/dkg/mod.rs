@@ -1,6 +1,6 @@
-pub mod actions_active;
-pub(super) mod convert;
-pub mod dkg_handler;
+pub mod actions;
+pub mod process;
 pub mod state;
 pub mod status;
-pub (super) mod actions_signing;
+pub(super) mod store;
+pub(super) mod utils;

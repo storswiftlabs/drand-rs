@@ -6,7 +6,7 @@ use super::utils::URI_SCHEME;
 
 use crate::core::beacon::BeaconCmd;
 use crate::core::daemon::Daemon;
-use crate::dkg::dkg_handler::Actions;
+use crate::dkg::process::Actions;
 use crate::transport::ConvertProto;
 
 use crate::protobuf::dkg as protobuf;

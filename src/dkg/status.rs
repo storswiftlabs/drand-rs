@@ -106,6 +106,13 @@ impl Status {
 
         Ok(())
     }
+
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            Status::Aborted | Status::TimedOut | Status::Failed
+        )
+    }
 }
 
 impl std::fmt::Display for Status {
