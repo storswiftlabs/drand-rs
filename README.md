@@ -2,6 +2,7 @@
 
 **Note: The project is currently at the prototype stage and does not contain full functionality. Codebase uploaded only for demonstration purpose. The main branch is configured to interact with [v1.5.8-testnet](https://github.com/drand/drand/releases/tag/v1.5.8-testnest). For production usage, please visit [Drand Golang implementation](https://github.com/drand/drand)**
 
+**Update: dev branch for v2 is [here](https://github.com/storswiftlabs/drand-rs/tree/dev/v2)**
 
 ## Motivation
 We aim to enhance the robustness and security of linked nodes by mitigating the risk of a single point of failure associated with software implementation. Additionally, we are exploring the opportunities of the system in terms of Rust language features.
