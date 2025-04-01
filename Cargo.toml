@@ -20,7 +20,7 @@ tracing-subscriber = { version = "0.3.17", default-features = true, features = [
     "env-filter",
 ] }
 crev-common = "0.25.0"
-energon = { git = "https://github.com/version513/energon.git", rev = "e34ffd5" }
+energon = { git = "https://github.com/version513/energon.git", rev = "41c0fef" }
 sha2 = "0.10.7"
 http = "1.2.0"
 toml_edit = "0.22.22"
