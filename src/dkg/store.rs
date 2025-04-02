@@ -1,4 +1,5 @@
 use super::state::State;
+use super::status::Status;
 use crate::key::toml::Toml;
 use crate::key::Scheme;
 
@@ -23,28 +24,56 @@ const DIR_PERM: u32 = 0o755;
 const FILE_PERM: u32 = 0o660;
 
 /// Store for current and finished DKGs, contains absolute path to [`DKG_STORE_DIR`]
-pub(super) struct DkgStore {
+pub struct DkgStore {
     path: PathBuf,
 }
 
 impl DkgStore {
-    pub(super) fn init(path_to_id: &Path, fresh_run: bool) -> Result<Self, DkgStoreError> {
+    pub fn init<S: Scheme>(
+        path_to_id: &Path,
+        fresh_run: bool,
+        id: &str,
+    ) -> Result<Self, DkgStoreError> {
         let store = Self {
             path: path_to_id.join(DKG_STORE_DIR),
         };
+
         match (fresh_run, store.path.exists()) {
+            // Fresh run case
             (true, false) => {
                 std::fs::create_dir(&store.path).map_err(DkgStoreError::CreateDir)?;
                 std::fs::set_permissions(&store.path, Permissions::from_mode(DIR_PERM))
-                    .map_err(DkgStoreError::Permission)?;
-                Ok(store)
+                    .map_err(DkgStoreError::Permission)?
             }
+            // Brocken configuration
             (false, false) => {
                 error!("{} at {}", DkgStoreError::NotFound, store.path.display());
-                Err(DkgStoreError::FailedToLoad)
+                return Err(DkgStoreError::FailedToLoad);
             }
-            _ => Ok(store),
+            _ => (),
         }
+
+        // Check timeout in case node is within dkg
+        match store.get_current::<S>() {
+            Ok(mut state) => {
+                if matches!(
+                    *state.status(),
+                    Status::Proposed | Status::Proposing | Status::Accepted | Status::Joined
+                ) && state.time_expired()
+                {
+                    state.status = Status::TimedOut;
+                    store.save_current(&state)?
+                } else if state.status() == &Status::Executing {
+                    // Node can not be loaded into executing state regardless of timeout(drand-go v2.1.0).
+                    state.status = Status::Failed;
+                    store.save_current(&state)?
+                }
+            }
+            Err(DkgStoreError::NotFound) => store.save_current(&State::<S>::fresh(id))?,
+            Err(err) => return Err(err),
+        }
+
+        Ok(store)
     }
 
     /// Retrieves the last successful state.

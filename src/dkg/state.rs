@@ -1,9 +1,9 @@
-use super::actions::ActionsError;
+use super::actions_signing::enc_participant;
+use super::actions_signing::enc_timestamp;
+use super::actions_signing::GossipAuth;
 use super::status::StateError;
 use super::status::Status;
-use super::utils::enc_participant;
-use super::utils::enc_timestamp;
-use super::utils::GossipAuth;
+use super::ActionsError;
 
 use crate::key::group::minimum_t;
 use crate::key::group::Group;
@@ -126,7 +126,7 @@ pub enum DBStateError {
 }
 
 #[derive(PartialEq)]
-pub(super) struct State<S: Scheme> {
+pub struct State<S: Scheme> {
     // Parameters
     beacon_id: String,
     epoch: u32,

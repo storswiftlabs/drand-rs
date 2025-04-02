@@ -1,15 +1,17 @@
 //! This module provides server implementations for Public.
 
+use super::utils::Address;
+use super::utils::Callback;
+use super::utils::ConnectionError;
+use super::utils::ToStatus;
+use super::utils::ERR_METADATA_IS_MISSING;
+use super::utils::URI_SCHEME;
+
 use crate::core::beacon::BeaconCmd;
 use crate::core::daemon::Daemon;
-use crate::net::utils::Address;
-use crate::net::utils::ToStatus;
-use crate::net::utils::URI_SCHEME;
 use crate::protobuf::drand as protobuf;
 use crate::protobuf::drand::Metadata;
 
-use anyhow::bail;
-use anyhow::Context;
 use protobuf::public_client::PublicClient as _PublicClient;
 use protobuf::public_server::Public;
 use protobuf::ChainInfoPacket;
@@ -18,18 +20,16 @@ use protobuf::ListBeaconIDsRequest;
 use protobuf::ListBeaconIDsResponse;
 use protobuf::PublicRandRequest;
 use protobuf::PublicRandResponse;
-use tokio::sync::oneshot;
-use tonic::transport::Channel;
 
+use anyhow::bail;
+use anyhow::Context;
+use http::Uri;
 use std::ops::Deref;
 use std::pin::Pin;
-use std::sync::Arc;
-
-use super::utils::ConnectionError;
-use super::utils::ERR_METADATA_IS_MISSING;
-use http::Uri;
 use std::str::FromStr;
+use std::sync::Arc;
 use tokio_stream::Stream;
+use tonic::transport::Channel;
 use tonic::Request;
 use tonic::Response;
 use tonic::Status;
@@ -76,7 +76,7 @@ impl Public for PublicHandler {
             |meta| Ok(meta.beacon_id.as_str()),
         )?;
 
-        let (tx, rx) = oneshot::channel();
+        let (tx, rx) = Callback::new();
         self.beacons()
             .cmd(BeaconCmd::ChainInfo(tx), id)
             .await
@@ -86,7 +86,7 @@ impl Public for PublicHandler {
         let chain_info = rx
             .await
             .map_err(|recv_err| recv_err.to_status(id))?
-            .map_err(Status::not_found)?;
+            .map_err(|chain_info_err| chain_info_err.to_status(id))?;
 
         Ok(Response::new(chain_info))
     }

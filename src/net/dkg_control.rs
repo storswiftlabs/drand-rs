@@ -1,14 +1,16 @@
 //! This module provides client and server implementations for DkgControl service.
 
+use super::control::CONTROL_HOST;
+use super::utils::Callback;
+use super::utils::ConnectionError;
 use super::utils::ToStatus;
+
+use crate::core::beacon::Actions;
 use crate::core::beacon::BeaconCmd;
 use crate::core::daemon::Daemon;
-use crate::dkg::process::Actions;
-use crate::net::control::CONTROL_HOST;
-use crate::net::utils::ConnectionError;
-
 use crate::protobuf::dkg as protobuf;
 use crate::transport::ConvertProto;
+
 use protobuf::dkg_control_client::DkgControlClient as _DkgControlClient;
 use protobuf::dkg_control_server::DkgControl;
 use protobuf::CommandMetadata;
@@ -23,12 +25,10 @@ use tonic::Request;
 use tonic::Response;
 use tonic::Status;
 
+use http::Uri;
 use std::ops::Deref;
 use std::str::FromStr;
 use std::sync::Arc;
-
-use http::Uri;
-use tokio::sync::oneshot;
 
 /// Implementor for [`DkgControl`] trait for use with DkgControlServer
 pub struct DkgControlHandler(Arc<Daemon>);
@@ -47,8 +47,8 @@ impl DkgControl for DkgControlHandler {
     ) -> Result<Response<EmptyDkgResponse>, Status> {
         let inner = request.into_inner().validate()?;
         let id = inner.metadata.beacon_id.as_str();
-        let (tx, rx) = oneshot::channel();
-        let cmd = Actions::Command(inner.command, tx.into());
+        let (tx, rx) = Callback::new();
+        let cmd = Actions::Command(inner.command, tx);
 
         self.beacons()
             .cmd(BeaconCmd::DkgActions(cmd), id)
@@ -67,10 +67,10 @@ impl DkgControl for DkgControlHandler {
         request: Request<DkgStatusRequest>,
     ) -> Result<Response<DkgStatusResponse>, tonic::Status> {
         let id = request.get_ref().beacon_id.as_str();
-        let (tx, rx) = oneshot::channel();
+        let (tx, rx) = Callback::new();
 
         self.beacons()
-            .cmd(BeaconCmd::DkgActions(Actions::Status(tx.into())), id)
+            .cmd(BeaconCmd::DkgActions(Actions::Status(tx)), id)
             .await
             .map_err(|err| err.to_status(id))?;
 
