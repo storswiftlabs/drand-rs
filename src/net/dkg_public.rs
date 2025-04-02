@@ -1,15 +1,16 @@
 //! This module provides client and server implementations for DkgPublic service.
 use super::utils::Address;
+use super::utils::Callback;
 use super::utils::ConnectionError;
 use super::utils::ToStatus;
 use super::utils::URI_SCHEME;
 
+use crate::core::beacon::Actions;
 use crate::core::beacon::BeaconCmd;
 use crate::core::daemon::Daemon;
-use crate::dkg::process::Actions;
 use crate::transport::ConvertProto;
-
 use crate::protobuf::dkg as protobuf;
+
 use protobuf::dkg_public_client::DkgPublicClient as _DkgPublicClient;
 use protobuf::dkg_public_server::DkgPublic;
 use protobuf::DkgPacket;
@@ -26,7 +27,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use http::Uri;
-use tokio::sync::oneshot;
 use tracing::debug;
 
 /// Implementor for [`DkgPublic`] trait for use with DkgPublicServer
@@ -48,12 +48,9 @@ impl DkgPublic for DkgPublicHandler {
         debug!("received gossip packet: {}", packet.data);
         let id = packet.metadata.beacon_id.clone();
 
-        let (tx, rx) = oneshot::channel();
+        let (tx, rx) = Callback::new();
         self.beacons()
-            .cmd(
-                BeaconCmd::DkgActions(Actions::Gossip(packet, tx.into())),
-                &id,
-            )
+            .cmd(BeaconCmd::DkgActions(Actions::Gossip(packet, tx)), &id)
             .await
             .map_err(|err| err.to_status(&id))?;
         rx.await
@@ -70,10 +67,10 @@ impl DkgPublic for DkgPublicHandler {
         let packet = request.into_inner().validate()?.dkg;
         debug!("received broadcast: {}", packet.bundle);
         let id = packet.metadata.beacon_id.as_str();
-        let (tx, rx) = oneshot::channel();
+        let (tx, rx) = Callback::new();
         self.beacons()
             .cmd(
-                BeaconCmd::DkgActions(Actions::Broadcast(packet.bundle, tx.into())),
+                BeaconCmd::DkgActions(Actions::Broadcast(packet.bundle, tx)),
                 id,
             )
             .await

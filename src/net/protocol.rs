@@ -1,13 +1,14 @@
-//! This module provides server implementations for Protocol.
-use crate::net::dkg_public::DkgPublicHandler;
-use crate::net::public::PublicHandler;
-use crate::net::utils::Address;
-use crate::net::utils::ConnectionError;
-use crate::net::utils::NewTcpListener;
-use crate::net::utils::StartServerError;
-use crate::net::utils::ToStatus;
-use crate::net::utils::ERR_METADATA_IS_MISSING;
-use crate::net::utils::URI_SCHEME;
+//! This module provides server and client implementations for Protocol.
+use super::dkg_public::DkgPublicHandler;
+use super::public::PublicHandler;
+use super::utils::Address;
+use super::utils::Callback;
+use super::utils::ConnectionError;
+use super::utils::NewTcpListener;
+use super::utils::StartServerError;
+use super::utils::ToStatus;
+use super::utils::ERR_METADATA_IS_MISSING;
+use super::utils::URI_SCHEME;
 
 use crate::protobuf::dkg::dkg_public_server::DkgPublicServer;
 use crate::protobuf::drand as protobuf;
@@ -45,7 +46,6 @@ use http::Uri;
 use std::ops::Deref;
 use std::str::FromStr;
 use std::sync::Arc;
-use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
 
 type ResponseStream = futures::channel::mpsc::UnboundedReceiver<Result<BeaconPacket, Status>>;
@@ -72,7 +72,7 @@ impl Protocol for ProtocolHandler {
         )?;
 
         // Send identity request to multibeacon handlers.
-        let (tx, rx) = oneshot::channel();
+        let (tx, rx) = Callback::new();
         self.beacons()
             .cmd(BeaconCmd::IdentityRequest(tx), id)
             .await
@@ -108,7 +108,7 @@ impl Protocol for ProtocolHandler {
         debug!("protocol: received follow_chain request for {id}");
 
         // Get store pointer from beacon process
-        let (tx, rx) = tokio::sync::oneshot::channel();
+        let (tx, rx) = Callback::new();
         self.beacons()
             .cmd(BeaconCmd::Sync(tx), id)
             .await
@@ -116,7 +116,7 @@ impl Protocol for ProtocolHandler {
         let store = rx
             .await
             .map_err(|err| err.to_status(id))?
-            .map_err(Status::aborted)?;
+            .map_err(|sync_err| sync_err.to_status(id))?;
 
         let (mut tx, rx) = futures::channel::mpsc::unbounded();
 

@@ -1,6 +1,7 @@
+use crate::core::beacon::ChainInfoError;
+use crate::core::beacon::SyncError;
 use crate::core::multibeacon::BeaconHandlerError;
-
-use crate::dkg::actions::ActionsError;
+use crate::dkg::ActionsError;
 use crate::key::PointSerDeError;
 use crate::net::control::CONTROL_HOST;
 use crate::protobuf::drand::Metadata;
@@ -11,6 +12,7 @@ use std::error::Error;
 use std::fmt::Display;
 use std::str::FromStr;
 use tokio::net::TcpListener;
+use tokio::sync::oneshot;
 use tonic::Status;
 
 pub(super) const ERR_METADATA_IS_MISSING: &str = "metadata is missing";
@@ -251,6 +253,18 @@ impl ToStatus for tokio::sync::oneshot::error::RecvError {
     }
 }
 
+impl ToStatus for ChainInfoError {
+    fn to_status(&self, id: &str) -> Status {
+        Status::aborted(format!("beacon id '{id}', {self}"))
+    }
+}
+
+impl ToStatus for SyncError {
+    fn to_status(&self, id: &str) -> Status {
+        Status::aborted(format!("beacon id '{id}', {self}"))
+    }
+}
+
 impl ToStatus for BeaconHandlerError {
     fn to_status(&self, id: &str) -> Status {
         match self {
@@ -301,6 +315,10 @@ impl ToStatus for ActionsError {
                 "beacon id '{id}', {}",
                 ActionsError::InvalidSignature
             )),
+            ActionsError::IntoParticipant => Status::aborted(format!(
+                "beacon id '{id}', {}",
+                ActionsError::IntoParticipant
+            )),
         }
     }
 }
@@ -308,5 +326,30 @@ impl ToStatus for ActionsError {
 impl Default for Address {
     fn default() -> Self {
         Self(Authority::from_static("default:1"))
+    }
+}
+
+pub struct Callback<T, E: Error> {
+    inner: oneshot::Sender<Result<T, E>>,
+}
+
+pub const ERR_SEND: &str = "callback receiver is dropped";
+
+impl<T, E: Error> Callback<T, E> {
+    pub fn new() -> (Self, oneshot::Receiver<Result<T, E>>) {
+        let (tx, rx) = oneshot::channel();
+        (Self { inner: tx }, rx)
+    }
+
+    /// Sends a response back and tracks all outcoming errors
+    #[inline(always)]
+    pub fn reply(self, result: Result<T, E>) {
+        if let Err(err) = &result {
+            tracing::error!("failed to proceed request: {err}")
+        }
+
+        if self.inner.send(result).is_err() {
+            tracing::error!("{ERR_SEND}");
+        };
     }
 }

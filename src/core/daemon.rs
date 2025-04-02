@@ -7,6 +7,7 @@ use crate::cli::Config;
 use crate::key::store::FileStore;
 use crate::key::store::FileStoreError;
 use crate::log::Logger;
+use crate::net::utils::Callback;
 use crate::net::utils::StartServerError;
 
 use tokio::sync::oneshot;
@@ -95,13 +96,13 @@ impl Daemon {
 
             let sender = handler.sender().clone();
             tokio::spawn(async move {
-                let (tx, callback) = oneshot::channel();
+                let (tx, rx) = Callback::new();
                 // Shutdown is graceful:
                 //  - beacon receiver is not dropped,
                 //  - callback awaited is_ok
                 //  - result from callback is_ok
                 let is_graceful = sender.send(BeaconCmd::Shutdown(tx)).await.is_ok()
-                    && callback.await.is_ok_and(|result| result.is_ok());
+                    && rx.await.is_ok_and(|result| result.is_ok());
                 let _ = tx_graceful.send(is_graceful);
             });
 
@@ -120,7 +121,7 @@ impl Daemon {
         tokio::spawn(async move {
             let mut is_graceful = true;
             for h in snapshot.iter() {
-                let (beacon_tx, beacon_rx) = oneshot::channel();
+                let (beacon_tx, beacon_rx) = Callback::new();
                 if let Err(send_err) = h.sender().send(BeaconCmd::Shutdown(beacon_tx)).await {
                     error!("should not be possible, id '{}', err: {send_err}", h.id());
                     is_graceful = false;

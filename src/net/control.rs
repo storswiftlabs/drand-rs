@@ -1,18 +1,19 @@
 //! This module provides client and server implementations for Control.
 
-use crate::net::dkg_control::DkgControlHandler;
-use crate::net::protocol::ProtocolClient;
-use crate::net::utils::Address;
-use crate::net::utils::ConnectionError;
-use crate::net::utils::NewTcpListener;
-use crate::net::utils::StartServerError;
-use crate::net::utils::ToStatus;
-use crate::net::utils::ERR_METADATA_IS_MISSING;
+use super::dkg_control::DkgControlHandler;
+use super::protocol::ProtocolClient;
+use super::utils::Address;
+use super::utils::Callback;
+use super::utils::ConnectionError;
+use super::utils::NewTcpListener;
+use super::utils::StartServerError;
+use super::utils::ToStatus;
+use super::utils::ERR_METADATA_IS_MISSING;
+use super::utils::URI_SCHEME;
 
 use crate::cli::SyncConfig;
 use crate::core::beacon::BeaconCmd;
 use crate::core::daemon::Daemon;
-use crate::net::utils::URI_SCHEME;
 use crate::protobuf::dkg::dkg_control_server::DkgControlServer;
 use crate::protobuf::drand as protobuf;
 use crate::protobuf::drand::public_client::PublicClient;
@@ -61,7 +62,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use http::Uri;
-use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
 use tokio_stream::StreamExt;
 
@@ -125,7 +125,7 @@ impl Control for ControlHandler {
             |meta| Ok(meta.beacon_id.as_str()),
         )?;
 
-        let (tx, rx) = oneshot::channel();
+        let (tx, rx) = Callback::new();
         self.beacons()
             .cmd(BeaconCmd::ChainInfo(tx), id)
             .await
@@ -135,7 +135,7 @@ impl Control for ControlHandler {
         let chain_info = rx
             .await
             .map_err(|recv_err| recv_err.to_status(id))?
-            .map_err(Status::not_found)?;
+            .map_err(|chain_info_err| chain_info_err.to_status(id))?;
 
         Ok(Response::new(chain_info))
     }
@@ -231,7 +231,7 @@ impl Control for ControlHandler {
         debug!("control: received follow_chain request for {id}");
 
         // Get store pointer from beacon process
-        let (tx, rx) = tokio::sync::oneshot::channel();
+        let (tx, rx) = Callback::new();
         self.beacons()
             .cmd(BeaconCmd::Sync(tx), id)
             .await
@@ -239,7 +239,7 @@ impl Control for ControlHandler {
         let store = rx
             .await
             .map_err(|err| err.to_status(id))?
-            .map_err(Status::aborted)?;
+            .map_err(|sync_err| sync_err.to_status(id))?;
 
         // Connect to remote node.
         let address = request
