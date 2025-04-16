@@ -959,7 +959,7 @@ checksum = "60b1af1c220855b6ceac025d3f6ecdd2b7c4894bfe9cd9bda4fbb4bc7c0d4cf0"
 [[package]]
 name = "energon"
 version = "0.0.1"
-source = "git+https://github.com/version513/energon.git?rev=41c0fef#41c0fef181eae9a732765d0486fc776ba8cb7ca2"
+source = "git+https://github.com/version513/energon.git?rev=0202d8b#0202d8b033b83f41ab487a4259b682ae8b0fce22"
 dependencies = [
  "aes-gcm",
  "ark-bls12-381",
@@ -984,6 +984,8 @@ dependencies = [
  "sha2",
  "sha3",
  "thiserror 2.0.11",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -2687,9 +2689,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.43.0"
+version = "1.44.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d61fa4ffa3de412bfea335c6ecff681de2b609ba3c77ef3e00e521813a9ed9e"
+checksum = "e6b88822cbe49de4185e3a4cbf8321dd487cf5fe0c5c65695fef6346371e9c48"
 dependencies = [
  "backtrace",
  "bytes",
