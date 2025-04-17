@@ -17,7 +17,7 @@ use tonic::Status;
 
 pub(super) const ERR_METADATA_IS_MISSING: &str = "metadata is missing";
 // TODO: tls enabled by default, const value will be gated behind default/insecure features.
-pub(super) const URI_SCHEME: &str = "http";
+pub const URI_SCHEME: &str = "http";
 
 /// Implementation of authority component of a URI which is always contain host and port.
 /// For validation rules, see [`Address::precheck`].

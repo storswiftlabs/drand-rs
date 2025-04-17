@@ -1,6 +1,8 @@
 pub mod actions_active;
 pub mod actions_passive;
 pub mod actions_signing;
+#[allow(dead_code)]
+pub mod broadcast;
 pub mod process;
 pub mod state;
 pub mod status;
