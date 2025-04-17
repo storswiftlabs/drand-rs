@@ -63,6 +63,7 @@ impl Broadcast {
             if let Some(uri) = to_uri(&p.address) {
                 let addr = p.address.to_string();
                 let mut rx = self.sender.subscribe();
+                debug!(parent: &self.log, "dkg broadcast: added new address [{addr}]");
 
                 t.spawn(async move {
                     let mut client = DkgPublicClient::new(Channel::builder(uri).connect_lazy());
@@ -72,7 +73,7 @@ impl Broadcast {
                             BroadcastCmd::Stop => break,
                             BroadcastCmd::Packet(packet) => {
                                 if let Err(err) = client.broadcast_dkg(packet).await {
-                                    error!("failed to send dkg packet to {addr}, error: {err}")
+                                    error!("dkg broadcast: failed to send packet to {addr}, error: {err}")
                                 }
                             }
                         }
@@ -85,13 +86,12 @@ impl Broadcast {
             while let Some(bundle) = rx.recv().await {
                 match into_proto(bundle, &self.beacon_id) {
                     Ok(proto) => {
-                        debug!(parent: &self.log,"push ");
                         if self.sender.send(BroadcastCmd::Packet(proto)).is_err() {
-                            error!(parent: &self.log, "BUG: broadcast: failed to send proto bundle, channel is closed")
+                            error!(parent: &self.log, "BUG: dkg broadcast: channel is closed")
                         }
                     }
                     Err(err) => {
-                         error!(parent: &self.log, "broadcast: failed to convert bundle to proto: {err:?}")
+                         error!(parent: &self.log, "BUG: dkg broadcast: failed to convert bundle to proto: {err:?}")
                     }
                 }
             }
