@@ -45,13 +45,10 @@ impl<S: Scheme> ActionsSigning for BeaconProcess<S> {
     type Scheme = S;
 
     async fn verify_msg(&self, gp: &GossipPacket, state: &State<S>) -> Result<(), ActionsError> {
-        debug!(
-            "Verifying DKG packet, beaconID: {}, from: {}",
-            self.id(),
-            gp.metadata.address
-        );
+        debug!(parent: self.log(), "Verifying gossip packet with beaconID: {}, from: {}", 
+               gp.metadata.beacon_id, gp.metadata.address, );
 
-        // Find the participant the signature is allegedly from.
+        // Find the participant signature is allegedly from.
         // Return error if participant is not found in `remaining` or `joining`.
         if let Some(participant) = state
             .joining

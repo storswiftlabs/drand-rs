@@ -27,6 +27,8 @@ use tracing::Span;
 #[derive(Clone)]
 pub(super) enum BroadcastCmd {
     /// Stop broadcast once dkg is finished or aborted.
+    // TODO: abort DKG
+    #[allow(dead_code)]
     Stop,
     /// Packet to broadcast for other nodes
     Packet(DkgPacket),

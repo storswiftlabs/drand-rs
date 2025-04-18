@@ -8,9 +8,9 @@ use super::utils::URI_SCHEME;
 use crate::core::beacon::Actions;
 use crate::core::beacon::BeaconCmd;
 use crate::core::daemon::Daemon;
-use crate::transport::ConvertProto;
-use crate::protobuf::dkg as protobuf;
 
+use crate::protobuf::dkg as protobuf;
+use crate::transport::ConvertProto;
 use protobuf::dkg_public_client::DkgPublicClient as _DkgPublicClient;
 use protobuf::dkg_public_server::DkgPublic;
 use protobuf::DkgPacket;
@@ -27,7 +27,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use http::Uri;
-use tracing::debug;
 
 /// Implementor for [`DkgPublic`] trait for use with DkgPublicServer
 pub struct DkgPublicHandler(Arc<Daemon>);
@@ -45,7 +44,6 @@ impl DkgPublic for DkgPublicHandler {
         request: Request<GossipPacket>,
     ) -> Result<Response<EmptyDkgResponse>, Status> {
         let packet = request.into_inner().validate()?;
-        debug!("received gossip packet: {}", packet.data);
         let id = packet.metadata.beacon_id.clone();
 
         let (tx, rx) = Callback::new();
@@ -64,15 +62,11 @@ impl DkgPublic for DkgPublicHandler {
         &self,
         request: Request<DkgPacket>,
     ) -> Result<Response<EmptyDkgResponse>, Status> {
-        let packet = request.into_inner().validate()?.dkg;
-        debug!("received broadcast: {}", packet.bundle);
-        let id = packet.metadata.beacon_id.as_str();
+        let packet = request.into_inner();
+        let id = &packet.get_id()?;
         let (tx, rx) = Callback::new();
         self.beacons()
-            .cmd(
-                BeaconCmd::DkgActions(Actions::Broadcast(packet.bundle, tx)),
-                id,
-            )
+            .cmd(BeaconCmd::DkgActions(Actions::Broadcast(packet, tx)), id)
             .await
             .map_err(|err| err.to_status(id))?;
         rx.await

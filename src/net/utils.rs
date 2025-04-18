@@ -297,29 +297,7 @@ impl ToStatus for InvalidAddress {
 
 impl ToStatus for ActionsError {
     fn to_status(&self, id: &str) -> Status {
-        match self {
-            ActionsError::DBState(err) => Status::aborted(format!("beacon id '{id}', {err}")),
-            ActionsError::TODO => {
-                Status::failed_precondition(format!("beacon id '{id}', {}", ActionsError::TODO))
-            }
-            ActionsError::DKGStore(err) => Status::aborted(format!("beacon id '{id}', {err}")),
-            ActionsError::GossipSignatureLen => Status::data_loss(format!(
-                "beacon id '{id}', {}",
-                ActionsError::GossipSignatureLen
-            )),
-            ActionsError::MissingParticipant => Status::aborted(format!(
-                "beacon id '{id}', {}",
-                ActionsError::MissingParticipant
-            )),
-            ActionsError::InvalidSignature => Status::aborted(format!(
-                "beacon id '{id}', {}",
-                ActionsError::InvalidSignature
-            )),
-            ActionsError::IntoParticipant => Status::aborted(format!(
-                "beacon id '{id}', {}",
-                ActionsError::IntoParticipant
-            )),
-        }
+        Status::aborted(format!("beacon id '{id}', {self}",))
     }
 }
 

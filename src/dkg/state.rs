@@ -29,7 +29,6 @@ use toml_edit::Table;
 
 use std::str::FromStr;
 use std::time::SystemTime;
-use tracing::debug;
 
 #[derive(thiserror::Error, Debug)]
 pub enum DBStateError {
@@ -131,7 +130,7 @@ pub struct State<S: Scheme> {
     beacon_id: String,
     epoch: u32,
     pub status: Status,
-    threshold: u32,
+    pub threshold: u32,
     timeout: Timestamp,
     genesis_time: Timestamp,
     genesis_seed: Vec<u8>,
@@ -145,8 +144,7 @@ pub struct State<S: Scheme> {
     acceptors: Vec<Participant>,
     rejectors: Vec<Participant>,
 
-    // DEV: it would be nice to move out the generic part
-    final_group: Option<Group<S>>,
+    pub final_group: Option<Group<S>>,
     key_share: Option<Share<S>>,
 }
 
@@ -427,7 +425,6 @@ impl<S: Scheme> State<S> {
         }
 
         let proposed = Self::try_from(terms)?;
-        debug!("received proposal is valid");
         *self = proposed;
 
         Ok(())
@@ -453,7 +450,6 @@ impl<S: Scheme> State<S> {
             // validatePreviousGroupForJoiners
         }
         self.status = Status::Joined;
-        debug!("status changed to Joined");
 
         Ok(())
     }
