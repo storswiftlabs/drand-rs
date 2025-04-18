@@ -1,13 +1,14 @@
 pub mod actions_active;
 pub mod actions_passive;
 pub mod actions_signing;
-#[allow(dead_code)]
 pub mod broadcast;
-pub mod process;
+pub(super) mod execution;
 pub mod state;
 pub mod status;
 pub(super) mod store;
 pub(super) mod utils;
+
+pub use energon::kyber::dkg::Node as DkgNode;
 
 #[derive(thiserror::Error, Debug)]
 pub enum ActionsError {
@@ -23,6 +24,20 @@ pub enum ActionsError {
     GossipSignatureLen,
     #[error("failed to initialize participant")]
     IntoParticipant,
+    #[error("dkg config: failed to create new dkg nodes from participants")]
+    ParticipantsToNewNodes,
+    #[error("dkg protocol error: {0}")]
+    DkgError(energon::kyber::dkg::dkg::DkgError),
+    #[error("dkg protocol is not running")]
+    ProtocolIsNotRunning,
+    #[error("dkg protocol already running")]
+    ProtocolAlreadyRunning,
+    #[error("failed to deserialize bundle from proto")]
+    InvalidProtoBundle,
+    #[error("unknown start execution time - input is not canonical")]
+    StartExecutionTimeNotCanonical,
+    #[error("received start execution time must be in future")]
+    StartExecutionTimeIsPassed,
     #[error("TODO: this dkg action is not implemented yet")]
     TODO,
 }

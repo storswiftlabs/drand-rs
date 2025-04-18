@@ -3,8 +3,9 @@ use super::multibeacon::BeaconHandler;
 
 use crate::dkg::actions_active::ActionsActive;
 use crate::dkg::actions_passive::ActionsPassive;
-use crate::dkg::process::SeenPackets;
+use crate::dkg::execution::ExecuteDkg;
 use crate::dkg::store::DkgStore;
+use crate::dkg::utils::GateKeeper;
 use crate::dkg::ActionsError;
 
 use crate::key::keys::Identity;
@@ -20,7 +21,7 @@ use crate::store::memstore::MemStore;
 use crate::store::ChainStore;
 use crate::store::NewStore;
 
-use crate::protobuf::dkg::packet::Bundle;
+use crate::protobuf::dkg::DkgPacket;
 use crate::protobuf::dkg::DkgStatusResponse;
 use crate::protobuf::drand::ChainInfoPacket;
 use crate::protobuf::drand::IdentityResponse;
@@ -71,20 +72,21 @@ impl BeaconID {
     }
 }
 
-/// Commands for communication between server-side and [`BeaconProcess`]
+/// Commands for communication with [`BeaconProcess`]
 pub enum BeaconCmd {
     Shutdown(Callback<(), ShutdownError>),
     IdentityRequest(Callback<IdentityResponse, PointSerDeError>),
     Sync(Callback<Arc<ChainStore>, SyncError>),
     ChainInfo(Callback<ChainInfoPacket, ChainInfoError>),
     DkgActions(Actions),
+    CompletedDkg,
 }
 
 /// Subcommand for DKG actions [`BeaconCmd::DkgActions`]
 pub enum Actions {
     Gossip(GossipPacket, Callback<(), ActionsError>),
     Command(Command, Callback<(), ActionsError>),
-    Broadcast(Bundle, Callback<(), ActionsError>),
+    Broadcast(DkgPacket, Callback<(), ActionsError>),
     Status(Callback<DkgStatusResponse, ActionsError>),
 }
 
@@ -99,11 +101,17 @@ pub struct BeaconProcess<S: Scheme> {
     chain_handler: ChainHandler,
     chain_store: Arc<MemStore>,
     dkg_store: DkgStore,
+    cmd_sender: mpsc::Sender<BeaconCmd>,
     log: Span,
 }
 
 impl<S: Scheme> BeaconProcess<S> {
-    fn new(fs: FileStore, pair: PairToml, id: &str) -> Result<Self, FileStoreError> {
+    fn new(
+        fs: FileStore,
+        pair: PairToml,
+        id: &str,
+        tx: mpsc::Sender<BeaconCmd>,
+    ) -> Result<Self, FileStoreError> {
         let keypair: Pair<S> = Toml::toml_decode(&pair).ok_or(FileStoreError::TomlError)?;
 
         let chain_handler = ChainHandler::try_init(&fs, id)?;
@@ -117,6 +125,7 @@ impl<S: Scheme> BeaconProcess<S> {
         if is_fresh {
             info!(parent: &log, "beacon id [{id}]: will run as fresh install -> expect to run DKG.");
         }
+
         let process = Self {
             beacon_id: BeaconID::new(id),
             fs,
@@ -125,6 +134,7 @@ impl<S: Scheme> BeaconProcess<S> {
             keypair,
             tracker: TaskTracker::new(),
             dkg_store,
+            cmd_sender: tx,
             log,
         };
 
@@ -132,19 +142,20 @@ impl<S: Scheme> BeaconProcess<S> {
     }
 
     pub fn run(fs: FileStore, pair: PairToml, id: &str) -> Result<BeaconHandler, FileStoreError> {
-        let bp = Self::new(fs, pair, id)?;
-        let tracker = bp.tracker().to_owned();
         let (tx, mut rx) = mpsc::channel::<BeaconCmd>(1);
+        let bp = Self::new(fs, pair, id, tx.clone())?;
+        let tracker = bp.tracker().clone();
 
         tracker.spawn(async move {
-            let mut seen = SeenPackets::default();
+            let mut gk = GateKeeper::new(bp.log());
 
             while let Some(cmd) = rx.recv().await {
                 match cmd {
                     BeaconCmd::IdentityRequest(cb) => cb.reply(bp.identity().try_into()),
                     BeaconCmd::Sync(cb) => cb.reply(bp.sync()),
                     BeaconCmd::ChainInfo(cb) => cb.reply(bp.chain_info()),
-                    BeaconCmd::DkgActions(action) => bp.handle_actions(action, &mut seen).await,
+                    BeaconCmd::DkgActions(action) => bp.dkg_actions(action, &mut gk).await,
+                    BeaconCmd::CompletedDkg => bp.completed_dkg(&mut gk).await,
                     BeaconCmd::Shutdown(cb) => {
                         cb.reply(bp.shutdown());
                         break;
@@ -160,15 +171,38 @@ impl<S: Scheme> BeaconProcess<S> {
         })
     }
 
-    async fn handle_actions(&self, request: Actions, seen: &mut SeenPackets) {
+    async fn dkg_actions(&self, request: Actions, gk: &mut GateKeeper<S>) {
         match request {
-            Actions::Status(callback) => callback.reply(self.dkg_status()),
-            Actions::Command(cmd, callback) => callback.reply(self.command(cmd).await),
-            Actions::Gossip(packet, callback) => callback.reply(self.packet(packet, seen).await),
-            Actions::Broadcast(bundle, callback) => {
-                callback.reply(todo_request(&bundle.to_string()))
-            }
+            Actions::Status(cb) => cb.reply(self.dkg_status()),
+            Actions::Command(cmd, cb) => cb.reply(self.command(cmd).await),
+            Actions::Broadcast(packet, cb) => cb.reply(gk.broadcast(packet).await),
+            Actions::Gossip(packet, cb) => cb.reply(self.gossip(gk, packet).await),
         }
+    }
+
+    async fn gossip(
+        &self,
+        gk: &mut GateKeeper<S>,
+        packet: GossipPacket,
+    ) -> Result<(), ActionsError> {
+        // ignore duplicated or incorrect packets
+        if !gk.is_new_packet(&packet) {
+            return Ok(());
+        }
+
+        match self.packet(packet).await {
+            Ok(Some(start_execution_time)) => self.setup_dkg(start_execution_time, gk).await,
+            Ok(None) => Ok(()),
+            Err(err) => Err(err),
+        }
+    }
+
+    async fn completed_dkg(&self, gk: &mut GateKeeper<S>) {
+        gk.set_empty();
+
+        /* Handle completed dkg.
+           ..
+        */
     }
 
     fn shutdown(&self) -> Result<(), ShutdownError> {
@@ -200,6 +234,13 @@ impl<S: Scheme> BeaconProcess<S> {
             .map_err(|_| ActionsError::IntoParticipant)
     }
 
+    /// A signal from protocol task that DKG finished succesfully
+    pub async fn dkg_is_completed(&self) {
+        if self.cmd_sender.send(BeaconCmd::CompletedDkg).await.is_err() {
+            error!(parent: self.log(), "BeaconProcess receiver closed unexpectedly")
+        }
+    }
+
     pub fn tracker(&self) -> &TaskTracker {
         &self.tracker
     }
@@ -214,6 +255,10 @@ impl<S: Scheme> BeaconProcess<S> {
 
     pub fn dkg_store(&self) -> &DkgStore {
         &self.dkg_store
+    }
+
+    pub fn private_key(&self) -> &S::Scalar {
+        self.keypair.private_key()
     }
 
     /// Returns public identity for BeaconID

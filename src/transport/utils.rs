@@ -71,6 +71,7 @@ mod proto_impl {
     use super::super::drand::GroupPacket;
     use crate::net::utils::Address;
     use crate::net::utils::Seconds;
+    use crate::protobuf::dkg::DkgPacket;
     use crate::protobuf::drand::ChainInfoPacket;
     use crate::protobuf::drand::Metadata;
     use crate::transport::dkg::Bundle;
@@ -80,6 +81,7 @@ mod proto_impl {
     use crate::transport::drand::Node;
 
     use crev_common::blake2b256;
+    use prost_types::Timestamp;
     use sha2::Digest;
     use sha2::Sha256;
     use std::fmt;
@@ -230,6 +232,31 @@ mod proto_impl {
             }
 
             h.finalize().into()
+        }
+    }
+
+    impl DkgPacket {
+        pub fn get_id(&self) -> Result<String, tonic::Status> {
+            self.dkg
+                .as_ref()
+                .and_then(|p| p.metadata.as_ref())
+                .map(|m| m.beacon_id.clone())
+                .ok_or_else(|| {
+                    tonic::Status::data_loss("could not find packet metadata to read beaconID")
+                })
+        }
+
+        pub fn get_bundle(&self) -> Option<&Bundle> {
+            self.dkg.as_ref().and_then(|p| p.bundle.as_ref())
+        }
+    }
+
+    impl GossipData {
+        pub fn get_execute(&self) -> Option<Timestamp> {
+            match self {
+                GossipData::Execute(execute) => Some(execute.time.to_owned()),
+                _ => None,
+            }
         }
     }
 

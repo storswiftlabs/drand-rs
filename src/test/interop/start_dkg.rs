@@ -7,7 +7,8 @@
 //! [x] 3. Verify the status-rs is changed into Proposed.
 //! [x] 4. Join the dkg from node-rs and verify status-rs to be Joined.
 //! [x] 5. Execute the dkg from node-go, verify status-rs to be Executing.
-//! [x] 6. Shutdown nodes
+//! [x] 6. Verify the status-go is changed into Complete.
+//! [x] 7. Shutdown nodes
 //! [ ] Finish
 //! [ ] Finish for all supported schemes
 //!
@@ -89,6 +90,13 @@ async fn initial_dkg() {
     // DKG statuses should match the expected.
     assert_status(control_go, beacon_id, Status::Executing).await;
     assert_status(control_rs, beacon_id, Status::Executing).await;
+
+    //_______ [x] 6. Verify the status-go is changed into Complete.
+    //
+    // Give protocol some time to finish, (fast sync is always true).
+    sleep(Duration::from_secs(10)).await;
+    // Verify the status node-go.
+    assert_status(control_go, beacon_id, Status::Complete).await;
 
     //_______ [x] 6. Shutdown nodes
     //

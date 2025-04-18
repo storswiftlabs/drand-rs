@@ -7,8 +7,9 @@ use tracing_subscriber::EnvFilter;
 
 pub fn init_log(verbose: bool) -> anyhow::Result<()> {
     let filter = EnvFilter::builder().parse_lossy(match verbose {
-        true => "drand=debug",
-        false => "drand=info",
+        true => "drand=debug,energon=debug",
+        // protocol always running at debug level
+        false => "drand=info,energon=debug",
     });
 
     let layer = tracing_subscriber::fmt::layer()
