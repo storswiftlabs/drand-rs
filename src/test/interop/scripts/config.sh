@@ -6,13 +6,10 @@
 DRAND="$PWD/src/test/interop/drand"
 
 # Absolute path to base folder
-BASE="$PWD/src/test/interop/drand_test"
+BASE="$PWD/src/test/interop/drand_go"
 
-# Control port
+# Node-go control port
 CONTROL="55555"
 
-# Node-go address
+# Node-go private-listen
 ADDRESS="127.0.0.1:11111"
-
-# Node-rs address
-ADDRESS_RS="127.0.0.1:22222"

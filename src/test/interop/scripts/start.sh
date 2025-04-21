@@ -4,6 +4,8 @@ source $PWD/src/test/interop/scripts/config.sh
 $DRAND generate-keypair \
 --folder $BASE \
 --control $CONTROL \
+--id AAA \
+--scheme pedersen-bls-chained \
 $ADDRESS > /dev/null 2>&1
 
 $DRAND start --folder $BASE  \

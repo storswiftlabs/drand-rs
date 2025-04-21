@@ -3,7 +3,7 @@ use crate::net::control::ControlClient;
 use crate::net::protocol::ProtocolClient;
 use crate::net::public::PublicClient;
 use crate::net::utils::Address;
-use crate::test::utils::TestConfig;
+use crate::test::helpers::TestConfig;
 
 // To be extended
 #[tokio::test]
@@ -19,12 +19,12 @@ async fn basic_rpc() {
     // #Case: Generate keypair and start node
     //
     // 1. Generate keypair for id_a
-    let mut keygen = base_config.keygen_config();
+    let mut keygen = base_config.keygen();
     keygen.id = id_a.into();
     assert!(CLI::keygen(keygen.clone()).run().await.is_ok());
     // 2. Starting node should load id_a or fail. Empty daemon is not allowed
     base_config.id = None;
-    let (_fs_guard, config) = base_config.start_drand_node().await;
+    let (_fs_guard, config) = base_config.start_node().await;
     let node_address = Address::precheck(&config.private_listen).unwrap();
 
     // #Case: Load keypair into runninig node

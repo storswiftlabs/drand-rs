@@ -1,34 +1,32 @@
-//! DEV Roadmap
-//! Completed steps are placed in test [self::initial_dkg]
-//! [x] 1. Start golang and rust node with default keypair scheme.
+//! This module includes a roadmap that is executing in [`initial_dkg_n_nodes`] test.
 //!
-//!  ## DKG
-//! [x] 2. Initiate dkg from node-go.
-//! [x] 3. Verify the status-rs is changed into Proposed.
-//! [x] 4. Join the dkg from node-rs and verify status-rs to be Joined.
-//! [x] 5. Execute the dkg from node-go, verify status-rs to be Executing.
-//! [x] 6. Verify the status-go is changed into Complete.
-//! [x] 7. Shutdown nodes
-//! [ ] Finish
-//! [ ] Finish for all supported schemes
+//!
+//! ## KEYGEN & START
+//! [x] 1. Generate keypairs and start one node-go and (N=10) nodes-rs with default keypair scheme.
+//!
+//! ## INITIAL DKG
+//! [x] 2. Initiate dkg from node-go. Verify the status-rs is changed into Proposed.
+//! [x] 3. Join the dkg from nodes-rs. Verify statuses-rs to be Joined.
+//! [x] 4. Execute the dkg from node-go. Verify statuses-rs to be Executing.
+//! [x] 5. Verify status-go is changed into Complete.
+//! [x] 6. Cleanup all nodes filesystem & shutdown.
+//! [ ] Finish.
+//! [ ] Finish for all supported schemes.
+//!
+//! ## RESHAPE
+//! [ ] Group is same
+//! [ ] Group is different: joining/leaving, threshold.
 //!
 //! ## BEACON
 //! [ ] Generation for default scheme
 //! [ ] Generation for all supported schemes
-//!
-//! ## REPEAT
-//! [ ] Repeat above for group sizes > 2
 
-use crate::cli::CLI;
 use crate::dkg::status::Status;
-use crate::net::dkg_control::DkgControlClient;
-use crate::test::utils::TestConfig;
-
-use async_std::process;
+use crate::test::helpers::*;
 use std::time::Duration;
 use tokio::time::sleep;
 
-// #Scripts to iteract with Drand golang implementation
+// # Scripts to iteract with Drand-go implementation
 //
 /// Start node
 const START: &str = "src/test/interop/scripts/start.sh";
@@ -38,111 +36,73 @@ const PROPOSAL: &str = "src/test/interop/scripts/gen_proposal.sh";
 const INIT_DKG: &str = "src/test/interop/scripts/init_dkg.sh";
 /// Execute dkg
 const EXECUTE: &str = "src/test/interop/scripts/execute.sh";
-/// Stop node and remove base folder
+/// Stop daemon & cleanup
 const STOP: &str = "src/test/interop/scripts/stop.sh";
 
 #[tokio::test]
-async fn initial_dkg() {
-    // Uncomment for logs
+async fn initial_dkg_n_nodes() {
+    // uncomment for logs
     // crate::log::init_log(true).unwrap();
 
-    let control_rs = "8888";
+    // group size: 1 Leader-go + 10 members-rs = 11 nodes
+    let nodes_rs = 10;
     let control_go = "55555";
-    let address_rs = "127.0.0.1:22222";
-    let beacon_id = "default";
-    let base_config = TestConfig::new(control_rs, address_rs).await;
+    let beacon_id = "AAA";
+    let scheme = "pedersen-bls-chained";
 
-    //_______ [x] 1. Start golang and rust node with default keypair scheme.
+    // [1] Generate keypairs and start one node-go and (N=10) nodes-rs with default keypair scheme.
     //
-    // Generate keypair and start node-rs
-    assert!(CLI::keygen(base_config.keygen_config()).run().await.is_ok());
-    let (_fs_guard, config) = base_config.start_drand_node().await;
-    //
-    // Dkg status for node-rs should be Fresh
-    assert_status(&config.control, beacon_id, Status::Fresh).await;
-    //
-    // Generate keypair and start node-go.
-    // Note: Seems no straightforward way to _await_ that daemon
-    //       is fully loaded in the background process.
-    //       The current approach is to use a simple 1-second sleep to account
-    //       slower CI/CD pipelines.
+    // GOLANG
     cmd_golang(START).await;
+    // sleep 1sec to account slow CI/CD pipelines
     sleep(Duration::from_secs(1)).await;
+    // RUST
+    let nodes = Nodes::generate(nodes_rs, scheme, beacon_id).await;
+    // Dkg status should be Fresh
+    nodes.assert_statuses(Status::Fresh, None).await;
 
-    //_______ [x] 2. Initiate dkg from node-go.
+    // [2] Initiate dkg from node-go. Verify the status-rs is changed into Proposed.
     //
-    // Generate proposal and initiate DKG.
-    cmd_golang(PROPOSAL).await;
+    // GOLANG
+    cmd_golang_args(PROPOSAL, nodes.get_addresses()).await;
     cmd_golang(INIT_DKG).await;
+    assert_statuses(control_go, beacon_id, Status::Proposing, None).await;
+    // RUST
+    nodes.assert_statuses(Status::Proposed, None).await;
 
-    //_______ [x] 3. Verify the status-rs is changed into Proposed.
+    // [3] Join the dkg from nodes-rs. Verify statuses-rs to be Joined.
     //
-    // DKG statuses should match the expected.
-    assert_status(control_go, beacon_id, Status::Proposing).await;
-    assert_status(control_rs, beacon_id, Status::Proposed).await;
+    // RUST
+    nodes.dkg_join().await;
+    nodes.assert_statuses(Status::Joined, None).await;
 
-    //_______ [x] 4. Join the dkg from node-rs and verify status-rs to be Joined.
-    assert!(CLI::dkg_join(control_rs, beacon_id).run().await.is_ok());
-    assert_status(control_rs, beacon_id, Status::Joined).await;
-
-    //_______ [x] 5. Execute the dkg from node-go.
+    // [4] Execute the dkg from node-go. Verify statuses-rs to be Executing.
+    //
+    // GOLANG
     cmd_golang(EXECUTE).await;
-    // DKG statuses should match the expected.
-    assert_status(control_go, beacon_id, Status::Executing).await;
-    assert_status(control_rs, beacon_id, Status::Executing).await;
+    assert_statuses(control_go, beacon_id, Status::Executing, None).await;
+    // RUST
+    nodes.assert_statuses(Status::Executing, None).await;
 
-    //_______ [x] 6. Verify the status-go is changed into Complete.
+    // [5] Verify status-go is changed into Complete.
     //
-    // Give protocol some time to finish, (fast sync is always true).
+    // Give protocol the time to finish, (fastsync is always true)
     sleep(Duration::from_secs(10)).await;
-    // Verify the status node-go.
-    assert_status(control_go, beacon_id, Status::Complete).await;
+    // GOLANG
+    assert_statuses(
+        control_go,
+        beacon_id,
+        // current
+        Status::Complete,
+        // finished
+        Some(Status::Complete),
+    )
+    .await;
 
-    //_______ [x] 6. Shutdown nodes
+    // [6] Cleanup all nodes filesystem & shutdown.
     //
-    // Stop drand-go & cleanup
+    // GOLANG
     cmd_golang(STOP).await;
-    // Stop drand-rs
-    assert!(CLI::stop(control_rs, None).run().await.is_ok());
-}
-
-/// Asserts that _current_ DKG status is expected
-///
-/// # Arguments
-///
-///  * `port` - Node control port
-///  * `id` - ID of beacon process
-///  * `expected` - Status of the DKG state machine.
-async fn assert_status(port: &str, id: &str, expected: Status) {
-    let mut client = DkgControlClient::new(port)
-        .await
-        .expect("connection: dkg_control service should be reachable");
-
-    let current = client
-        .dkg_status(id)
-        .await
-        .expect("rpc Status should not fail")
-        .current
-        .expect("current dkg state should not be empty")
-        .state;
-
-    assert_eq!(current, expected as u32,);
-}
-
-/// A helper to run cli for Drand golang implementation
-async fn cmd_golang(script: &str) {
-    let output = match process::Command::new("/bin/bash")
-        .args(["-c", script])
-        .spawn()
-    {
-        Ok(mut cmd) => cmd.status().await.unwrap(),
-        Err(err) => panic!("failed to spawn cmd {}, error: {}", script, err),
-    };
-
-    if !output.success() {
-        panic!(
-            "failed to execute script: {script}, code: {:?}",
-            output.code()
-        )
-    }
+    // RUST
+    nodes.stop_daemon().await
 }
