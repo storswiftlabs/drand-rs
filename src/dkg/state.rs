@@ -187,7 +187,7 @@ impl<S: Scheme> Toml for State<S> {
 
         let mut doc = Self::Inner::new();
         doc.insert("BeaconID", self.beacon_id.as_str().into());
-        doc.insert("State", (self.status as i64).into());
+        doc.insert("State", self.status.to_string().into());
 
         // Do not store default values at Fresh state. Decoding is simplified accordingly.
         if self.status == Status::Fresh {
@@ -237,7 +237,7 @@ impl<S: Scheme> Toml for State<S> {
         }
 
         let beacon_id = table.get("BeaconID")?.as_str()?;
-        let state = Status::try_from(table.get("State")?.as_integer()? as u32).ok()?;
+        let state = Status::from_str(table.get("State")?.as_str()?).ok()?;
         if state == Status::Fresh {
             // Other values are default.
             return Some(Self::fresh(beacon_id));
