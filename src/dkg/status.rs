@@ -1,4 +1,5 @@
 use tracing::error;
+use std::str::FromStr;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 #[repr(u8)]
@@ -118,5 +119,28 @@ impl Status {
 impl std::fmt::Display for Status {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{self:?}")
+    }
+}
+
+impl FromStr for Status {
+    // Error type: this implementation used ONLY to decode State TOML representation, where Status encoded as String for readability.
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Fresh" => Ok(Status::Fresh),
+            "Proposed" => Ok(Status::Proposed),
+            "Proposing" => Ok(Status::Proposing),
+            "Accepted" => Ok(Status::Accepted),
+            "Rejected" => Ok(Status::Rejected),
+            "Aborted" => Ok(Status::Aborted),
+            "Executing" => Ok(Status::Executing),
+            "Complete" => Ok(Status::Complete),
+            "TimedOut" => Ok(Status::TimedOut),
+            "Joined" => Ok(Status::Joined),
+            "Left" => Ok(Status::Left),
+            "Failed" => Ok(Status::Failed),
+            _ => Err(()),
+        }
     }
 }
