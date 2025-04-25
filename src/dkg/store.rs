@@ -106,12 +106,28 @@ impl DkgStore {
     }
 
     pub(super) fn save_current<S: Scheme>(&self, state: &State<S>) -> Result<(), DkgStoreError> {
-        self.save(CURRENT_FILE, state)
+        let toml = state
+            .toml_encode()
+            .ok_or(DkgStoreError::TomlError)?
+            .to_string();
+
+        self.save(CURRENT_FILE, &toml)?;
+
+        Ok(())
     }
 
     #[allow(dead_code)]
+    /// Finished state is a new state for current and finished.
     pub(super) fn save_finished<S: Scheme>(&self, state: &State<S>) -> Result<(), DkgStoreError> {
-        self.save(FINISHED_FILE, state)
+        let toml = state
+            .toml_encode()
+            .ok_or(DkgStoreError::TomlError)?
+            .to_string();
+
+        self.save(FINISHED_FILE, &toml)?;
+        self.save(CURRENT_FILE, &toml)?;
+
+        Ok(())
     }
 
     fn get<S: Scheme>(&self, kind: &str) -> Result<State<S>, DkgStoreError> {
@@ -130,11 +146,10 @@ impl DkgStore {
         Ok(state)
     }
 
-    fn save<S: Scheme>(&self, kind: &str, state: &State<S>) -> Result<(), DkgStoreError> {
+    fn save(&self, kind: &str, toml: &str) -> Result<(), DkgStoreError> {
         if !self.path.exists() {
             return Err(DkgStoreError::NotFound);
         }
-        let toml = state.toml_encode().ok_or(DkgStoreError::TomlError)?;
         let path_to_file = self.path.join(kind);
         let is_new_file = !path_to_file.exists();
 
@@ -143,9 +158,7 @@ impl DkgStore {
             f.set_permissions(Permissions::from_mode(FILE_PERM))
                 .map_err(DkgStoreError::Permission)?;
         }
-
-        f.write_all(toml.to_string().as_bytes())
-            .map_err(DkgStoreError::Write)?;
+        f.write_all(toml.as_bytes()).map_err(DkgStoreError::Write)?;
 
         Ok(())
     }
