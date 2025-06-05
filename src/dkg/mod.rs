@@ -27,7 +27,7 @@ pub enum ActionsError {
     #[error("dkg config: failed to create new dkg nodes from participants")]
     ParticipantsToNewNodes,
     #[error("dkg protocol error: {0}")]
-    DkgError(energon::kyber::dkg::dkg::DkgError),
+    DkgError(energon::kyber::dkg::DkgError),
     #[error("dkg protocol is not running")]
     ProtocolIsNotRunning,
     #[error("dkg protocol already running")]
@@ -38,6 +38,14 @@ pub enum ActionsError {
     StartExecutionTimeNotCanonical,
     #[error("received start execution time must be in future")]
     StartExecutionTimeIsPassed,
+    #[error("group file required to join after the first epoch")]
+    GroupfileIsMissing,
+    #[error("failed to parse group file to join after the first epoch")]
+    GroupFileParse,
+    #[error("reshare: previous group can not be empty")]
+    ResharePrevGroupRequired,
+    #[error("reshare: previous share can not be empty")]
+    ResharePrevShareRequired,
     #[error("TODO: this dkg action is not implemented yet")]
     TODO,
 }

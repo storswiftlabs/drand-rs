@@ -1,7 +1,11 @@
 use super::keys::DistPublic;
+use super::Hash;
+use super::PointSerDeError;
 use super::Scheme;
 use crate::key::node::Node;
 use crate::net::utils::Seconds;
+use energon::traits::Affine;
+use sha2::Digest;
 
 /// Group holds all information about a group of drand nodes.
 #[derive(Debug, Default, PartialEq)]
@@ -61,6 +65,53 @@ impl<S: Scheme> Group<S> {
 
     pub fn nodes(&self) -> &[Node<S>] {
         &self.nodes
+    }
+}
+
+impl<S: Scheme> Hash for Group<S> {
+    type Hasher = crev_common::Blake2b256;
+
+    fn hash(&self) -> Result<[u8; 32], PointSerDeError> {
+        // TODO(L): impl Hash for Node<S> and DistPublic<S>
+        let mut h = Self::Hasher::new();
+
+        for node in self.nodes.iter() {
+            h.update({
+                let mut hh = Self::Hasher::new();
+                hh.update(node.index().to_le_bytes());
+                hh.update(
+                    node.public()
+                        .key()
+                        .serialize()
+                        .map_err(PointSerDeError::KeyPoint)?,
+                );
+                hh.finalize().as_slice()
+            })
+        }
+
+        h.update(self.threshold.to_le_bytes());
+        h.update(self.genesis_time.to_le_bytes());
+
+        if self.transition_time != 0 {
+            h.update(self.transition_time.to_le_bytes());
+        }
+
+        if !self.dist_key.commits().is_empty() {
+            h.update({
+                let mut hh = Self::Hasher::new();
+                for commit in self.dist_key.commits() {
+                    let bytes = commit.serialize().map_err(PointSerDeError::KeyPoint)?;
+                    hh.update(bytes)
+                }
+                hh.finalize().as_slice()
+            })
+        }
+
+        if !crate::core::beacon::is_default_beacon_id(&self.beacon_id) {
+            h.update(self.beacon_id.as_bytes())
+        }
+
+        Ok(h.finalize().into())
     }
 }
 

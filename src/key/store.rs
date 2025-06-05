@@ -1,10 +1,10 @@
 use super::group::Group;
 use super::keys::Pair;
-use super::keys::Share;
 use super::toml::PairToml;
 use super::toml::Toml;
 use super::Scheme;
 
+use energon::kyber::dkg::DistKeyShare;
 use std::fs::File;
 use std::fs::Permissions;
 use std::io::Write;
@@ -180,7 +180,7 @@ impl FileStore {
         Ok(group)
     }
 
-    pub fn save_share<S: Scheme>(&self, share: &Share<S>) -> Result<(), FileStoreError> {
+    pub fn save_share<S: Scheme>(&self, share: &DistKeyShare<S>) -> Result<(), FileStoreError> {
         let share_toml = share.toml_encode().ok_or(FileStoreError::TomlError)?;
         let mut f = File::create(self.private_share_file())?;
         f.set_permissions(Permissions::from_mode(PRIVATE_PERM))?;
@@ -199,7 +199,7 @@ impl FileStore {
         Ok(pair_toml)
     }
 
-    pub fn load_share<S: Scheme>(&self) -> Result<Share<S>, FileStoreError> {
+    pub fn load_share<S: Scheme>(&self) -> Result<DistKeyShare<S>, FileStoreError> {
         let share_str = std::fs::read_to_string(self.private_share_file())?;
         Toml::toml_decode(&share_str.parse().map_err(|_| FileStoreError::TomlError)?)
             .ok_or(FileStoreError::TomlError)
@@ -238,11 +238,11 @@ impl FileStore {
         self.beacon_path.join(KEY_DIR).join(PUBLIC_ID_FILE)
     }
 
-    fn group_file(&self) -> PathBuf {
+    pub fn group_file(&self) -> PathBuf {
         self.beacon_path.join(GROUP_DIR).join(GROUP_FILE)
     }
 
-    fn private_share_file(&self) -> PathBuf {
+    pub fn private_share_file(&self) -> PathBuf {
         self.beacon_path.join(GROUP_DIR).join(PRIVATE_SHARE_FILE)
     }
 
@@ -302,7 +302,7 @@ mod tests {
         let store = FileStore::new_checked(base_path.as_str(), "some_id").unwrap();
         let address = Address::default();
         let pair: Pair<DefaultScheme> = Pair::generate(address).unwrap();
-        let share = Share::<DefaultScheme>::default();
+        let share = DistKeyShare::<DefaultScheme>::default();
         store.save_key_pair(&pair).unwrap();
         store.save_share(&share).unwrap();
 
@@ -316,7 +316,7 @@ mod tests {
         assert_perm(base_path.as_str().into(), DIR_PERM);
 
         // Load back the share and pair
-        let loaded_share: Share<DefaultScheme> = store.load_share().unwrap();
+        let loaded_share: DistKeyShare<DefaultScheme> = store.load_share().unwrap();
         let pair_toml = store.load_key_pair_toml().unwrap();
         let loaded_pair: Pair<DefaultScheme> = Toml::toml_decode(&pair_toml).unwrap();
 

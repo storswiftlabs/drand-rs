@@ -8,6 +8,7 @@ use super::Scheme;
 use crate::net::utils::Address;
 use crate::net::utils::Seconds;
 
+use energon::kyber::dkg::DistKeyShare;
 use energon::kyber::poly::PriShare;
 use energon::traits::Affine;
 use energon::traits::ScalarField;
@@ -227,6 +228,45 @@ impl<S: Scheme> Toml for Group<S> {
             nodes,
             dist_key,
         ))
+    }
+}
+
+impl<S: Scheme> Toml for DistKeyShare<S> {
+    type Inner = DocumentMut;
+
+    fn toml_encode(&self) -> Option<Self::Inner> {
+        let share_bytes = self.pri_share.value().to_bytes_be().ok()?;
+
+        let mut commits = Array::new();
+        for commit in self.commits.iter() {
+            commits.push(Value::from(hex::encode(commit.serialize().ok()?)))
+        }
+
+        let mut table = Self::Inner::new();
+        let _ = table.insert("Index", (self.pri_share.index() as i64).into());
+        let _ = table.insert("Share", hex::encode(share_bytes).into());
+        let _ = table.insert("Commits", commits.into());
+        let _ = table.insert("SchemeName", S::ID.into());
+
+        Some(table)
+    }
+
+    fn toml_decode(table: &Self::Inner) -> Option<Self> {
+        if S::ID != table.get("SchemeName")?.as_str()? {
+            return None;
+        }
+        let index = table.get("Index")?.as_integer()? as u32;
+        let private_key_bytes = hex::decode(table.get("Share")?.as_str()?).ok()?;
+        let private_key = ScalarField::from_bytes_be(&private_key_bytes).ok()?;
+        let pri_share = PriShare::new(index, private_key);
+
+        let commits_array = table.get("Commits")?.as_array()?;
+        let mut commits = Vec::with_capacity(commits_array.len());
+        for commit in commits_array.iter() {
+            commits.push(Affine::deserialize(&hex::decode(commit.as_str()?).ok()?).ok()?)
+        }
+
+        Some(Self { commits, pri_share })
     }
 }
 

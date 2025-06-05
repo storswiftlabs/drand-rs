@@ -94,6 +94,17 @@ pub enum Dkg {
         /// Indicates the id for the randomness generation process which will be started
         #[arg(long)]
         id: String,
+        /// Absolute path to the group file of previous epoch
+        #[arg(long, default_value = None)]
+        group: Option<String>,
+    },
+    Accept {
+        /// Set the port you want to listen to for control port commands. If not specified, we will use the default value.
+        #[arg(long, default_value = control::DEFAULT_CONTROL_PORT)]
+        control: String,
+        /// Indicates the id for the randomness generation process which will be started
+        #[arg(long)]
+        id: String,
     },
 }
 
@@ -107,7 +118,7 @@ pub struct CLI {
     pub commands: Cmd,
 }
 
-#[derive(Debug, Parser, Clone)] //TODO: mv Clone to tests
+#[derive(Debug, Parser, Clone)]
 pub enum Cmd {
     GenerateKeypair(KeyGenConfig),
     Start(Config),
@@ -147,7 +158,10 @@ impl CLI {
             Cmd::Stop { control, id } => stop_cmd(&control, id.as_deref()).await?,
             Cmd::Sync(config) => sync_cmd(config).await?,
             Cmd::Dkg(dkg) => match dkg {
-                Dkg::Join { control, id } => join_cmd(&control, &id).await?,
+                Dkg::Join { control, id, group } => {
+                    join_cmd(&control, &id, group.as_deref()).await?
+                }
+                Dkg::Accept { control, id } => accept_cmd(&control, &id).await?,
             },
         }
 
@@ -251,9 +265,16 @@ async fn sync_cmd(config: SyncConfig) -> Result<()> {
     Ok(())
 }
 
-async fn join_cmd(control_port: &str, beacon_id: &str) -> Result<()> {
+async fn join_cmd(control_port: &str, beacon_id: &str, groupfile_path: Option<&str>) -> Result<()> {
     let mut client = DkgControlClient::new(control_port).await?;
-    client.dkg_join(beacon_id).await?;
+    client.dkg_join(beacon_id, groupfile_path).await?;
+
+    Ok(())
+}
+
+async fn accept_cmd(control_port: &str, beacon_id: &str) -> Result<()> {
+    let mut client = DkgControlClient::new(control_port).await?;
+    client.dkg_accept(beacon_id).await?;
 
     Ok(())
 }

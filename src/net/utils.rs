@@ -71,7 +71,7 @@ const VERSION: NodeVersion = NodeVersion {
     prerelease: String::new(),
 };
 
-#[derive(Debug, Default, PartialEq, Clone)]
+#[derive(Debug, Default, PartialEq, Copy, Clone)]
 pub struct Seconds {
     value: u32,
 }

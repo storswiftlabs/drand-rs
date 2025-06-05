@@ -1,4 +1,3 @@
-use tracing::error;
 use std::str::FromStr;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -84,7 +83,7 @@ impl Status {
         let is_valid = match self {
             Fresh => matches!(next, Proposing | Proposed),
             Joined => matches!(next, Left | Executing | Aborted | TimedOut),
-            Proposing => matches!(next, Executing | Aborted | TimedOut),            
+            Proposing => matches!(next, Executing | Aborted | TimedOut),
             Proposed => matches!(next, Accepted | Rejected | Joined | Left | Aborted | TimedOut),
             Accepted => matches!(next, Executing | Aborted | TimedOut),
             Rejected => matches!(next, Aborted | TimedOut),
@@ -109,10 +108,7 @@ impl Status {
     }
 
     pub fn is_terminal(&self) -> bool {
-        matches!(
-            self,
-            Status::Aborted | Status::TimedOut | Status::Failed
-        )
+        matches!(self, Status::Aborted | Status::TimedOut | Status::Failed)
     }
 }
 

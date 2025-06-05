@@ -9,13 +9,12 @@ use crate::protobuf::dkg::DkgPacket;
 use crate::transport::dkg::GossipPacket;
 use crate::transport::dkg::Participant;
 
-use energon::kyber::dkg::protocol::Bundle;
-use energon::kyber::dkg::BundleReceiver;
+use energon::kyber::dkg::Bundle;
 use energon::kyber::dkg::BundleSender;
 use energon::traits::Affine;
+use tracing::trace;
 
 use std::collections::HashSet;
-use tokio::sync::mpsc;
 use tracing::debug;
 use tracing::Span;
 
@@ -58,25 +57,19 @@ impl<S: Scheme> GateKeeper<S> {
     }
 
     /// The channel exist only within DKG execution stage, see [super::execution::ExecuteDkg]
-    pub fn create_channel(&mut self) -> Result<BundleReceiver<S>, ActionsError> {
+    pub fn open_gate(&mut self, tx: BundleSender<S>) -> Result<(), ActionsError> {
         if self.bundle_sender.is_some() {
             Err(ActionsError::ProtocolAlreadyRunning)
         } else {
-            let (tx, rx) = mpsc::channel(1);
             self.bundle_sender = Some(tx);
 
-            Ok(rx)
+            Ok(())
         }
     }
 
     /// Resets keeper into empty state.
     pub fn set_empty(&mut self) {
         self.seen_gossip.clear();
-
-        assert!(
-            self.bundle_sender.is_some(),
-            "gate keeper: sender is missing"
-        );
         self.bundle_sender = None
     }
 
@@ -87,7 +80,7 @@ impl<S: Scheme> GateKeeper<S> {
 
         if let Some(short_sig) = sig_hex.get(..SHORT_SIG_LEN) {
             if self.seen_gossip.contains(&sig_hex) {
-                debug!(parent: &self.log, "gatekeeper: ignoring duplicate gossip packet, type: {} sig: {short_sig}", p.data);
+                trace!(parent: &self.log, "gatekeeper: ignoring duplicate gossip packet, type: {} sig: {short_sig}, from: {}", p.data, p.metadata.address);
             } else {
                 debug!(parent: &self.log, "gatekeeper: processing DKG gossip packet, type: {}, sig: {short_sig}, id: {}, allegedly from: {}",
                       p.data, p.metadata.beacon_id, p.metadata.address);

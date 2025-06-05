@@ -13,5 +13,5 @@ pub use energon::points::SigPoint;
 pub trait Hash {
     type Hasher;
 
-    fn hash(&self) -> anyhow::Result<[u8; 32]>;
+    fn hash(&self) -> Result<[u8; 32], PointSerDeError>;
 }
