@@ -117,6 +117,7 @@ impl CLI {
             commands: Cmd::Dkg(crate::cli::Dkg::Join {
                 control: control.to_owned(),
                 id: id.to_owned(),
+                group: None,
             }),
         }
     }

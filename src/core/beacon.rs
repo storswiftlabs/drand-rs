@@ -79,7 +79,7 @@ pub enum BeaconCmd {
     Sync(Callback<Arc<ChainStore>, SyncError>),
     ChainInfo(Callback<ChainInfoPacket, ChainInfoError>),
     DkgActions(Actions),
-    CompletedDkg,
+    FinishedDkg,
 }
 
 /// Subcommand for DKG actions [`BeaconCmd::DkgActions`]
@@ -90,10 +90,14 @@ pub enum Actions {
     Status(Callback<DkgStatusResponse, ActionsError>),
 }
 
-/// BeaconProcess is the main logic of the BeaconID instance. It reads the keys / group file, it
-/// can start the DKG, read/write shares to files and can initiate/respond to tBLS
-/// signature requests.
+/// BeaconProcess is responsible for the main logic of the BeaconID instance. It reads the keys / group file, it
+/// can start the DKG, read/write shares to files and can initiate/respond to tBLS signature requests.
 pub struct BeaconProcess<S: Scheme> {
+    // Shared access is required to execute DKG protocol.
+    inner: Arc<InnerProcess<S>>,
+}
+
+pub struct InnerProcess<S: Scheme> {
     beacon_id: BeaconID,
     tracker: TaskTracker,
     fs: FileStore,
@@ -127,15 +131,17 @@ impl<S: Scheme> BeaconProcess<S> {
         }
 
         let process = Self {
-            beacon_id: BeaconID::new(id),
-            fs,
-            chain_store,
-            chain_handler,
-            keypair,
-            tracker: TaskTracker::new(),
-            dkg_store,
-            cmd_sender: tx,
-            log,
+            inner: Arc::new(InnerProcess {
+                beacon_id: BeaconID::new(id),
+                fs,
+                chain_store,
+                chain_handler,
+                keypair,
+                tracker: TaskTracker::new(),
+                dkg_store,
+                cmd_sender: tx,
+                log,
+            }),
         };
 
         Ok(process)
@@ -148,14 +154,13 @@ impl<S: Scheme> BeaconProcess<S> {
 
         tracker.spawn(async move {
             let mut gk = GateKeeper::new(bp.log());
-
             while let Some(cmd) = rx.recv().await {
                 match cmd {
                     BeaconCmd::IdentityRequest(cb) => cb.reply(bp.identity().try_into()),
                     BeaconCmd::Sync(cb) => cb.reply(bp.sync()),
                     BeaconCmd::ChainInfo(cb) => cb.reply(bp.chain_info()),
                     BeaconCmd::DkgActions(action) => bp.dkg_actions(action, &mut gk).await,
-                    BeaconCmd::CompletedDkg => bp.completed_dkg(&mut gk).await,
+                    BeaconCmd::FinishedDkg => bp.finished_dkg(&mut gk).await,
                     BeaconCmd::Shutdown(cb) => {
                         cb.reply(bp.shutdown());
                         break;
@@ -191,15 +196,17 @@ impl<S: Scheme> BeaconProcess<S> {
         }
 
         match self.packet(packet).await {
-            Ok(Some(start_execution_time)) => self.setup_dkg(start_execution_time, gk).await,
+            Ok(Some(start_execution_time)) => {
+                self.setup_and_run_dkg(start_execution_time, gk).await
+            }
             Ok(None) => Ok(()),
             Err(err) => Err(err),
         }
     }
 
-    async fn completed_dkg(&self, gk: &mut GateKeeper<S>) {
+    async fn finished_dkg(&self, gk: &mut GateKeeper<S>) {
+        // Reset keeper into empty state
         gk.set_empty();
-
         /* Handle completed dkg.
            ..
         */
@@ -234,9 +241,8 @@ impl<S: Scheme> BeaconProcess<S> {
             .map_err(|_| ActionsError::IntoParticipant)
     }
 
-    /// A signal from protocol task that DKG finished succesfully
-    pub async fn dkg_is_completed(&self) {
-        if self.cmd_sender.send(BeaconCmd::CompletedDkg).await.is_err() {
+    pub async fn dkg_finished_notification(&self) {
+        if self.cmd_sender.send(BeaconCmd::FinishedDkg).await.is_err() {
             error!(parent: self.log(), "BeaconProcess receiver closed unexpectedly")
         }
     }
@@ -251,6 +257,10 @@ impl<S: Scheme> BeaconProcess<S> {
 
     pub fn log(&self) -> &Span {
         &self.log
+    }
+
+    pub fn fs(&self) -> &FileStore {
+        &self.fs
     }
 
     pub fn dkg_store(&self) -> &DkgStore {
@@ -306,3 +316,19 @@ pub struct SyncError;
 #[derive(thiserror::Error, Debug)]
 #[error("chain info error")]
 pub struct ChainInfoError;
+
+impl<S: Scheme> std::ops::Deref for BeaconProcess<S> {
+    type Target = InnerProcess<S>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl<S: Scheme> Clone for BeaconProcess<S> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}

@@ -9,6 +9,7 @@ use crate::core::beacon::Actions;
 use crate::core::beacon::BeaconCmd;
 use crate::core::daemon::Daemon;
 use crate::protobuf::dkg as protobuf;
+use crate::protobuf::dkg::AcceptOptions;
 use crate::transport::ConvertProto;
 
 use protobuf::dkg_control_client::DkgControlClient as _DkgControlClient;
@@ -109,14 +110,36 @@ impl DkgControlClient {
         Ok(inner)
     }
 
-    pub async fn dkg_join(&mut self, beacon_id: &str) -> anyhow::Result<()> {
+    pub async fn dkg_join(
+        &mut self,
+        beacon_id: &str,
+        group_file_path: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let group_file = if let Some(path) = group_file_path {
+            std::fs::read(path)?
+        } else {
+            vec![]
+        };
+
         let request = DkgCommand {
             metadata: Some(CommandMetadata {
                 beacon_id: beacon_id.to_owned(),
             }),
             command: Some(protobuf::dkg_command::Command::Join(JoinOptions {
-                group_file: vec![],
+                group_file,
             })),
+        };
+        let _ = self.client.command(request).await?;
+
+        Ok(())
+    }
+
+    pub async fn dkg_accept(&mut self, beacon_id: &str) -> anyhow::Result<()> {
+        let request = DkgCommand {
+            metadata: Some(CommandMetadata {
+                beacon_id: beacon_id.to_owned(),
+            }),
+            command: Some(protobuf::dkg_command::Command::Accept(AcceptOptions {})),
         };
         let _ = self.client.command(request).await?;
 

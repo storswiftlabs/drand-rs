@@ -7,8 +7,8 @@ use super::ActionsError;
 
 use crate::key::group::minimum_t;
 use crate::key::group::Group;
-use crate::key::keys::Share;
 use crate::key::toml::Toml;
+use crate::key::Hash;
 use crate::key::PointSerDeError;
 use crate::key::Scheme;
 
@@ -22,13 +22,14 @@ use crate::transport::dkg::Timestamp;
 use crate::net::utils::Address;
 use crate::net::utils::Seconds;
 
+use energon::kyber::dkg::DistKeyShare;
+use std::str::FromStr;
+use std::time::SystemTime;
 use toml_edit::ArrayOfTables;
 use toml_edit::DocumentMut;
 use toml_edit::Item;
 use toml_edit::Table;
-
-use std::str::FromStr;
-use std::time::SystemTime;
+use tracing::error;
 
 #[derive(thiserror::Error, Debug)]
 pub enum DBStateError {
@@ -56,6 +57,8 @@ pub enum DBStateError {
     JoiningAfterFirstEpochNeedsGroupFile,
     #[error("the epoch provided was invalid")]
     InvalidEpoch,
+    #[error("the epoch provided was invalid for leftover state")]
+    InvalidEpochLeftover,
     #[error("you cannot lead a DKG and join at the same time (unless it is epoch 1)")]
     LeaderCantJoinAfterFirstEpoch,
     #[error("you cannot lead a DKG and leave at the same time")]
@@ -122,21 +125,23 @@ pub enum DBStateError {
     ConversionError(#[from] PointSerDeError),
     #[error("invalid signature of participant")]
     ParticipantSignature,
+    #[error("final group for remainers can not be empty")]
+    MissingFinalGroupForRemainers,
 }
 
 #[derive(PartialEq)]
 pub struct State<S: Scheme> {
     // Parameters
-    beacon_id: String,
-    epoch: u32,
+    pub beacon_id: String,
+    pub epoch: u32,
     pub status: Status,
     pub threshold: u32,
-    timeout: Timestamp,
-    genesis_time: Timestamp,
-    genesis_seed: Vec<u8>,
-    catchup_period: Seconds,
-    beacon_period: Seconds,
-    leader: Participant,
+    pub timeout: Timestamp,
+    pub genesis_time: Timestamp,
+    pub genesis_seed: Vec<u8>,
+    pub catchup_period: Seconds,
+    pub beacon_period: Seconds,
+    pub leader: Participant,
     // Participants
     pub remaining: Vec<Participant>,
     pub joining: Vec<Participant>,
@@ -145,7 +150,7 @@ pub struct State<S: Scheme> {
     rejectors: Vec<Participant>,
 
     pub final_group: Option<Group<S>>,
-    key_share: Option<Share<S>>,
+    pub key_share: Option<DistKeyShare<S>>,
 }
 
 impl Toml for Participant {
@@ -262,7 +267,7 @@ impl<S: Scheme> Toml for State<S> {
         };
 
         let key_share = match table.get("KeyShare") {
-            Some(item) => Share::toml_decode(&item.as_table()?.to_owned().into()),
+            Some(item) => DistKeyShare::toml_decode(&item.as_table()?.to_owned().into()),
             None => None,
         };
 
@@ -368,8 +373,6 @@ impl<S: Scheme> State<S> {
     ) -> Result<(), DBStateError> {
         self.status.is_valid_state_change(Status::Proposed)?;
 
-        validate_joiner_signatures::<S>(terms.joining.as_slice())?;
-
         // it's important to verify that the sender (and by extension the signature of the sender)
         // is the same as the proposed leader, to avoid nodes trying to propose DKGs on behalf of somebody else
         let sender = metadata.address();
@@ -377,46 +380,9 @@ impl<S: Scheme> State<S> {
             return Err(DBStateError::CannotProposeAsNonLeader);
         }
 
-        let time_now = Timestamp::from(SystemTime::now());
-        if time_now.seconds >= terms.timeout.seconds && time_now.nanos >= terms.timeout.nanos {
-            return Err(DBStateError::TimeoutReached);
-        }
+        validate_proposal(self, &terms)?;
 
-        let node_count = terms.joining.len() + terms.remaining.len();
-        let threshold = terms.threshold as usize;
-
-        if threshold > node_count {
-            return Err(DBStateError::ThresholdHigherThanNodeCount);
-        }
-
-        if threshold < minimum_t(node_count) {
-            return Err(DBStateError::ThresholdTooLow);
-        }
-
-        // epochs should be monotonically increasing
-        if terms.epoch < self.epoch {
-            return Err(DBStateError::InvalidEpoch);
-        }
-
-        // aborted or timed out DKGs can be reattempted at the same epoch
-        if terms.epoch == self.epoch && !self.status.is_terminal() {
-            return Err(DBStateError::InvalidEpoch);
-        }
-
-        // if we have some leftover state after having left the network, we can accept higher epochs
-        if terms.epoch > self.epoch + 1
-            && (self.status != Status::Left && self.status != Status::Fresh)
-        {
-            return Err(DBStateError::InvalidEpoch);
-        }
-
-        // some terms (such as genesis seed) get set during the first epoch
-        // additionally, we can't have remainers, `GenesisTime` == `TransitionTime`, amongst other things
-        if terms.epoch == 1 {
-            validate_first_epoch(&terms)?;
-        };
-
-        // Local identity should be present in received proposal
+        // if I've received a proposal, I must surely be in it!
         if !terms.joining.contains(me)
             && !terms.remaining.contains(me)
             && !terms.leaving.contains(me)
@@ -445,10 +411,9 @@ impl<S: Scheme> State<S> {
             return Err(DBStateError::CannotJoinIfNotInJoining);
         }
 
-        if let Some(_group) = prev_group {
-            panic!("state::joined: reshape is not implemented yet");
-            // validatePreviousGroupForJoiners
-        }
+        validate_previous_group_for_joiners(self, prev_group.as_ref())?;
+
+        self.final_group = prev_group;
         self.status = Status::Joined;
 
         Ok(())
@@ -468,10 +433,21 @@ impl<S: Scheme> State<S> {
             GossipData::Execute(_execute) => {
                 self.executing(me, metadata).map_err(ActionsError::DBState)
             }
-            GossipData::Accept(_accept_proposal) => todo!(),
-            GossipData::Reject(_reject_proposal) => todo!(),
-            GossipData::Abort(_abort_dkg) => todo!(),
-            GossipData::Dkg(_dkg_packet) => todo!(),
+            GossipData::Accept(accept) => self
+                .received_acceptance(accept.acceptor, metadata)
+                .map_err(ActionsError::DBState),
+            GossipData::Reject(_reject_proposal) => {
+                error!("GossipData::Reject is not implemented");
+                Err(ActionsError::TODO)
+            }
+            GossipData::Abort(_abort_dkg) => {
+                error!("GossipData::Abort is not implemented");
+                Err(ActionsError::TODO)
+            }
+            GossipData::Dkg(_dkg_packet) => {
+                error!("GossipData::Dkg is not implemented");
+                Err(ActionsError::TODO)
+            }
         }
     }
 
@@ -480,8 +456,6 @@ impl<S: Scheme> State<S> {
         me: &Participant,
         metadata: &GossipMetadata,
     ) -> Result<(), DBStateError> {
-        self.status.is_valid_state_change(Status::Executing)?;
-
         if self.time_expired() {
             return Err(DBStateError::TimeoutReached);
         }
@@ -489,6 +463,7 @@ impl<S: Scheme> State<S> {
         if self.leaving.contains(me) {
             return self.left(me);
         }
+        self.status.is_valid_state_change(Status::Executing)?;
 
         if &self.leader.address != metadata.address() {
             return Err(DBStateError::OnlyLeaderCanTriggerExecute);
@@ -519,6 +494,182 @@ impl<S: Scheme> State<S> {
     pub(super) fn time_expired(&self) -> bool {
         Timestamp::from(SystemTime::now()).seconds >= self.timeout.seconds
     }
+
+    pub(super) fn complete(
+        &mut self,
+        final_group: Group<S>,
+        share: DistKeyShare<S>,
+    ) -> Result<(), DBStateError> {
+        self.status.is_valid_state_change(Status::Complete)?;
+
+        if self.time_expired() {
+            return Err(DBStateError::TimeoutReached);
+        }
+
+        self.status = Status::Complete;
+        if self.genesis_seed.is_empty() {
+            self.genesis_seed = final_group
+                .hash()
+                .expect("hashing should not fail")
+                .to_vec();
+        }
+        self.final_group = Some(final_group);
+        self.key_share = Some(share);
+
+        Ok(())
+    }
+
+    /// ReceivedAcceptance is used by nodes when they receive a gossiped acceptance packet
+    /// they needn't necessarily collect _all_ acceptances for executing, but it gives them some insight into
+    /// the state of the DKG when they run the status command
+    fn received_acceptance(
+        &mut self,
+        them: Participant,
+        metadata: &GossipMetadata,
+    ) -> Result<(), DBStateError> {
+        if !is_proposal_phase(self) {
+            return Err(DBStateError::ReceivedAcceptance);
+        }
+
+        if !self.remaining.iter().any(|r| *r == them) {
+            return Err(DBStateError::UnknownAcceptor);
+        }
+
+        if self.acceptors.iter().any(|a| *a == them) {
+            return Err(DBStateError::DuplicateAcceptance);
+        }
+
+        if metadata.address != them.address {
+            return Err(DBStateError::InvalidAcceptor);
+        }
+
+        self.rejectors.retain(|r| r != &them);
+        self.acceptors.push(them);
+
+        Ok(())
+    }
+
+    pub(super) fn accepted(&mut self, me: Participant) -> Result<(), DBStateError> {
+        self.status.is_valid_state_change(Status::Accepted)?;
+
+        if self.time_expired() {
+            return Err(DBStateError::TimeoutReached);
+        }
+        // Leavers get no say if the rest of the network wants them out
+        if self.leaving.contains(&me) {
+            return Err(DBStateError::CannotAcceptProposalWhereLeaving);
+        }
+        // Joiners should run the `Join` command instead
+        if self.joining.contains(&me) {
+            return Err(DBStateError::CannotAcceptProposalWhereJoining);
+        }
+
+        // Move our node from rejectors to acceptors
+        self.rejectors.retain(|i| i != &me);
+        self.acceptors.push(me);
+        self.status = Status::Accepted;
+
+        Ok(())
+    }
+}
+
+fn validate_proposal<S: Scheme>(
+    current: &State<S>,
+    terms: &ProposalTerms,
+) -> Result<(), DBStateError> {
+    validate_for_all_dkgs(current, terms)?;
+
+    // Some terms (such as genesis seed) get set during the first epoch
+    // additionally, we can't have remainers, `GenesisTime` == `TransitionTime`, amongst other things
+    if terms.epoch == 1 {
+        return validate_first_epoch(terms);
+    };
+
+    validate_reshare_terms(current, terms)?;
+
+    if current.status != Status::Fresh {
+        return validate_reshare_for_remainers(current, terms);
+    }
+
+    Ok(())
+}
+
+fn validate_reshare_for_remainers<S: Scheme>(
+    current: &State<S>,
+    terms: &ProposalTerms,
+) -> Result<(), DBStateError> {
+    if terms.genesis_time != current.genesis_time {
+        return Err(DBStateError::GenesisTimeNotEqual);
+    }
+
+    if terms.genesis_seed != current.genesis_seed {
+        return Err(DBStateError::GenesisSeedCannotChange);
+    }
+
+    let final_group = current
+        .final_group
+        .as_ref()
+        .ok_or(DBStateError::MissingFinalGroupForRemainers)?;
+
+    let last_epoch_addresses: Vec<&str> = final_group
+        .nodes
+        .iter()
+        .map(|p| p.public().address())
+        .collect();
+
+    let terms_remaining_addresses: Vec<&str> =
+        terms.remaining.iter().map(|p| p.address.as_str()).collect();
+    let terms_leaving_addresses: Vec<&str> =
+        terms.leaving.iter().map(|p| p.address.as_str()).collect();
+
+    if !last_epoch_addresses.iter().all(|addr| {
+        terms_remaining_addresses.contains(addr) || terms_leaving_addresses.contains(addr)
+    }) {
+        return Err(DBStateError::RemainingAndLeavingNodesMustExistInCurrentEpoch);
+    }
+
+    if !terms_remaining_addresses
+        .iter()
+        .all(|addr| last_epoch_addresses.contains(addr))
+        && terms_leaving_addresses
+            .iter()
+            .all(|addr| last_epoch_addresses.contains(addr))
+    {
+        return Err(DBStateError::MissingNodesInProposal);
+    }
+
+    if terms.remaining.len() < current.threshold as usize {
+        return Err(DBStateError::NodeCountTooLow);
+    }
+
+    Ok(())
+}
+
+fn validate_reshare_terms<S: Scheme>(
+    current: &State<S>,
+    terms: &ProposalTerms,
+) -> Result<(), DBStateError> {
+    if terms.remaining.is_empty() {
+        return Err(DBStateError::NoNodesRemaining);
+    }
+
+    if terms.joining.iter().any(|p| *p == terms.leader) {
+        return Err(DBStateError::LeaderCantJoinAfterFirstEpoch);
+    }
+
+    // There's no theoretical reason the leader can't be leaving, but from a practical perspective
+    // it makes sense in case e.g. the DKG fails or aborts
+    if terms.leaving.iter().any(|p| *p == terms.leader)
+        || !terms.remaining.iter().any(|p| *p == terms.leader)
+    {
+        return Err(DBStateError::LeaderNotRemaining);
+    }
+
+    if terms.remaining.len() < current.threshold as usize {
+        return Err(DBStateError::NodeCountTooLow);
+    }
+
+    Ok(())
 }
 
 fn validate_first_epoch(terms: &ProposalTerms) -> Result<(), DBStateError> {
@@ -544,6 +695,54 @@ fn validate_first_epoch(terms: &ProposalTerms) -> Result<(), DBStateError> {
 
     Ok(())
 }
+
+fn validate_for_all_dkgs<S: Scheme>(
+    current: &State<S>,
+    terms: &ProposalTerms,
+) -> Result<(), DBStateError> {
+    // It shouldn't really be possible for the wrong beaconID to make its way here, but better safe than sorry :)
+    if current.beacon_id != terms.beacon_id {
+        return Err(DBStateError::InvalidBeaconID);
+    }
+    validate_joiner_signatures::<S>(terms.joining.as_slice())?;
+
+    let time_now = Timestamp::from(SystemTime::now());
+    if time_now.seconds >= terms.timeout.seconds && time_now.nanos >= terms.timeout.nanos {
+        return Err(DBStateError::TimeoutReached);
+    }
+
+    let node_count = terms.joining.len() + terms.remaining.len();
+    let threshold = terms.threshold as usize;
+
+    if threshold > node_count {
+        return Err(DBStateError::ThresholdHigherThanNodeCount);
+    }
+
+    if threshold < minimum_t(node_count) {
+        return Err(DBStateError::ThresholdTooLow);
+    }
+
+    // Validate epoch
+    //
+    // Epochs should be monotonically increasing
+    if terms.epoch < current.epoch {
+        return Err(DBStateError::InvalidEpoch);
+    }
+
+    if terms.epoch == current.epoch && !current.status.is_terminal() {
+        return Err(DBStateError::InvalidEpoch);
+    }
+
+    // If we have some leftover state after having left the network, we can accept higher epochs
+    if terms.epoch > current.epoch + 1
+        && (current.status != Status::Left && current.status != Status::Fresh)
+    {
+        return Err(DBStateError::InvalidEpochLeftover);
+    }
+
+    Ok(())
+}
+
 impl<S: Scheme> TryFrom<ProposalTerms> for State<S> {
     type Error = PointSerDeError;
 
@@ -582,6 +781,32 @@ fn validate_joiner_signatures<S: Scheme>(joiners: &[Participant]) -> Result<(), 
     Ok(())
 }
 
+fn validate_previous_group_for_joiners<S: Scheme>(
+    d: &State<S>,
+    prev_group: Option<&Group<S>>,
+) -> Result<(), DBStateError> {
+    // joiners after the first epoch must pass a group file in order to determine
+    // that the proposal is valid (e.g. the `GenesisTime` and `Remaining` group are correct)
+    match prev_group {
+        Some(prev_group) => {
+            if prev_group.genesis_time != d.genesis_time.seconds as u64 {
+                return Err(DBStateError::GenesisTimeNotConsistentWithProposal);
+            }
+            if prev_group.genesis_seed != d.genesis_seed {
+                return Err(DBStateError::GenesisSeedCannotChange);
+            }
+            Ok(())
+        }
+        None => {
+            if d.epoch() == 1 {
+                Ok(())
+            } else {
+                Err(DBStateError::JoiningAfterFirstEpochNeedsGroupFile)
+            }
+        }
+    }
+}
+
 /// Used for status request
 impl<S: Scheme> From<State<S>> for crate::protobuf::dkg::DkgEntry {
     fn from(s: State<S>) -> Self {
@@ -593,6 +818,12 @@ impl<S: Scheme> From<State<S>> for crate::protobuf::dkg::DkgEntry {
             iter.into_iter().map(Into::into).collect()
         }
 
+        let leader = if s.status == Status::Fresh {
+            None
+        } else {
+            Some(s.leader.into())
+        };
+
         Self {
             beacon_id: s.beacon_id,
             state: s.status as u32,
@@ -601,10 +832,7 @@ impl<S: Scheme> From<State<S>> for crate::protobuf::dkg::DkgEntry {
             timeout: Some(s.timeout),
             genesis_time: Some(s.genesis_time),
             genesis_seed: s.genesis_seed,
-            leader: match s.status == Status::Fresh {
-                true => None,
-                false => Some(s.leader.into()),
-            },
+            leader,
             remaining: convert(s.remaining),
             joining: convert(s.joining),
             leaving: convert(s.leaving),
@@ -620,4 +848,11 @@ impl<S: Scheme> From<State<S>> for crate::protobuf::dkg::DkgEntry {
             },
         }
     }
+}
+
+fn is_proposal_phase<S: Scheme>(state: &State<S>) -> bool {
+    matches!(
+        state.status(),
+        Status::Proposed | Status::Proposing | Status::Accepted | Status::Rejected | Status::Joined
+    )
 }
