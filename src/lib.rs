@@ -8,5 +8,5 @@ pub mod net;
 pub mod protobuf;
 pub mod store;
 #[cfg(test)]
-mod test;
+mod test_with_golang;
 pub mod transport;

@@ -38,6 +38,7 @@ tonic-build = "0.12.3"
 bollard = "0.18.1"
 tempfile = "3.16.0"
 async-std = { version = "1.7.0", features = ["unstable"] }
+rand = "0.9.1"
 
 [profile.release]
 lto = true
