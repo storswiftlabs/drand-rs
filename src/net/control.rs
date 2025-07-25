@@ -1,25 +1,19 @@
 //! This module provides client and server implementations for Control.
 
 use super::dkg_control::DkgControlHandler;
-use super::protocol::ProtocolClient;
-use super::utils::Address;
 use super::utils::Callback;
 use super::utils::ConnectionError;
 use super::utils::NewTcpListener;
 use super::utils::StartServerError;
 use super::utils::ToStatus;
 use super::utils::ERR_METADATA_IS_MISSING;
-use super::utils::URI_SCHEME;
 
 use crate::cli::SyncConfig;
 use crate::core::beacon::BeaconCmd;
 use crate::core::daemon::Daemon;
 use crate::protobuf::dkg::dkg_control_server::DkgControlServer;
 use crate::protobuf::drand as protobuf;
-use crate::protobuf::drand::public_client::PublicClient;
-use crate::store::Store;
 
-use futures::SinkExt;
 use protobuf::control_client::ControlClient as _ControlClient;
 use protobuf::control_server::Control;
 use protobuf::control_server::ControlServer;
@@ -47,25 +41,23 @@ use protobuf::StatusRequest;
 use protobuf::StatusResponse;
 use protobuf::SyncProgress;
 
+use tokio_stream::Stream;
 use tonic::transport::Channel;
 use tonic::transport::Server;
 use tonic::Request;
 use tonic::Response;
 use tonic::Status;
 
-use tracing::debug;
-use tracing::error;
-use tracing::info;
-
+use http::Uri;
 use std::ops::Deref;
+use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
-
-use http::Uri;
 use tokio_stream::wrappers::TcpListenerStream;
 use tokio_stream::StreamExt;
+use tracing::*;
 
-type ResponseStream = futures::channel::mpsc::UnboundedReceiver<Result<SyncProgress, Status>>;
+type ResponseStream = Pin<Box<dyn Stream<Item = Result<SyncProgress, tonic::Status>> + Send>>;
 
 pub const DEFAULT_CONTROL_PORT: &str = "8888";
 pub const CONTROL_HOST: &str = "127.0.0.1";
@@ -216,113 +208,11 @@ impl Control for ControlHandler {
         Ok(Response::new(response))
     }
 
-    // Until sync manager is ready.
     async fn start_follow_chain(
         &self,
-        request: Request<StartSyncRequest>,
+        _request: Request<StartSyncRequest>,
     ) -> Result<Response<Self::StartFollowChainStream>, Status> {
-        // Borrow id from metadata.
-        let request = request.into_inner();
-
-        let id = request.metadata.as_ref().map_or_else(
-            || Err(Status::data_loss(ERR_METADATA_IS_MISSING)),
-            |meta| Ok(meta.beacon_id.as_str()),
-        )?;
-        debug!("control: received follow_chain request for {id}");
-
-        // Get store pointer from beacon process
-        let (tx, rx) = Callback::new();
-        self.beacons()
-            .cmd(BeaconCmd::Sync(tx), id)
-            .await
-            .map_err(|err| err.to_status(id))?;
-        let store = rx
-            .await
-            .map_err(|err| err.to_status(id))?
-            .map_err(|sync_err| sync_err.to_status(id))?;
-
-        // Connect to remote node.
-        let address = request
-            .nodes
-            .first()
-            .ok_or_else(|| Status::aborted("list of nodes can not be empty"))?;
-        let address = Address::precheck(address).map_err(|err| err.to_status(id))?;
-
-        {
-            let uri = format!("{}://{}", URI_SCHEME, request.nodes.first().unwrap());
-            let mut public = PublicClient::connect(uri)
-                .await
-                .map_err(|err| Status::from_error(err.into()))?;
-
-            let info = public
-                .chain_info(ChainInfoRequest {
-                    metadata: Some(Metadata {
-                        beacon_id: request.metadata.clone().unwrap_or_default().beacon_id,
-                        ..Default::default()
-                    }),
-                })
-                .await?
-                .into_inner();
-
-            let genesis_seed = info.group_hash;
-
-            let genesis_beacon = crate::store::Beacon {
-                round: 0,
-                signature: genesis_seed,
-                previous_sig: vec![],
-            };
-
-            store
-                .put(genesis_beacon)
-                .await
-                .map_err(|err| Status::from_error(err.into()))?;
-        }
-
-        let mut client = ProtocolClient::new(&address)
-            .await
-            .map_err(|err| Status::from_error(err.into()))?;
-        let mut stream = client.sync_chain(request.up_to, id).await?;
-
-        let (mut progress_tx, progress_rx) = futures::channel::mpsc::unbounded();
-
-        tokio::spawn(async move {
-            while let Some(beacon) = stream.next().await {
-                // write to db and stream back the progress
-
-                if let Ok(beacon) = beacon {
-                    let round = beacon.round;
-                    // write to db
-                    if let Err(err) = store.put(beacon.into()).await {
-                        error!("start_follow_chain: failed to write beacon: {err}");
-                        let _ = progress_tx
-                            .send(Err(Status::internal("unable to write beacon")))
-                            .await;
-                        return;
-                    } else {
-                        let progress = SyncProgress {
-                            current: round,
-                            target: request.up_to,
-                            metadata: request.metadata.clone(),
-                        };
-
-                        if let Err(e) = progress_tx.send(Ok(progress)).await {
-                            error!("start_follow_chain: failed to send progress: {e}");
-                            break;
-                        }
-                    }
-                } else {
-                    error!("start_follow_chain: failed to read beacon");
-                    let _ = progress_tx
-                        .send(Err(Status::data_loss("unable to read beacon")))
-                        .await;
-                    return;
-                }
-            }
-
-            let _ = progress_tx.send(Err(Status::ok("sync finished"))).await;
-        });
-
-        Ok(Response::new(progress_rx))
+        todo!()
     }
 
     async fn start_check_chain(
@@ -426,25 +316,8 @@ impl ControlClient {
         Ok(is_daemon_running)
     }
 
-    pub async fn sync(&mut self, config: SyncConfig) -> anyhow::Result<()> {
-        let metadata = Metadata::with_chain_hash(&config.id, &config.chain_hash)?;
-        let request = StartSyncRequest {
-            nodes: config.sync_nodes,
-            up_to: config.up_to,
-            metadata: Some(metadata),
-        };
-
-        let mut responce = self.client.start_follow_chain(request).await?.into_inner();
-
-        let mut count: u64 = 0;
-        while let Some(_item) = responce.next().await {
-            count += 1;
-            if count % 300 == 0 {
-                debug!("received:\n {count}");
-            }
-        }
-
-        Ok(())
+    pub async fn sync(&mut self, _config: SyncConfig) -> anyhow::Result<()> {
+        todo!()
     }
 }
 

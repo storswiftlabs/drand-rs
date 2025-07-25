@@ -1,6 +1,4 @@
-use super::chain::ChainHandler;
 use super::multibeacon::BeaconHandler;
-
 use crate::dkg::actions_active::ActionsActive;
 use crate::dkg::actions_passive::ActionsPassive;
 use crate::dkg::execution::ExecuteDkg;
@@ -17,10 +15,6 @@ use crate::key::toml::Toml;
 use crate::key::PointSerDeError;
 use crate::key::Scheme;
 
-use crate::store::memstore::MemStore;
-use crate::store::ChainStore;
-use crate::store::NewStore;
-
 use crate::protobuf::dkg::DkgPacket;
 use crate::protobuf::dkg::DkgStatusResponse;
 use crate::protobuf::drand::ChainInfoPacket;
@@ -31,16 +25,11 @@ use crate::transport::dkg::Command;
 use crate::transport::dkg::GossipPacket;
 use crate::transport::dkg::Participant;
 
-use energon::drand::traits::BeaconDigest;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::task::TaskTracker;
-use tracing::debug;
-use tracing::error;
-use tracing::info;
-use tracing::info_span;
-use tracing::Span;
+use tracing::*;
 
 pub const DEFAULT_BEACON_ID: &str = "default";
 
@@ -76,7 +65,6 @@ impl BeaconID {
 pub enum BeaconCmd {
     Shutdown(Callback<(), ShutdownError>),
     IdentityRequest(Callback<IdentityResponse, PointSerDeError>),
-    Sync(Callback<Arc<ChainStore>, SyncError>),
     ChainInfo(Callback<ChainInfoPacket, ChainInfoError>),
     DkgActions(Actions),
     FinishedDkg,
@@ -102,8 +90,6 @@ pub struct InnerProcess<S: Scheme> {
     tracker: TaskTracker,
     fs: FileStore,
     keypair: Pair<S>,
-    chain_handler: ChainHandler,
-    chain_store: Arc<MemStore>,
     dkg_store: DkgStore,
     cmd_sender: mpsc::Sender<BeaconCmd>,
     log: Span,
@@ -117,9 +103,6 @@ impl<S: Scheme> BeaconProcess<S> {
         tx: mpsc::Sender<BeaconCmd>,
     ) -> Result<Self, FileStoreError> {
         let keypair: Pair<S> = Toml::toml_decode(&pair).ok_or(FileStoreError::TomlError)?;
-
-        let chain_handler = ChainHandler::try_init(&fs, id)?;
-        let chain_store = Arc::new(ChainStore::new(&fs.db_path(), S::Beacon::is_chained())?);
         let is_fresh = fs.is_fresh_run()?;
         let dkg_store = DkgStore::init::<S>(fs.beacon_path.as_path(), is_fresh, id)?;
         let log = info_span!(
@@ -134,8 +117,6 @@ impl<S: Scheme> BeaconProcess<S> {
             inner: Arc::new(InnerProcess {
                 beacon_id: BeaconID::new(id),
                 fs,
-                chain_store,
-                chain_handler,
                 keypair,
                 tracker: TaskTracker::new(),
                 dkg_store,
@@ -157,7 +138,6 @@ impl<S: Scheme> BeaconProcess<S> {
             while let Some(cmd) = rx.recv().await {
                 match cmd {
                     BeaconCmd::IdentityRequest(cb) => cb.reply(bp.identity().try_into()),
-                    BeaconCmd::Sync(cb) => cb.reply(bp.sync()),
                     BeaconCmd::ChainInfo(cb) => cb.reply(bp.chain_info()),
                     BeaconCmd::DkgActions(action) => bp.dkg_actions(action, &mut gk).await,
                     BeaconCmd::FinishedDkg => bp.finished_dkg(&mut gk).await,
@@ -224,14 +204,9 @@ impl<S: Scheme> BeaconProcess<S> {
         Ok(())
     }
 
-    fn sync(&self) -> Result<Arc<MemStore>, SyncError> {
-        // TODO: this module is not unfinished
-        Ok(Arc::clone(&self.chain_store))
-    }
-
     fn chain_info(&self) -> Result<ChainInfoPacket, ChainInfoError> {
         // TODO: this module is unfinished
-        Ok(self.chain_handler.chain_info())
+        todo!()
     }
 
     /// Returns [`Participant`] which is dkg representation of [`Identity`].

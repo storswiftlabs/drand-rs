@@ -29,7 +29,6 @@ home = "0.5.11"
 anyhow = "1.0.95"
 tokio-util = { version = "0.7.13", features = ["rt"] }
 arc-swap = "1.7.1"
-futures = "0.3.31"
 
 [build-dependencies]
 tonic-build = "0.12.3"
@@ -46,7 +45,6 @@ strip = true
 codegen-units = 1
 
 [features]
-default = ["memstore", "blstrs"]
-memstore = []
+default = ["blstrs"]
 blstrs = ["energon/bls12381_blstrs", "energon/bn254_arkworks"]
 arkworks = ["energon/bls12381_arkworks", "energon/bn254_arkworks"]
