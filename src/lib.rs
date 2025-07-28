@@ -1,3 +1,5 @@
+#[allow(unused)]
+pub mod chain;
 pub mod cli;
 pub mod core;
 pub mod dkg;

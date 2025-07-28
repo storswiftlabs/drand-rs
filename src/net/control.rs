@@ -54,6 +54,7 @@ use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio_stream::wrappers::TcpListenerStream;
+#[allow(unused)]
 use tokio_stream::StreamExt;
 use tracing::*;
 
