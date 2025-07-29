@@ -25,7 +25,7 @@ pub struct RoundInfo {
 impl RoundInfo {
     pub fn now(period: u32, genesis: u64) -> Self {
         let now = time::time_now().as_secs();
-        let (next_round, next_time) = next_round(now, period, genesis);
+        let (next_round, next_time) = time::next_round(now, period, genesis);
 
         Self {
             round: next_round - 1,
@@ -39,7 +39,7 @@ impl Ticker {
     async fn send_next_round(&self) -> Result<(), SendError<RoundInfo>> {
         let time_now = time::time_now();
         let (next_round, next_time) =
-            next_round(time_now.as_secs(), self.period, self.genesis_time);
+            time::next_round(time_now.as_secs(), self.period, self.genesis_time);
 
         let info = RoundInfo {
             round: next_round,
