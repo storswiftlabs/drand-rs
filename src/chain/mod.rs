@@ -2,6 +2,7 @@ mod cache;
 mod epoch;
 mod handler;
 mod info;
+mod registry;
 mod store;
 mod sync;
 mod ticker;

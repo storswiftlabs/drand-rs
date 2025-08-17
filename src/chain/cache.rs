@@ -144,11 +144,11 @@ impl<S: Scheme> PartialCache<S> {
     }
 
     /// Aligns cache for new `latest_stored` round, verifying unchecked packets for next round.
-    pub fn update_cache(&mut self, ec: &EpochConfig<S>, latest_stored: u64, l: &Span) {
+    pub fn align(&mut self, ec: &EpochConfig<S>, latest_stored: u64, l: &Span) {
         if let Some(next_round_packets) = self.update(latest_stored) {
             for packet in next_round_packets {
                 let Some(idx) = get_partial_index::<S>(&packet.partial_sig) else {
-                    warn!(parent: l, "update_cache: ignoring packet with invalid data");
+                    warn!(parent: l, "align_cache: ignoring packet with invalid data");
                     continue;
                 };
 
@@ -156,10 +156,10 @@ impl<S: Scheme> PartialCache<S> {
                     match ec.verify_partial(&packet) {
                         Ok((valid_sigshare, node_addr)) => {
                             self.valid_sigs.push(valid_sigshare);
-                            debug!(parent: l, "update_cache: added valid share from {node_addr} for round {}, latest_stored {}", packet.round, latest_stored);
+                            debug!(parent: l, "align_cache: added valid share from {node_addr} for round {}, latest_stored {}", packet.round, latest_stored);
                         }
                         Err(err) => {
-                            debug!(parent: l, "update_cache: {err}, latest_stored {}, packet_round {}", self.last, packet.round,);
+                            debug!(parent: l, "align_cache: {err}, latest_stored {}, packet_round {}", self.last, packet.round,);
                             continue;
                         }
                     }
