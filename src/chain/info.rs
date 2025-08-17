@@ -19,7 +19,7 @@ pub struct ChainInfo<S: Scheme> {
 }
 
 impl<S: Scheme> ChainInfo<S> {
-    pub fn from_packet(packet: ChainInfoPacket, id: String) -> Option<Self> {
+    pub fn from_packet(packet: &ChainInfoPacket, id: String) -> Option<Self> {
         if S::ID != packet.scheme_id {
             error!(
                 "ChainInfo: [{id}]: scheme expected {}, received {}",
@@ -54,7 +54,7 @@ impl<S: Scheme> ChainInfo<S> {
             beacon_id: id,
             period: Seconds::new(packet.period),
             genesis_time,
-            genesis_seed: packet.group_hash,
+            genesis_seed: packet.group_hash.clone(),
         };
 
         Some(info)

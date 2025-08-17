@@ -30,6 +30,7 @@ anyhow = "1.0.95"
 tokio-util = { version = "0.7.13", features = ["rt"] }
 arc-swap = "1.7.1"
 rusqlite = "0.37.0"
+rand = "0.9.1"
 
 [build-dependencies]
 tonic-build = "0.12.3"
@@ -38,7 +39,6 @@ tonic-build = "0.12.3"
 bollard = "0.18.1"
 tempfile = "3.16.0"
 async-std = { version = "1.7.0", features = ["unstable"] }
-rand = "0.9.1"
 
 [profile.release]
 lto = true

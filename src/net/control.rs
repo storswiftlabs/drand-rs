@@ -58,7 +58,11 @@ use tokio_stream::wrappers::TcpListenerStream;
 use tokio_stream::StreamExt;
 use tracing::*;
 
-type ResponseStream = Pin<Box<dyn Stream<Item = Result<SyncProgress, tonic::Status>> + Send>>;
+/// Control server streaming response reporting sync progress to the control client.
+type ResponseStream = Pin<Box<dyn Stream<Item = SyncProgressResponse> + Send>>;
+
+/// Result type yielded by the sync progress response stream.
+pub type SyncProgressResponse = Result<SyncProgress, tonic::Status>;
 
 pub const DEFAULT_CONTROL_PORT: &str = "8888";
 pub const CONTROL_HOST: &str = "127.0.0.1";
