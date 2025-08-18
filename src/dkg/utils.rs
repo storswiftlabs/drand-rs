@@ -18,7 +18,7 @@ use std::collections::HashSet;
 use tracing::debug;
 use tracing::Span;
 
-pub const SHORT_SIG_LEN: usize = 8;
+const SHORT_SIG_BYTES: usize = 3;
 
 impl Participant {
     pub fn is_valid_signature<S: Scheme>(&self) -> bool {
@@ -56,7 +56,7 @@ impl<S: Scheme> GateKeeper<S> {
         }
     }
 
-    /// The channel exist only within DKG execution stage, see [super::execution::ExecuteDkg]
+    /// The channel exist only within DKG execution stage, see [`super::execution::ExecuteDkg`].
     pub fn open_gate(&mut self, tx: BundleSender<S>) -> Result<(), ActionsError> {
         if self.bundle_sender.is_some() {
             Err(ActionsError::ProtocolAlreadyRunning)
@@ -70,21 +70,21 @@ impl<S: Scheme> GateKeeper<S> {
     /// Resets keeper into empty state.
     pub fn set_empty(&mut self) {
         self.seen_gossip.clear();
-        self.bundle_sender = None
+        self.bundle_sender = None;
     }
 
-    /// Returns `true` if gossip packet is not seen and its signature is not less than [SHORT_SIG_LEN].
+    /// Returns `true` if gossip packet is not seen and its signature is not less than [`SHORT_SIG_LEN`].
     pub fn is_new_packet(&mut self, p: &GossipPacket) -> bool {
-        let sig_hex = hex::encode(&p.metadata.signature);
         let mut is_new = false;
 
-        if let Some(short_sig) = sig_hex.get(..SHORT_SIG_LEN) {
+        if let Some(short_sig) = p.metadata.signature.get(..SHORT_SIG_BYTES) {
+            let sig_hex = hex::encode(short_sig);
             if self.seen_gossip.contains(&sig_hex) {
-                trace!(parent: &self.log, "gatekeeper: ignoring duplicate gossip packet, type: {} sig: {short_sig}, from: {}", p.data, p.metadata.address);
+                trace!(parent: &self.log, "gatekeeper: ignoring duplicate gossip packet, type: {} sig: {sig_hex}, from: {}", p.data, p.metadata.address);
             } else {
-                debug!(parent: &self.log, "gatekeeper: processing DKG gossip packet, type: {}, sig: {short_sig}, id: {}, allegedly from: {}",
+                debug!(parent: &self.log, "gatekeeper: processing DKG gossip packet, type: {}, sig: {sig_hex}, id: {}, allegedly from: {}",
                       p.data, p.metadata.beacon_id, p.metadata.address);
-                is_new = self.seen_gossip.insert(sig_hex)
+                is_new = self.seen_gossip.insert(sig_hex);
             }
         } else {
             tracing::warn!(parent: &self.log, "gatekeeper: ignoring gossip packet with too short signature, allegedly from: {}", p.metadata.address);

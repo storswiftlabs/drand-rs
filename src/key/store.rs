@@ -34,13 +34,14 @@ const PUBLIC_PERM: u32 = 0o664;
 #[derive(thiserror::Error, Debug)]
 #[error("file_store: {0}")]
 pub enum FileStoreError {
+    #[error("invalid data")]
+    InvalidData,
     #[error(transparent)]
     IO(#[from] std::io::Error),
     #[error("file already exists in {0}")]
     FileAlreadyExists(PathBuf),
     #[error("file is not found at {0}")]
     FileNotFound(PathBuf),
-    // Normally should not be possible
     #[error("toml error")]
     TomlError,
     #[error("schemes in public and private parts must be equal and non-empty")]
@@ -49,37 +50,39 @@ pub enum FileStoreError {
     BeaconNotFound,
     #[error("beacon id is failed to init, unknown scheme")]
     FailedInitID,
+    #[error("failed ro read beacon id from path")]
+    FailedToReadID,
     #[error("chain_store error: {0}")]
-    ChainStore(String),
+    ChainStore(#[from] crate::chain::StoreError),
     #[error("dkg_store error: {0}")]
     DkgStore(#[from] crate::dkg::store::DkgStoreError),
 }
 
-/// FileStore holds absolute path of **beacon_id** and abstracts the
+/// `FileStore` holds absolute path of `beacon_id` and abstracts the
 /// loading and saving private/public cryptographic materials.
+#[derive(Clone)]
 pub struct FileStore {
     pub beacon_path: PathBuf,
 }
 
 impl FileStore {
-    /// Creates filesystem for given **beacon_id** and validates storage structure.
+    /// Creates filesystem for given `beacon_id` and validates storage structure.
     pub fn new_checked(base_path: &str, beacon_id: &str) -> Result<Self, FileStoreError> {
         let base_path = absolute_path(base_path)?;
-
-        let multibeacon_path = base_path.join(MULTIBEACON_DIR);
         if !base_path.try_exists()? {
             new_secure_dir(&base_path)?;
-            new_secure_dir(&multibeacon_path)?;
-        } else if !multibeacon_path.try_exists()? {
-            return Err(FileStoreError::FileNotFound(multibeacon_path));
         }
-        let beacon_path = multibeacon_path.join(beacon_id);
 
+        let multibeacon_path = base_path.join(MULTIBEACON_DIR);
+        if !multibeacon_path.try_exists()? {
+            new_secure_dir(&multibeacon_path)?;
+        }
+
+        let beacon_path = multibeacon_path.join(beacon_id);
         if beacon_path.try_exists()? {
             return Err(FileStoreError::FileAlreadyExists(beacon_path));
-        } else {
-            new_secure_dir(&beacon_path)?;
         }
+        new_secure_dir(&beacon_path)?;
 
         // Create beacon sub folders
         new_secure_dir(&beacon_path.join(KEY_DIR))?;
@@ -92,7 +95,7 @@ impl FileStore {
     /// A check for minimal valid filestore structure.
     pub fn validate(&self) -> Result<(), FileStoreError> {
         if !self.beacon_path.try_exists()? {
-            return Err(FileStoreError::FileNotFound(self.beacon_path.to_owned()));
+            return Err(FileStoreError::FileNotFound(self.beacon_path.clone()));
         }
 
         let private = self.private_id_file();
@@ -171,11 +174,11 @@ impl FileStore {
         Ok(())
     }
 
-    /// Returns non-generic group representation
-    pub fn load_group(&self) -> Result<crate::transport::drand::GroupPacket, FileStoreError> {
-        let group_toml = std::fs::read_to_string(self.group_file())?;
-        let group = crate::transport::drand::GroupPacket::from_toml(&group_toml)
-            .ok_or(FileStoreError::TomlError)?;
+    pub fn load_group<S: Scheme>(&self) -> Result<Group<S>, FileStoreError> {
+        let group_str = std::fs::read_to_string(self.group_file())?;
+        let group: Group<S> =
+            Toml::toml_decode(&group_str.parse().map_err(|_| FileStoreError::TomlError)?)
+                .ok_or(FileStoreError::TomlError)?;
 
         Ok(group)
     }
@@ -226,6 +229,7 @@ impl FileStore {
         }
     }
 
+    /// Beacon ID value is protected at the level of filesystem.
     pub fn get_beacon_id(&self) -> Option<&str> {
         Path::new(&self.beacon_path).file_name()?.to_str()
     }
@@ -246,16 +250,17 @@ impl FileStore {
         self.beacon_path.join(GROUP_DIR).join(PRIVATE_SHARE_FILE)
     }
 
-    pub fn db_path(&self) -> PathBuf {
+    pub fn chain_store_path(&self) -> PathBuf {
         self.beacon_path.join(DB_DIR)
     }
 }
 
-#[inline]
 fn absolute_path(base_path: &str) -> Result<PathBuf, FileStoreError> {
-    let absolute = match Path::new(base_path).is_absolute() {
-        true => PathBuf::from(base_path),
-        false => std::fs::canonicalize(base_path)?,
+    let absolute = if Path::new(base_path).is_absolute() {
+        PathBuf::from(base_path)
+    } else {
+        let current_dir = std::env::current_dir()?;
+        current_dir.join(base_path)
     };
 
     Ok(absolute)
@@ -306,10 +311,6 @@ mod tests {
         store.save_key_pair(&pair).unwrap();
         store.save_share(&share).unwrap();
 
-        // Assert permissions
-        fn assert_perm(path: PathBuf, mode: u32) {
-            assert!(std::fs::metadata(path).unwrap().permissions().mode() & 0o777 == mode)
-        }
         assert_perm(store.private_id_file(), PRIVATE_PERM);
         assert_perm(store.public_id_file(), PUBLIC_PERM);
         assert_perm(store.private_share_file(), PRIVATE_PERM);
@@ -322,5 +323,9 @@ mod tests {
 
         assert!(pair == loaded_pair);
         assert!(share == loaded_share);
+    }
+
+    fn assert_perm(path: PathBuf, mode: u32) {
+        assert!(std::fs::metadata(path).unwrap().permissions().mode() & 0o777 == mode);
     }
 }

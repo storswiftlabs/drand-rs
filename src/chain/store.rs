@@ -11,7 +11,9 @@ use std::path::Path;
 use std::path::PathBuf;
 use tokio::sync::mpsc;
 use tokio::task;
-use tracing::*;
+use tracing::error;
+use tracing::warn;
+use tracing::Span;
 
 /// Number of beacons retrieved in a single query from chain DB.
 const BATCH_SIZE: u64 = 300;
@@ -34,23 +36,30 @@ pub struct UnChainedBeacon {
     signature: Vec<u8>,
 }
 
-#[allow(private_bounds/*:Executor*/)]
-pub trait BeaconRepr: Executor + 'static + Sized + Send + Sync + Clone {
-    fn new(prev: Self, recovered_sig: Vec<u8>) -> Self;
+#[allow(private_bounds)]
+pub trait BeaconRepr: 'static + Executor + Sized + Send + Sync + Clone {
+    fn new(prev: &Self, recovered_sig: Vec<u8>) -> Self;
     fn round(&self) -> u64;
     fn signature(&self) -> &[u8];
     fn prev_signature(&self) -> Option<&[u8]>;
     fn from_packet(p: BeaconPacket) -> Self;
     fn from_seed(genesis_seed: Vec<u8>) -> Self;
+    fn short_sig(&self) -> String {
+        hex::encode(self.signature().get(..3).expect("value is prechecked"))
+    }
+    fn short_prev_sig(&self) -> Option<String> {
+        self.prev_signature()
+            .map(|p_sig| hex::encode(p_sig.get(..3).expect("value is prechecked")))
+    }
 }
 
 impl BeaconRepr for ChainedBeacon {
-    /// WARNING: monotonic round check shifted to caller side.
-    fn new(prev: Self, new_sig: Vec<u8>) -> Self {
+    /// WARNING: monotonic round check for new beacon is shifted to caller side.
+    fn new(prev: &Self, new_sig: Vec<u8>) -> Self {
         Self {
             round: prev.round + 1,
             signature: new_sig,
-            previous_signature: prev.signature,
+            previous_signature: prev.signature.clone(),
         }
     }
 
@@ -90,8 +99,8 @@ impl BeaconRepr for ChainedBeacon {
 }
 
 impl BeaconRepr for UnChainedBeacon {
-    /// WARNING: monotonic round check shifted to caller side.
-    fn new(prev: Self, new_sig: Vec<u8>) -> Self {
+    /// WARNING: monotonic round check for new beacon is shifted to caller side.
+    fn new(prev: &Self, new_sig: Vec<u8>) -> Self {
         Self {
             round: prev.round + 1,
             signature: new_sig,
@@ -125,7 +134,7 @@ impl BeaconRepr for UnChainedBeacon {
     }
 }
 
-/// SQL statement executor for [BeaconRepr].
+/// SQL statement executor for [`BeaconRepr`].
 trait Executor: Sized {
     fn open(path: &Path) -> Result<Connection, Error>;
     fn get(conn: &Connection, round: u64) -> Result<Self, Error>;
@@ -339,18 +348,18 @@ enum Cmd<B: BeaconRepr> {
     },
 }
 
-/// Error details are traced within chain store actor (see: [ChainStore::start]).
+/// Error details are traced within chain store actor (see: [`ChainStore::start`]).
 #[derive(thiserror::Error, Debug)]
 pub enum StoreError {
     #[error("DB request is failed")]
     Internal,
-    #[error("beacon not found")]
+    #[error("beacon not found in chain store")]
     NotFound,
     #[error("genesis mismatch")]
     GenesisMismatch,
     #[error("actor receiver has been closed unexpectedly")]
     ActorClosedRx,
-    #[error("callback sender has been closed unexpectedly")]
+    #[error("cb sender has been closed unexpectedly")]
     CbClosedTx(#[from] tokio::sync::oneshot::error::RecvError),
 }
 
@@ -380,8 +389,8 @@ impl<B: BeaconRepr> ChainStore<B> {
             };
             while let Some(cmd) = cmd_rx.blocking_recv() {
                 match cmd {
-                    Cmd::Put { beacon, cb } => match B::put(beacon, &mut rw_conn) {
-                        Ok(_) => cb.reply(Ok(())),
+                    Cmd::Put { beacon, cb } => match beacon.put(&mut rw_conn) {
+                        Ok(()) => cb.reply(Ok(())),
                         Err(err) => {
                             error!(parent: &l, "failed to put beacon: {err}");
                             cb.reply(Err(StoreError::Internal));
@@ -401,7 +410,7 @@ impl<B: BeaconRepr> ChainStore<B> {
                         Ok(beacon) => cb.reply(Ok(beacon)),
                         Err(Error::QueryReturnedNoRows) => cb.reply(Err(StoreError::NotFound)),
                         Err(err) => {
-                            error!(parent: &l, "failed to get beacon for round {round}: {err}");
+                            error!(parent: &l, "failed to get beacon of round {round}: {err}");
                             cb.reply(Err(StoreError::Internal));
                             return;
                         }
@@ -468,18 +477,18 @@ impl<B: BeaconRepr> ChainStore<B> {
         }
     }
 
-    /// Inserts genesis beacon if chain store is empty or asserts that genesis_seed is equal to already stored.
+    /// Inserts genesis beacon if chain store is empty or asserts that `genesis_seed` is equal to already stored.
     pub async fn check_genesis(&self, genesis_seed: &[u8], l: &Span) -> Result<(), StoreError> {
         match self.get(0).await {
             Ok(beacon) => {
-                if beacon.signature() != genesis_seed {
-                    error!(parent: l, "genesis mismatch: already stored: {} != received {}",
+                if beacon.signature() == genesis_seed {
+                    Ok(())
+                } else {
+                    error!(parent: l, "genesis mismatch: already stored: {} != {}",
                         hex::encode(beacon.signature()),
                         hex::encode(genesis_seed));
 
                     Err(StoreError::GenesisMismatch)
-                } else {
-                    Ok(())
                 }
             }
             Err(StoreError::NotFound) => {
@@ -492,7 +501,7 @@ impl<B: BeaconRepr> ChainStore<B> {
     }
 }
 
-/// Note: Store abstraction is intentionally leaked (see [StoreStreamResponse]) for purpose of single channel usage.
+/// Note: Store abstraction is intentionally leaked (see [`StoreStreamResponse`]) for purpose of single channel usage.
 #[allow(unused_assignments)]
 fn sync<B: BeaconRepr>(
     path: &Path,
@@ -501,7 +510,8 @@ fn sync<B: BeaconRepr>(
 ) -> Result<mpsc::Receiver<StoreStreamResponse>, Error> {
     let ro_conn =
         Connection::open_with_flags(path.join(DB_NAME), OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    let (tx, rx) = mpsc::channel::<StoreStreamResponse>(BATCH_SIZE as usize);
+    let batch_size = usize::try_from(BATCH_SIZE).unwrap();
+    let (tx, rx) = mpsc::channel::<StoreStreamResponse>(batch_size);
     let id = id.to_string();
 
     let mut from = start_from;
@@ -518,8 +528,7 @@ fn sync<B: BeaconRepr>(
                         break;
                     };
                 }
-                // No more beacons stored.
-                if received_len < BATCH_SIZE as usize {
+                if received_len < batch_size {
                     let _ = tx.blocking_send(Err(tonic::Status::not_found(format!(
                         "no beacons stored above {} round",
                         sent_total as u64 + start_from - 1
@@ -529,7 +538,7 @@ fn sync<B: BeaconRepr>(
                 from += BATCH_SIZE;
             }
             Err(err) => {
-                error!("failed to get batch proto for [{id}]: {err}");
+                error!("failed to get batch proto for [{id}]: get_batch_proto: {err}");
                 break;
             }
         };
@@ -573,7 +582,6 @@ mod test {
 
     #[tokio::test]
     async fn unchained_store() {
-        crate::log::init_log(true).unwrap();
         let temp_dir = tempfile::TempDir::new().unwrap();
         let db_path = temp_dir.path();
         let id = "some_id";
@@ -592,7 +600,7 @@ mod test {
 
         // Get all beacons as internal type.
         for i in 0..=total_beacons {
-            assert!(store.get(i).await.unwrap() == beacons[i as usize])
+            assert!(store.get(i).await.unwrap() == beacons[usize::try_from(i).unwrap()]);
         }
 
         // Sync from this store; get all beacons as protobuf packets.
@@ -604,19 +612,19 @@ mod test {
         for i in 1..=total_beacons {
             let packet = stream_rx.recv().await.unwrap().unwrap();
             assert!(packet.round == i);
-            let i_beacon = &beacons[i as usize];
+            let i_beacon = &beacons[usize::try_from(i).unwrap()];
 
             assert!(packet.round == i_beacon.round);
             assert!(packet.signature == i_beacon.signature);
-            assert!(packet.previous_signature == expected_prev_sig)
+            assert!(packet.previous_signature == expected_prev_sig);
         }
 
-        // Next value from the stream should be expected error.
-        let expected = format!("no beacons stored above {total_beacons} round");
+        // Next value from stream should be this error.
+        let expected_err = format!("no beacons stored above {total_beacons} round");
         match stream_rx.recv().await.unwrap() {
             Ok(_) => panic!(),
             Err(err) => {
-                assert!(err.message() == expected)
+                assert!(err.message() == expected_err);
             }
         }
     }
@@ -641,7 +649,7 @@ mod test {
 
         // Get all beacons as internal type.
         for i in 0..=total_beacons {
-            assert!(store.get(i).await.unwrap() == beacons[i as usize])
+            assert!(store.get(i).await.unwrap() == beacons[usize::try_from(i).unwrap()]);
         }
 
         // Sync from this store; get all beacons as protobuf packets.
@@ -652,19 +660,19 @@ mod test {
         for i in 1..=total_beacons {
             let packet = stream_rx.recv().await.unwrap().unwrap();
             assert!(packet.round == i);
-            let i_beacon = &beacons[i as usize];
+            let i_beacon = &beacons[usize::try_from(i).unwrap()];
 
             assert!(packet.round == i_beacon.round);
             assert!(packet.signature == i_beacon.signature);
-            assert!(packet.previous_signature == i_beacon.previous_signature)
+            assert!(packet.previous_signature == i_beacon.previous_signature);
         }
 
-        // Next value from the stream should be expected error.
-        let expected = format!("no beacons stored above {total_beacons} round");
+        // Next value from stream should be the error.
+        let expected_err = format!("no beacons stored above {total_beacons} round");
         match stream_rx.recv().await.unwrap() {
             Ok(_) => panic!(),
             Err(err) => {
-                assert!(err.message() == expected)
+                assert!(err.message() == expected_err);
             }
         }
     }

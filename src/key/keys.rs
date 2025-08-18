@@ -71,24 +71,6 @@ impl<S: Scheme> Identity<S> {
     pub fn signature(&self) -> &SigPoint<S> {
         &self.signature
     }
-
-    /// Hash returns the hash of the public key without signing the signature. The hash
-    /// is the input to the signature Scheme. It does *not* hash the address field as
-    /// this may need to change while the node keeps the same key.
-    pub fn hash(&self) -> Result<[u8; 32]> {
-        let hash = self.key.hash()?;
-
-        Ok(hash)
-    }
-
-    pub fn is_valid_signature(&self) -> bool {
-        if let Ok(hash) = self.hash() {
-            let mut msg = S::ID.as_bytes().to_vec();
-            msg.extend_from_slice(hash.as_slice());
-            return S::bls_verify(&self.key, &self.signature, &msg).is_ok();
-        }
-        false
-    }
 }
 
 // DistPublic represents the distributed public key generated during a DKG. This
@@ -97,22 +79,12 @@ impl<S: Scheme> Identity<S> {
 // private distributed polynomial.
 #[derive(Debug, Default, PartialEq)]
 pub struct DistPublic<S: Scheme> {
-    commits: Vec<KeyPoint<S>>,
+    pub commits: Vec<KeyPoint<S>>,
 }
 
 impl<S: Scheme> DistPublic<S> {
     pub fn new(commits: Vec<KeyPoint<S>>) -> Self {
         Self { commits }
-    }
-
-    pub fn from_bytes(bytes: &[Vec<u8>]) -> Result<Self> {
-        let mut commits = Vec::with_capacity(bytes.len());
-
-        for commit in bytes.iter() {
-            commits.push(Affine::deserialize(commit)?);
-        }
-
-        Ok(Self::new(commits))
     }
 
     pub fn commits(&self) -> &[KeyPoint<S>] {

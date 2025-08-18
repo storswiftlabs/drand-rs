@@ -22,7 +22,7 @@ impl<S: Scheme> ChainInfo<S> {
     pub fn from_packet(packet: &ChainInfoPacket, id: String) -> Option<Self> {
         if S::ID != packet.scheme_id {
             error!(
-                "ChainInfo: [{id}]: scheme expected {}, received {}",
+                "ChainInfo<S>::from_packet: [{id}]: scheme expected {}, received {}",
                 S::ID,
                 packet.scheme_id
             );
@@ -30,25 +30,11 @@ impl<S: Scheme> ChainInfo<S> {
         }
 
         let Ok(public_key) = Affine::deserialize(&packet.public_key) else {
-            error!(
-                "ChainInfo: [{id}]: failed to deserialize group key: {}\nscheme: {}",
-                hex::encode(&packet.public_key),
-                S::ID
-            );
+            error!("ChainInfo::from_packet: [{id}]: failed to deserialize group key\nkey_hex: {}\nscheme: {}", hex::encode(&packet.public_key), S::ID);
             return None;
         };
 
-        #[allow(clippy::cast_sign_loss, reason = "checked")]
-        let genesis_time = if packet.genesis_time > 0 {
-            packet.genesis_time as u64
-        } else {
-            error!(
-                "ChainInfo: [{id}]: invalid genesis time: {}",
-                packet.genesis_time
-            );
-            return None;
-        };
-
+        let genesis_time = check_genesis_time(packet.genesis_time)?;
         let info = Self {
             public_key,
             beacon_id: id,
@@ -110,4 +96,15 @@ pub fn hash_packet(proto: &ChainInfoPacket, beacon_id: &str) -> [u8; 32] {
         h.update(beacon_id.as_bytes());
     }
     h.finalize().into()
+}
+
+/// Returns `None` if genesis time is equal or less then zero.
+fn check_genesis_time(genesis_time: i64) -> Option<u64> {
+    if genesis_time > 0 {
+        #[allow(clippy::cast_sign_loss, reason = "checked")]
+        Some(genesis_time as u64)
+    } else {
+        error!("chain_info: invalid genesis time: {genesis_time}");
+        None
+    }
 }

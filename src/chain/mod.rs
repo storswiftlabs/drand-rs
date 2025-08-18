@@ -6,7 +6,11 @@ mod registry;
 mod store;
 mod sync;
 mod ticker;
-mod time;
+pub mod time;
+
+pub use handler::{init_chain, ChainCmd, ChainError, PartialPacket};
+pub use store::{ChainedBeacon, StoreError, StoreStreamResponse, UnChainedBeacon};
+pub use sync::SyncError;
 
 use energon::drand::traits::BeaconDigest;
 /// BLS signature check for aggregated or resynced beacons.

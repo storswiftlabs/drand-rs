@@ -20,17 +20,17 @@ async fn all_roles_dkg() {
     // Setup: group: 9, thr: 7
     //
     // FOLDER[i]_IMPL  ROLE
-    //    node0_GO    Joiner
-    //    node1_GO    Joiner
-    //    node2_GO    Joiner
-    //    node3_GO    Joiner
-    //    node4_RS    Joiner
-    //    node5_RS    Joiner
-    //    node6_RS    Joiner
-    //    node7_RS    Joiner
-    //    node8_RS    Joiner
+    //    node0_GO    joiner
+    //    node1_GO    joiner
+    //    node2_GO    joiner
+    //    node3_GO    joiner
+    //    node4_RS    joiner
+    //    node5_RS    joiner
+    //    node6_RS    joiner
+    //    node7_RS    joiner
+    //    node8_RS    joiner
     let custom_thr = Some(7);
-    let mut group = run_fresh_dkg(9, custom_thr).await;
+    let mut group = run_fresh_dkg(9, custom_thr, GroupConfig::default()).await;
 
     // Epoch 2
     // Scenario: 7 remainers, 2 leavers(online)
@@ -60,11 +60,11 @@ async fn all_roles_dkg() {
     // 5 until execution time (protocol)
     // + 3 for fast_sync mode (phase_timeout 10)
     // + 5 (CI/CD)
-    sleep(Duration::from_secs(15)).await;
+    sleep(Duration::from_secs(13)).await;
     //
     // Check results
     // Get finished state from leader
-    let finished = get_finished_state(&group.nodes[0].control, &group.nodes[0].id).await;
+    let finished = get_finished_state(&group.nodes[0].control, &group.config.id).await;
     assert_eq!(finished.epoch, 2);
     assert_eq!(finished.state, Status::Complete as u32);
     // Groupfiles for remainers should be equal with leader groupfile.
@@ -92,8 +92,8 @@ async fn all_roles_dkg() {
     group.nodes[2].stop().await;
     group.nodes[7].stop().await;
     // Refresh keypairs for joiners: node3_GO, node8_RS
-    group.nodes[3].set_to_fresh().await;
-    group.nodes[8].set_to_fresh().await;
+    group.nodes[3].set_to_fresh(&group.config).await;
+    group.nodes[8].set_to_fresh(&group.config).await;
     //
     // Start resharing protocol
     group.leader_generate_proposal().await;
@@ -107,34 +107,32 @@ async fn all_roles_dkg() {
     //
     // Check results
     // Get finished state from leader
-    let finished = get_finished_state(&group.nodes[0].control, &group.nodes[0].id).await;
+    let finished = get_finished_state(&group.nodes[0].control, &group.config.id).await;
     assert_eq!(finished.epoch, 3);
     assert_eq!(finished.state, Status::Complete as u32);
     // Groupfiles for remainers and joiners should be equal with leader groupfile.
     group.assert_groupfiles_with_leader();
-    remove_nodes_fs()
+
+    group.stop_all().await;
+    remove_nodes_fs();
 }
 
 #[ignore = "example for release build"]
 #[tokio::test]
 async fn random_scenarios() {
-    let log_enabled = true;
     let write_statistic = true;
     // Max group size and number of epochs are arbitrary values.
     // Note: for dynamic scenarios at least 3 nodes required.
-    let max_group_size = 14;
+    let max_group_size = 20;
     // 55 epochs = ~20 minutes to run
     let epochs = 55;
+    let mut group = NodesGroup::generate_nodes(max_group_size, GroupConfig::default(), None).await;
 
-    let mut group = NodesGroup::generate_nodes(max_group_size).await;
-    if log_enabled {
-        crate::log::init_log(false).unwrap();
-    }
     if write_statistic {
         group.sn.enable_frames();
     }
 
-    group.start_daemons().await;
+    group.start_daemons();
     sleep(Duration::from_secs(5)).await;
 
     for _ in 0..epochs {

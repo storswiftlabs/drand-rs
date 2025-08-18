@@ -8,7 +8,6 @@ use super::ActionsError;
 use crate::key::group::minimum_t;
 use crate::key::group::Group;
 use crate::key::toml::Toml;
-use crate::key::Hash;
 use crate::key::PointSerDeError;
 use crate::key::Scheme;
 
@@ -31,6 +30,7 @@ use toml_edit::Item;
 use toml_edit::Table;
 use tracing::error;
 
+#[allow(dead_code, reason = "not fully implemented")]
 #[derive(thiserror::Error, Debug)]
 pub enum DBStateError {
     #[error("proposal terms cannot be empty")]
@@ -184,7 +184,7 @@ impl<S: Scheme> Toml for State<S> {
     fn toml_encode(&self) -> Option<Self::Inner> {
         fn to_array(items: &[Participant]) -> Option<ArrayOfTables> {
             let mut array = ArrayOfTables::new();
-            for i in items.iter() {
+            for i in items {
                 array.push(i.toml_encode()?);
             }
             Some(array)
@@ -198,8 +198,8 @@ impl<S: Scheme> Toml for State<S> {
         if self.status == Status::Fresh {
             return Some(doc);
         }
-        doc.insert("Epoch", (self.epoch as i64).into());
-        doc.insert("Threshold", (self.threshold as i64).into());
+        doc.insert("Epoch", i64::from(self.epoch).into());
+        doc.insert("Threshold", i64::from(self.threshold).into());
         doc.insert("Timeout", (self.timeout.to_string()).into());
         doc.insert("GenesisTime", (self.genesis_time.to_string()).into());
         doc.insert("GenesisSeed", hex::encode(&self.genesis_seed).into());
@@ -273,11 +273,11 @@ impl<S: Scheme> Toml for State<S> {
 
         Some(Self {
             beacon_id: beacon_id.into(),
-            epoch: table.get("Epoch")?.as_integer()? as u32,
+            epoch: u32::try_from(table.get("Epoch")?.as_integer()?).ok()?,
             status: state,
             catchup_period,
             beacon_period,
-            threshold: table.get("Threshold")?.as_integer()? as u32,
+            threshold: u32::try_from(table.get("Threshold")?.as_integer()?).ok()?,
             timeout: Timestamp::from_str(table.get("Timeout")?.as_str()?).ok()?,
             genesis_time: Timestamp::from_str(table.get("GenesisTime")?.as_str()?).ok()?,
             genesis_seed: table.get("GenesisSeed")?.as_str().map(hex::decode)?.ok()?,
@@ -316,13 +316,13 @@ impl<S: Scheme> GossipAuth for State<S> {
         .concat();
 
         for j in &self.joining {
-            ret.extend_from_slice(&enc_participant("\nJoiner:", j))
+            ret.extend_from_slice(&enc_participant("\nJoiner:", j));
         }
         for r in &self.remaining {
-            ret.extend_from_slice(&enc_participant("\nRemainer:", r))
+            ret.extend_from_slice(&enc_participant("\nRemainer:", r));
         }
         for l in &self.leaving {
-            ret.extend_from_slice(&enc_participant("\nLeaver:", l))
+            ret.extend_from_slice(&enc_participant("\nLeaver:", l));
         }
 
         ret
@@ -419,11 +419,7 @@ impl<S: Scheme> State<S> {
         Ok(())
     }
 
-    pub(super) async fn apply(
-        &mut self,
-        me: &Participant,
-        packet: GossipPacket,
-    ) -> Result<(), ActionsError> {
+    pub fn apply(&mut self, me: &Participant, packet: GossipPacket) -> Result<(), ActionsError> {
         let metadata = &packet.metadata;
 
         match packet.data {
@@ -438,15 +434,15 @@ impl<S: Scheme> State<S> {
                 .map_err(ActionsError::DBState),
             GossipData::Reject(_reject_proposal) => {
                 error!("GossipData::Reject is not implemented");
-                Err(ActionsError::TODO)
+                Err(ActionsError::Todo)
             }
             GossipData::Abort(_abort_dkg) => {
                 error!("GossipData::Abort is not implemented");
-                Err(ActionsError::TODO)
+                Err(ActionsError::Todo)
             }
             GossipData::Dkg(_dkg_packet) => {
                 error!("GossipData::Dkg is not implemented");
-                Err(ActionsError::TODO)
+                Err(ActionsError::Todo)
             }
         }
     }
@@ -508,10 +504,8 @@ impl<S: Scheme> State<S> {
 
         self.status = Status::Complete;
         if self.genesis_seed.is_empty() {
-            self.genesis_seed = final_group
-                .hash()
-                .expect("hashing should not fail")
-                .to_vec();
+            self.genesis_seed
+                .extend_from_slice(&final_group.genesis_seed);
         }
         self.final_group = Some(final_group);
         self.key_share = Some(share);
@@ -519,9 +513,9 @@ impl<S: Scheme> State<S> {
         Ok(())
     }
 
-    /// ReceivedAcceptance is used by nodes when they receive a gossiped acceptance packet
+    /// `ReceivedAcceptance` is used by nodes when they receive a gossiped acceptance packet
     /// they needn't necessarily collect _all_ acceptances for executing, but it gives them some insight into
-    /// the state of the DKG when they run the status command
+    /// the state of the DKG when they run the status command.
     fn received_acceptance(
         &mut self,
         them: Participant,
@@ -700,14 +694,18 @@ fn validate_for_all_dkgs<S: Scheme>(
     current: &State<S>,
     terms: &ProposalTerms,
 ) -> Result<(), DBStateError> {
-    // It shouldn't really be possible for the wrong beaconID to make its way here, but better safe than sorry :)
     if current.beacon_id != terms.beacon_id {
         return Err(DBStateError::InvalidBeaconID);
     }
-    validate_joiner_signatures::<S>(terms.joining.as_slice())?;
+    // Validate joiner signatures.
+    for j in &terms.joining {
+        if !j.is_valid_signature::<S>() {
+            return Err(DBStateError::ParticipantSignature);
+        }
+    }
 
     let time_now = Timestamp::from(SystemTime::now());
-    if time_now.seconds >= terms.timeout.seconds && time_now.nanos >= terms.timeout.nanos {
+    if time_now.seconds >= terms.timeout.seconds {
         return Err(DBStateError::TimeoutReached);
     }
 
@@ -771,16 +769,6 @@ impl<S: Scheme> TryFrom<ProposalTerms> for State<S> {
     }
 }
 
-fn validate_joiner_signatures<S: Scheme>(joiners: &[Participant]) -> Result<(), DBStateError> {
-    for j in joiners {
-        if !j.is_valid_signature::<S>() {
-            return Err(DBStateError::ParticipantSignature);
-        }
-    }
-
-    Ok(())
-}
-
 fn validate_previous_group_for_joiners<S: Scheme>(
     d: &State<S>,
     prev_group: Option<&Group<S>>,
@@ -789,7 +777,7 @@ fn validate_previous_group_for_joiners<S: Scheme>(
     // that the proposal is valid (e.g. the `GenesisTime` and `Remaining` group are correct)
     match prev_group {
         Some(prev_group) => {
-            if prev_group.genesis_time != d.genesis_time.seconds as u64 {
+            if prev_group.genesis_time != u64::try_from(d.genesis_time.seconds).unwrap() {
                 return Err(DBStateError::GenesisTimeNotConsistentWithProposal);
             }
             if prev_group.genesis_seed != d.genesis_seed {

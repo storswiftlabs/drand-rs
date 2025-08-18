@@ -1,8 +1,6 @@
 //! Types are re-exported directly if their fields DO NOT contain:
 //!  - option<T> instead of T
 //!  - protected new pattern types
-//!
-//! Note: generic types might be converted directly into protobuf later.
 
 pub use prost_types::Timestamp;
 pub use protobuf::dkg::packet::Bundle;
@@ -10,13 +8,15 @@ pub use protobuf::dkg::AbortDkg;
 pub use protobuf::dkg::AbortOptions;
 pub use protobuf::dkg::AcceptOptions;
 pub use protobuf::dkg::CommandMetadata;
-pub use protobuf::dkg::DkgStatusRequest;
-pub use protobuf::dkg::EmptyDkgResponse;
 pub use protobuf::dkg::ExecutionOptions;
 pub use protobuf::dkg::JoinOptions;
 pub use protobuf::dkg::RejectOptions;
 
-use super::utils::*;
+use super::utils::from_vec;
+use super::utils::try_from_vec;
+use super::utils::ConvertProto;
+use super::utils::RequireSome;
+use super::utils::TransportError;
 use protobuf::drand::Metadata;
 
 use crate::net::utils::Address;

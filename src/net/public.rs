@@ -1,12 +1,9 @@
-//! This module provides server implementations for Public.
+//! This module provides server and client implementations for RPC Public.
 
 use super::utils::Address;
 use super::utils::Callback;
-use super::utils::ConnectionError;
 use super::utils::ToStatus;
 use super::utils::ERR_METADATA_IS_MISSING;
-use super::utils::URI_SCHEME;
-
 use crate::core::beacon::BeaconCmd;
 use crate::core::daemon::Daemon;
 use crate::protobuf::drand as protobuf;
@@ -23,10 +20,8 @@ use protobuf::PublicRandResponse;
 
 use anyhow::bail;
 use anyhow::Context;
-use http::Uri;
 use std::ops::Deref;
 use std::pin::Pin;
-use std::str::FromStr;
 use std::sync::Arc;
 use tokio_stream::Stream;
 use tonic::transport::Channel;
@@ -36,7 +31,7 @@ use tonic::Status;
 
 type ResponseStream = Pin<Box<dyn Stream<Item = Result<PublicRandResponse, Status>> + Send>>;
 
-/// Implementor for [`Public`] trait for use with PublicServer
+/// Implementor for [`Public`] trait for use with `PublicServer`.
 pub struct PublicHandler(pub(super) Arc<Daemon>);
 
 impl PublicHandler {
@@ -70,7 +65,6 @@ impl Public for PublicHandler {
         &self,
         request: Request<ChainInfoRequest>,
     ) -> Result<Response<ChainInfoPacket>, Status> {
-        // Borrow id from metadata.
         let id = request.get_ref().metadata.as_ref().map_or_else(
             || Err(Status::data_loss(ERR_METADATA_IS_MISSING)),
             |meta| Ok(meta.beacon_id.as_str()),
@@ -82,7 +76,6 @@ impl Public for PublicHandler {
             .await
             .map_err(|err| err.to_status(id))?;
 
-        // Await response from callback
         let chain_info = rx
             .await
             .map_err(|recv_err| recv_err.to_status(id))?
@@ -107,34 +100,35 @@ pub struct PublicClient {
 
 impl PublicClient {
     pub async fn new(address: &Address) -> anyhow::Result<Self> {
-        let address = format!("{URI_SCHEME}://{}", address.as_str());
-        let uri = Uri::from_str(&address)?;
-        let channel = Channel::builder(uri)
-            .connect()
-            .await
-            .map_err(|error| ConnectionError { address, error })?;
+        let channel = super::utils::connect(address).await?;
         let client = _PublicClient::new(channel);
-
         Ok(Self { client })
     }
 
-    pub async fn chain_info(&mut self, beacon_id: &str) -> anyhow::Result<ChainInfoPacket> {
-        let metadata = Some(Metadata::mimic_version(beacon_id, &[]));
+    pub async fn chain_info(&mut self, beacon_id: String) -> anyhow::Result<ChainInfoPacket> {
+        let metadata = Some(Metadata::golang_node_version(beacon_id.clone(), None));
         let request = ChainInfoRequest { metadata };
-        let responce = self.client.chain_info(request).await?.into_inner();
+        let response = self.client.chain_info(request).await?.into_inner();
 
-        let metadata = responce
+        // Add error context if metadata is not consistent.
+        let metadata = response
             .metadata
             .as_ref()
-            .context("received chain_info responce without metadata")?;
+            .context("received chain_info response without metadata")?;
         if metadata.beacon_id != beacon_id {
             bail!(
-                "received chain_info responce with invalid beacon id, expected: {beacon_id}, received: {}",
+                "received chain_info response with invalid beacon id, expected: {beacon_id}, received: {}",
                 metadata.beacon_id
             )
         }
+        if metadata.chain_hash.len() != 32 {
+            bail!(
+                "invalid chain-hash of received chain_info response: expected len 32, received {}",
+                metadata.chain_hash.len()
+            )
+        }
 
-        Ok(responce)
+        Ok(response)
     }
 }
 

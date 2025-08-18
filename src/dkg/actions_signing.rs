@@ -64,10 +64,10 @@ impl<S: Scheme> ActionsSigning for BeaconProcess<S> {
             // Verify signature
             {
                 let msg = self.msg_for_signing(gp, &state.encode());
-                if !is_valid_signature::<S>(&participant.key, &gp.metadata.signature, &msg) {
-                    Err(ActionsError::InvalidSignature)
-                } else {
+                if is_valid_signature::<S>(&participant.key, &gp.metadata.signature, &msg) {
                     Ok(())
+                } else {
+                    Err(ActionsError::InvalidSignature)
                 }
             }
         } else {
@@ -85,7 +85,8 @@ fn is_valid_signature<S: Scheme>(key: &[u8], sig: &[u8], msg: &[u8]) -> bool {
     false
 }
 
-/// Implementation for UTC 0, aligned to https://pkg.go.dev/time#Time.MarshalBinary [go 1.22.10]
+/// Implementation for UTC 0, aligned to <https://pkg.go.dev/time#Time.MarshalBinary> [go 1.22.10]
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub(super) fn enc_timestamp(t: Timestamp) -> [u8; 15] {
     // Add delta(year 1, unix epoch)
     let sec = t.seconds + 62135596800;

@@ -4,11 +4,10 @@
 //!   download historical beacons up to current height from chain node.
 //! - Resync is triggered automatically by chain nodes once latest stored
 //!   beacon is more than one round late for expected chain height.
-
 use super::info::ChainInfo;
 use super::store::BeaconRepr;
 use super::store::ChainStore;
-use super::store::StoreError;
+use super::StoreError;
 
 use crate::key::Scheme;
 use crate::net::control::SyncProgressResponse;
@@ -196,13 +195,15 @@ impl<S: Scheme, B: BeaconRepr> DefaultSyncer<S, B> {
                 }
 
                 let mut stream = match ProtocolClient::new(peer).await {
-                    Ok(mut client) => match client.sync_chain(from, &self.info.beacon_id).await {
-                        Ok(stream) => stream,
-                        Err(err) => {
-                            error!(parent: l, "skipping {peer}: failed to get stream: {err}");
-                            continue;
+                    Ok(mut client) => {
+                        match client.sync_chain(from, self.info.beacon_id.clone()).await {
+                            Ok(stream) => stream,
+                            Err(err) => {
+                                error!(parent: l, "skipping {peer}: failed to get stream: {err}");
+                                continue;
+                            }
                         }
-                    },
+                    }
                     Err(err) => {
                         error!(parent: l, "skipping {peer}: unable to create client: {err}");
                         continue;
@@ -288,7 +289,6 @@ impl<S: Scheme, B: BeaconRepr> DefaultSyncer<S, B> {
 
 pub async fn start_follow_chain<B: BeaconRepr>(
     req: &StartSyncRequest,
-    node_addr: &str,
     beacon_id: &str,
     store: &ChainStore<B>,
     l: Span,
@@ -297,10 +297,6 @@ pub async fn start_follow_chain<B: BeaconRepr>(
 
     let mut peers = Vec::with_capacity(req.nodes.len());
     for node in &req.nodes {
-        if *node == node_addr {
-            warn!(parent: &l, "invalid input: skipping own addres [{node_addr}]");
-            continue;
-        }
         match Address::precheck(node.as_str()) {
             Ok(peer) => peers.push(peer),
             Err(err) => {
@@ -372,7 +368,7 @@ pub fn resync(
                 });
             }
             let mut stream = match ProtocolClient::new(&peer).await {
-                Ok(mut conn) => match conn.sync_chain(last_sent + 1, &id).await {
+                Ok(mut conn) => match conn.sync_chain(last_sent + 1, id.clone()).await {
                     Ok(stream) => stream,
                     Err(err) => {
                         error!(parent: l, "failed to get stream from {peer}: {err}");
@@ -429,7 +425,7 @@ async fn chain_info_from_peers(
         match PublicClient::new(peer).await {
             Ok(mut client) => {
                 debug!(parent: l, "connected to {peer}, sending chain info request..");
-                match client.chain_info(beacon_id).await {
+                match client.chain_info(beacon_id.to_string()).await {
                     Ok(packet) => {
                         if let Some(ref m) = packet.metadata {
                             if m.beacon_id == beacon_id {

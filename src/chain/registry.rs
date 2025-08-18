@@ -3,8 +3,8 @@ use super::epoch::EpochConfig;
 use super::info::ChainInfo;
 use super::store::BeaconRepr;
 use super::sync::HandleReSync;
-use super::sync::SyncError;
 use super::time;
+use super::SyncError;
 use crate::key::Scheme;
 use crate::net::utils::Seconds;
 use crate::protobuf::drand::BeaconPacket;
@@ -14,7 +14,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::Span;
 
-/// Registry holds actual data that may change per / within a round.
+/// Registry holds actual data which might be changed per / within a round.
 pub struct Registry<S: Scheme, B: BeaconRepr> {
     /// Latest verified and successfully stored beacon.
     latest_stored: B,
@@ -41,13 +41,14 @@ impl<S: Scheme, B: BeaconRepr> Registry<S, B> {
         tx_catchup: mpsc::Sender<()>,
         tx_resync: mpsc::Sender<BeaconPacket>,
         thr: usize,
+        l_partial: Span,
     ) -> Self {
         let current_round = time::current_round(
             time::time_now().as_secs(),
             info.period.get_value(),
             info.genesis_time,
         );
-        let p_cache = PartialCache::new(latest_stored.round(), thr);
+        let p_cache = PartialCache::new(latest_stored.round(), thr, l_partial);
 
         Self {
             latest_stored,

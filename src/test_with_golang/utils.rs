@@ -6,7 +6,6 @@ use crate::key::Scheme;
 use crate::net::dkg_control::DkgControlClient;
 use crate::protobuf::dkg::DkgEntry;
 
-use energon::drand::schemes::DefaultScheme;
 use energon::kyber::dkg::minimum_t;
 use rand::rngs::ThreadRng;
 use rand::seq::SliceRandom;
@@ -33,8 +32,8 @@ pub const INNER_PATH: &str = "src/test_with_golang/";
 /// Path for group state summary, used in DKG scenario generator
 pub const FRAMES_PATH: &str = "src/test_with_golang/frames.txt";
 
-impl CLI {
-    #[inline(always)]
+/// Helper to simplify using CLI in tests.
+impl Cli {
     fn new(commands: Cmd) -> Self {
         Self {
             verbose: true,
@@ -50,18 +49,11 @@ impl CLI {
         Self::new(Cmd::Start(config))
     }
 
-    pub fn load_id(control: &str, id: &str) -> Self {
-        Self::new(Cmd::Load {
-            control: control.to_string(),
-            id: id.to_string(),
-        })
-    }
-
     pub fn dkg_join(control: &str, id: &str, groupfile_path: Option<&str>) -> Self {
         Self::new(Cmd::Dkg(crate::cli::Dkg::Join {
             control: control.to_string(),
             id: id.to_string(),
-            group: groupfile_path.map(|p| p.to_string()),
+            group: groupfile_path.map(ToString::to_string),
         }))
     }
 
@@ -75,19 +67,19 @@ impl CLI {
     pub fn stop(control: &str, id: Option<&str>) -> Self {
         Self::new(Cmd::Stop {
             control: control.to_string(),
-            id: id.map(|x| x.to_string()),
+            id: id.map(ToString::to_string),
         })
     }
 }
 
 /// Drand implementation
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Lang {
     GO,
     RS,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct NodeConfig {
     /// Longterm node identifier
     cmd_i: usize,
@@ -96,12 +88,9 @@ pub struct NodeConfig {
     /// Base folder absolute path
     folder_path: String,
     /// Groupfile absolute path
-    groupfile_path: String,
-    /// Beacon ID
-    pub id: String,
-    scheme: String,
+    pub groupfile_path: String,
     /// Node private-listen address (in tests is same to URI, no TLS termination).
-    private_listen: String,
+    pub private_listen: String,
     /// Node control port
     pub control: String,
     /// Golang or Rust implementation
@@ -110,7 +99,7 @@ pub struct NodeConfig {
     summary: CompletedRoles,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct CompletedRoles {
     joiner: u16,
     remainer: u16,
@@ -170,10 +159,11 @@ impl Scenario {
 
     /// Write summary to the file.
     pub fn enable_frames(&mut self) {
-        self.frames = Some(File::create(FRAMES_PATH).unwrap())
+        self.frames = Some(File::create(FRAMES_PATH).unwrap());
     }
 
     /// Helper function for mapping between nodes indentifiers and their roles (as participants) for current epoch.
+    #[allow(clippy::trivially_copy_pass_by_ref, reason = "slice::contains")]
     fn get_role(&self, i: &usize) -> Role {
         match (
             self.joiners.contains(i),
@@ -188,7 +178,7 @@ impl Scenario {
         }
     }
 
-    async fn write_frame(&mut self, nodes: &[NodeConfig], is_finished: bool) {
+    fn write_frame(&mut self, nodes: &[NodeConfig], is_finished: bool) {
         if self.frames.is_none() {
             return;
         }
@@ -240,11 +230,43 @@ impl Scenario {
     }
 }
 
+/// Group level configuration for all nodes.
+///
+/// Note: Threshold excluded from this config as active parameter of DKG scenario generator.
+#[derive(Clone)]
+pub struct GroupConfig {
+    pub scheme: String,
+    pub period: u8,
+    /// DKG timeout.
+    pub timeout: u8,
+    pub catchup_period: u8,
+    /// Value in seconds or hours (see [`Self::default`]).
+    pub genesis_delay: String,
+    /// Beacon ID.
+    pub id: String,
+}
+
+impl Default for GroupConfig {
+    /// Beacon generation is "disabled" by default via `genesis_delay`.
+    fn default() -> Self {
+        Self {
+            scheme: energon::drand::schemes::SigsOnG1Scheme::ID.to_string(),
+            period: 10,
+            timeout: 50,
+            catchup_period: 1,
+            genesis_delay: "24h".into(),
+            id: "AAA".into(),
+        }
+    }
+}
+
 pub struct NodesGroup {
     pub nodes: Vec<NodeConfig>,
     pub sn: Scenario,
     /// Groupfile is required for joiners in existing group, see [`NodeConfig::dkg_join`]
-    pub group_file_path: String,
+    group_file_path: String,
+    /// Group level configuration for all nodes
+    pub config: GroupConfig,
 }
 
 impl NodesGroup {
@@ -253,14 +275,15 @@ impl NodesGroup {
         self.assert_groupfiles_with_leader();
 
         // All nodes should be in non-terminal state
-        for n in self.nodes.iter_mut() {
-            let status = get_current_status(&n.control, &n.id).await;
-            if status.is_terminal() {
-                panic!(
-                    "terminal statuses are not expected, folder: {}, address: {}, status: {}",
-                    n.folder_name, n.private_listen, status
-                );
-            };
+        for n in &mut self.nodes {
+            let status = get_current_status(&n.control, &self.config.id).await;
+            assert!(
+                !status.is_terminal(),
+                "terminal statuses are not expected, folder: {}, address: {}, status: {}",
+                n.folder_name,
+                n.private_listen,
+                status
+            );
 
             // Add current role to own node statistic
             match self.sn.get_role(&n.cmd_i) {
@@ -272,33 +295,53 @@ impl NodesGroup {
                 }
                 Role::Leaver => {
                     n.summary.leaver += 1;
-                    n.set_to_fresh().await;
+                    n.set_to_fresh(&self.config).await;
                     sleep(Duration::from_secs(5)).await;
                 }
                 Role::Out => { /* not tracked */ }
             };
         }
 
-        self.sn.write_frame(&self.nodes, true).await;
+        self.sn.write_frame(&self.nodes, true);
     }
 
-    pub async fn generate_nodes(n: usize) -> Self {
-        if n < 2 {
-            panic!("at least 2 nodes required")
+    /// Generates nodes in 50% [go/rs] proportion by default. Proportion is shifted if `set_go` value is provided.
+    pub async fn generate_nodes(n: usize, c: GroupConfig, set_go: Option<usize>) -> Self {
+        assert!((n >= 2), "at least 2 nodes required");
+
+        let nodes: Vec<NodeConfig> =
+        // Shifted proportion
+        if let Some(mut nodes_go) = set_go {
+            assert!((nodes_go <= n), "nodes_go > group size");
+            assert!((nodes_go != 0), "at least one node_go required");
+
+            (0..n)
+                .map(|i| {
+                    if nodes_go > 0 {
+                        nodes_go -= 1;
+                        NodeConfig::new(i, &c.id, Lang::GO)
+                    } else {
+                        NodeConfig::new(i, &c.id, Lang::RS)
+                    }
+                })
+                .collect()
         }
-        let half = n / 2;
-        let nodes: Vec<NodeConfig> = (0..n)
-            .map(|i| {
-                if i < half {
-                    NodeConfig::new(i, "AAA", DefaultScheme::ID, Lang::GO)
-                } else {
-                    NodeConfig::new(i, "AAA", DefaultScheme::ID, Lang::RS)
-                }
-            })
-            .collect();
+         // Default proportion.
+        else {
+            let half = n / 2;
+            (0..n)
+                .map(|i| {
+                    if i < half {
+                        NodeConfig::new(i, &c.id, Lang::GO)
+                    } else {
+                        NodeConfig::new(i, &c.id, Lang::RS)
+                    }
+                })
+                .collect()
+        };
 
         for n in &nodes {
-            n.generate_keypair().await
+            n.generate_keypair(&c.id, &c.scheme).await;
         }
         let sn = Scenario::init(n);
         let group_file_path = format!(
@@ -310,21 +353,22 @@ impl NodesGroup {
             nodes,
             sn,
             group_file_path,
+            config: c,
         }
     }
 
-    pub async fn start_daemons(&self) {
+    pub fn start_daemons(&self) {
         for n in &self.nodes {
-            n.start().await
+            n.start();
         }
     }
 
     pub async fn leader_dkg_execute(&mut self) {
         if self.sn.frames.is_some() {
-            self.sn.write_frame(&self.nodes, false).await;
+            self.sn.write_frame(&self.nodes, false);
         }
         let args = format!("dkg execute --id AAA --control {}", self.nodes[0].control);
-        run_cmd_golang(&args).await
+        run_cmd_golang(&args).await;
     }
 
     pub async fn members_proceed_proposal(&self) {
@@ -332,13 +376,13 @@ impl NodesGroup {
             if self.sn.joiners.contains(&n.cmd_i) {
                 if self.sn.epoch > 1 {
                     // Joiner in existing group
-                    n.dkg_join(Some(&self.group_file_path)).await
+                    n.dkg_join(Some(&self.group_file_path), &self.config).await;
                 } else {
                     // Joiner in new group
-                    n.dkg_join(None).await
+                    n.dkg_join(None, &self.config).await;
                 }
             } else if self.sn.remainers.contains(&n.cmd_i) {
-                n.dkg_accept().await
+                n.dkg_accept(&self.config).await;
             } else {
                 // * Leaver get no say if the rest of the network wants them out
                 // * Node is not included in current scenario
@@ -417,10 +461,12 @@ impl NodesGroup {
     }
 
     pub async fn leader_generate_proposal(&mut self) {
-        if self.sn.joiners.is_empty() && self.sn.remainers.is_empty() && self.sn.leavers.is_empty()
-        {
-            panic!("received empty scenario")
-        }
+        assert!(
+            !(self.sn.joiners.is_empty()
+                && self.sn.remainers.is_empty()
+                && self.sn.leavers.is_empty()),
+            "received empty scenario"
+        );
         info!(
             "Leader: generating proposal for new scenario: {}\n",
             self.sn
@@ -449,7 +495,7 @@ impl NodesGroup {
         .unwrap();
 
         run_cmd_golang(&args).await;
-        self.leader_initiate_proposal().await
+        self.leader_initiate_proposal().await;
     }
 
     pub async fn leader_initiate_proposal(&mut self) {
@@ -458,12 +504,19 @@ impl NodesGroup {
         debug!("leader_initiate_proposal: group_size {group_size},thr: {}, joiners: {:?}, remainers: {:?}, leavers: {:?}",self.sn.thr, self.sn.joiners, self.sn.remainers, self.sn.leavers);
         let threshold = self.sn.thr;
 
+        let c = &self.config;
+        let period = c.period;
+        let timeout = c.timeout;
+        let catchup_period = c.catchup_period;
+        let genesis_delay = &c.genesis_delay;
+        let scheme = &c.scheme;
+        let id = &c.id;
         let args = if self.sn.remainers.is_empty() {
-            format!("dkg init --id AAA --period 5s --timeout 50s --catchup-period 1s --genesis-delay 24h --threshold {threshold} --scheme pedersen-bls-chained --proposal {}/proposal.toml --control {}", self.nodes[0].folder_path, self.nodes[0].control)
+            format!("dkg init --id {id} --period {period}s --timeout {timeout}s --catchup-period {catchup_period}s --genesis-delay {genesis_delay} --threshold {threshold} --scheme {scheme} --proposal {}/proposal.toml --control {}", self.nodes[0].folder_path, self.nodes[0].control)
         } else {
-            format!("dkg reshare --id AAA --timeout 50s --catchup-period 1s --threshold {threshold} --proposal {}/proposal.toml --control {}", self.nodes[0].folder_path, self.nodes[0].control)
+            format!("dkg reshare --id {id} --timeout {timeout}s --catchup-period {catchup_period}s --threshold {threshold} --proposal {}/proposal.toml --control {}", self.nodes[0].folder_path, self.nodes[0].control)
         };
-        run_cmd_golang(&args).await
+        run_cmd_golang(&args).await;
     }
 
     /// Directly specifies roles and threshold for next epoch.
@@ -495,19 +548,25 @@ impl NodesGroup {
             assert_eq!(
                 leader_groupfile,
                 std::fs::read(&self.nodes[*j].groupfile_path).unwrap()
-            )
+            );
         }
         // Remainers
         for r in &self.sn.remainers {
             assert_eq!(
                 leader_groupfile,
                 std::fs::read(&self.nodes[*r].groupfile_path).unwrap()
-            )
+            );
         }
         info!(
             "test[assert_groupfiles]: joiners {:?} and remainers {:?} are in right state",
             self.sn.joiners, &self.sn.remainers
-        )
+        );
+    }
+
+    pub async fn stop_all(self) {
+        for node in self.nodes {
+            node.stop().await;
+        }
     }
 }
 
@@ -524,9 +583,9 @@ fn map_node_addresses<'a>(nodes: &'a [NodeConfig], identifiers: &[usize]) -> Vec
 /// First half of nodes use Golang implementation, leader is always node[0], see [`NodesGroup::generate_nodes`].
 /// Threshold is minimal by default; this can be changed if a custom threshold is specified.
 /// Note: Custom threshold should follow the Drand protocol.
-pub async fn run_fresh_dkg(n: usize, custom_thr: Option<usize>) -> NodesGroup {
-    let mut nodes = NodesGroup::generate_nodes(n).await;
-    nodes.start_daemons().await;
+pub async fn run_fresh_dkg(n: usize, custom_thr: Option<usize>, config: GroupConfig) -> NodesGroup {
+    let mut nodes = NodesGroup::generate_nodes(n, config, None).await;
+    nodes.start_daemons();
     sleep(Duration::from_secs(5)).await;
     // in fresh DKG all nodes are joiners.
     nodes.sn.joiners.extend(0..n);
@@ -537,13 +596,12 @@ pub async fn run_fresh_dkg(n: usize, custom_thr: Option<usize>) -> NodesGroup {
     nodes.members_proceed_proposal().await;
     nodes.leader_dkg_execute().await;
     sleep(Duration::from_secs(10)).await;
-    nodes.assert_groupfiles_with_leader();
     nodes.check_results().await;
     nodes
 }
 
 impl NodeConfig {
-    fn new(cmd_i: usize, id: &str, scheme: &str, lang: Lang) -> Self {
+    pub fn new(cmd_i: usize, id: &str, lang: Lang) -> Self {
         let private_listen = format!("127.0.0.1:{}", 44000 + cmd_i);
         let control = format!("{}", 55000 + cmd_i);
         let folder_name = format!("node{cmd_i}_{lang:?}");
@@ -558,8 +616,6 @@ impl NodeConfig {
             folder_name,
             folder_path,
             groupfile_path,
-            id: id.into(),
-            scheme: scheme.into(),
             private_listen,
             control,
             implementation: lang,
@@ -568,9 +624,9 @@ impl NodeConfig {
     }
 
     /// Removes all distributed materilas and restarts beacon ID at Fresh state.
-    pub async fn set_to_fresh(&self) {
+    pub async fn set_to_fresh(&self, c: &GroupConfig) {
         // remove beacon ID folder from node base folder
-        std::fs::remove_dir_all(format!("{}/multibeacon/{}", self.folder_path, self.id)).unwrap();
+        std::fs::remove_dir_all(format!("{}/multibeacon/{}", self.folder_path, c.id)).unwrap();
         match self.implementation {
             Lang::GO => {
                 let mut cmd = async_std::process::Command::new("/bin/bash");
@@ -589,34 +645,34 @@ impl NodeConfig {
             }
             Lang::RS => self.stop().await,
         }
-        self.generate_keypair().await;
-        self.start().await;
-        sleep(Duration::from_secs(2)).await
+        self.generate_keypair(&c.id, &c.scheme).await;
+        self.start();
+        sleep(Duration::from_secs(2)).await;
     }
 
-    async fn generate_keypair(&self) {
+    pub async fn generate_keypair(&self, id: &str, scheme: &str) {
         match self.implementation {
             Lang::RS => {
                 let config = KeyGenConfig {
-                    folder: self.folder_path.clone(),
-                    control: self.control.clone(),
-                    id: self.id.clone(),
-                    scheme: self.scheme.clone(),
-                    address: self.private_listen.clone(),
+                    folder: self.folder_path.to_string(),
+                    control: self.control.to_string(),
+                    id: id.to_string(),
+                    scheme: scheme.to_string(),
+                    address: self.private_listen.to_string(),
                 };
-                CLI::keygen(config).run().await.unwrap();
+                Cli::keygen(config).run().await.unwrap();
             }
             Lang::GO => {
                 let args = format!(
-                    "generate-keypair --folder {} --control {} --id {} --scheme {} {} > /dev/null 2>&1",
-                    self.folder_path, self.control, self.id, self.scheme, self.private_listen
+                    "generate-keypair --folder {} --control {} --id {} --scheme {} {}",
+                    self.folder_path, self.control, id, scheme, self.private_listen
                 );
-                run_cmd_golang(&args).await
+                run_cmd_golang(&args).await;
             }
         }
     }
 
-    async fn start(&self) {
+    pub fn start(&self) {
         match self.implementation {
             Lang::GO => {
                 let args = format!(
@@ -636,16 +692,17 @@ impl NodeConfig {
                     folder: self.folder_path.clone(),
                     control: self.control.clone(),
                     private_listen: self.private_listen.clone(),
-                    id: Some(self.id.clone()),
+                    // Load all ids.
+                    id: None,
                 };
-                tokio::task::spawn(async move { CLI::start(config).run().await.unwrap() });
+                tokio::task::spawn(async move { Cli::start(config).run().await.unwrap() });
             }
         }
     }
 
-    pub async fn dkg_join(&self, groupfile: Option<&str>) {
+    pub async fn dkg_join(&self, groupfile: Option<&str>, c: &GroupConfig) {
         match self.implementation {
-            Lang::RS => CLI::dkg_join(&self.control.to_string(), &self.id, groupfile)
+            Lang::RS => Cli::dkg_join(&self.control.to_string(), &c.id, groupfile)
                 .run()
                 .await
                 .unwrap(),
@@ -653,39 +710,38 @@ impl NodeConfig {
                 let args = if let Some(path) = groupfile {
                     format!(
                         "dkg join --id {} --group {path} --control {}",
-                        self.id, self.control
+                        c.id, self.control
                     )
                 } else {
-                    format!("dkg join --id {} --control {}", self.id, self.control)
+                    format!("dkg join --id {} --control {}", c.id, self.control)
                 };
 
-                run_cmd_golang(&args).await
+                run_cmd_golang(&args).await;
             }
         }
     }
 
-    pub async fn dkg_accept(&self) {
+    pub async fn dkg_accept(&self, c: &GroupConfig) {
         match self.implementation {
-            Lang::RS => CLI::dkg_accept(&self.control.to_string(), &self.id)
+            Lang::RS => Cli::dkg_accept(&self.control.to_string(), &c.id)
                 .run()
                 .await
                 .unwrap(),
             Lang::GO => {
                 let args = format!(
                     "dkg accept --id {} --control {} > {}/node{}_accept.log 2>&1",
-                    self.id, self.control, self.folder_path, self.cmd_i
+                    c.id, self.control, self.folder_path, self.cmd_i
                 );
-                run_cmd_golang(&args).await
+                run_cmd_golang(&args).await;
             }
         }
     }
 
     pub async fn stop(&self) {
         match self.implementation {
-            Lang::RS => CLI::stop(&self.control.to_string(), None)
-                .run()
-                .await
-                .unwrap(),
+            Lang::RS => {
+                let _ = Cli::stop(&self.control.to_string(), None).run().await;
+            }
             Lang::GO => {
                 let mut cmd = async_std::process::Command::new("/bin/bash");
                 cmd.arg("-c")
@@ -711,9 +767,11 @@ async fn run_cmd_golang(args: &str) {
         Err(err) => panic!("failed to spawn cmd: {args}, error: {err}"),
     };
 
-    if !output.success() {
-        panic!("failed to execute: {args}, code: {:?}", output.code());
-    }
+    assert!(
+        output.success(),
+        "failed to execute: {args}, code: {:?}",
+        output.code()
+    );
 }
 
 pub fn remove_nodes_fs() {

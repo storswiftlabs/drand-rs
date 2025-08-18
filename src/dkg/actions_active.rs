@@ -58,7 +58,7 @@ impl<S: Scheme> ActionsActive for BeaconProcess<S> {
         // Apply the proposal to the last succesful state
         let mut state = self.dkg_store().get_last_succesful::<S>(self.id())?;
 
-        info!("running DKG command: {cmd}, beaconID: {}", self.id());
+        info!(parent: self.log(), "running DKG command: {cmd}");
         match cmd {
             Command::Join(join_options) => self.start_join(&mut state, join_options).await?,
             Command::Accept(_) => self.start_accept(state).await?,

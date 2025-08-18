@@ -1,8 +1,7 @@
-//! This module provides client and server implementations for Control.
+//! Client and server implementations for RPC [`Control`] service.
 
 use super::dkg_control::DkgControlHandler;
 use super::utils::Callback;
-use super::utils::ConnectionError;
 use super::utils::NewTcpListener;
 use super::utils::StartServerError;
 use super::utils::ToStatus;
@@ -41,31 +40,29 @@ use protobuf::StatusRequest;
 use protobuf::StatusResponse;
 use protobuf::SyncProgress;
 
-use tokio_stream::Stream;
+use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::Channel;
 use tonic::transport::Server;
 use tonic::Request;
 use tonic::Response;
 use tonic::Status;
+use tracing::debug;
+use tracing::error;
 
-use http::Uri;
 use std::ops::Deref;
 use std::pin::Pin;
-use std::str::FromStr;
 use std::sync::Arc;
 use tokio_stream::wrappers::TcpListenerStream;
-#[allow(unused)]
-use tokio_stream::StreamExt;
-use tracing::*;
+use tokio_stream::Stream;
+
+pub const DEFAULT_CONTROL_PORT: &str = "8888";
+pub const CONTROL_HOST: &str = "127.0.0.1";
 
 /// Control server streaming response reporting sync progress to the control client.
 type ResponseStream = Pin<Box<dyn Stream<Item = SyncProgressResponse> + Send>>;
 
 /// Result type yielded by the sync progress response stream.
 pub type SyncProgressResponse = Result<SyncProgress, tonic::Status>;
-
-pub const DEFAULT_CONTROL_PORT: &str = "8888";
-pub const CONTROL_HOST: &str = "127.0.0.1";
 
 /// Implementor for [`Control`] trait for use with `ControlServer`
 pub struct ControlHandler(Arc<Daemon>);
@@ -82,7 +79,7 @@ impl Control for ControlHandler {
     /// proving that this drand node is up and alive.
     async fn ping_pong(&self, _request: Request<Ping>) -> Result<Response<Pong>, Status> {
         debug!("control listener: received ping_pong request");
-        let metadata = Metadata::with_default();
+        let metadata = Some(Metadata::with_default());
 
         Ok(Response::new(Pong { metadata }))
     }
@@ -90,9 +87,26 @@ impl Control for ControlHandler {
     /// Status responds with the actual status of drand process
     async fn status(
         &self,
-        _request: Request<StatusRequest>,
+        request: Request<StatusRequest>,
     ) -> Result<Response<StatusResponse>, Status> {
-        Err(Status::unimplemented("status: StatusRequest"))
+        // Borrow id from metadata.
+        let id = request.get_ref().metadata.as_ref().map_or_else(
+            || Err(Status::data_loss(ERR_METADATA_IS_MISSING)),
+            |meta| Ok(meta.beacon_id.as_str()),
+        )?;
+        let (tx, rx) = Callback::new();
+        self.beacons()
+            .cmd(BeaconCmd::Status(tx), id)
+            .await
+            .map_err(|err| err.to_status(id))?;
+
+        // Await response from callback
+        let chain_info = rx
+            .await
+            .map_err(|recv_err| recv_err.to_status(id))?
+            .map_err(|chain_info_err| chain_info_err.to_status(id))?;
+
+        Ok(Response::new(chain_info))
     }
 
     /// ListSchemes responds with the list of ids for the available schemes
@@ -179,11 +193,12 @@ impl Control for ControlHandler {
             return Err(Status::internal("shutdown is not graceful"));
         }
         // Encode new daemon state, see [`ControlClient::shutdown`]
-        let metadata = match is_last_beacon {
+        let metadata = if is_last_beacon {
             // No more beacons left
-            true => None,
+            None
+        } else {
             // Daemon is still running
-            false => Metadata::with_default(),
+            Some(Metadata::with_default())
         };
 
         Ok(Response::new(ShutdownResponse { metadata }))
@@ -193,21 +208,14 @@ impl Control for ControlHandler {
         &self,
         request: Request<LoadBeaconRequest>,
     ) -> Result<Response<LoadBeaconResponse>, Status> {
-        // Borrow id from metadata.
         let id = request.get_ref().metadata.as_ref().map_or_else(
             || Err(Status::data_loss(ERR_METADATA_IS_MISSING)),
             |meta| Ok(meta.beacon_id.as_str()),
         )?;
-        info!(parent: self.log(), "received load id request for {id}");
 
-        // Send request to the daemon
-        self.load_id(id).map_err(|err| {
-            error!(parent: self.log(), "failed to proceed, {err}: {id}");
-            err.to_status(id)
-        })?;
-
+        self.load_id(id).map_err(|err| err.to_status(id))?;
         let response = LoadBeaconResponse {
-            metadata: Metadata::with_id(id),
+            metadata: Some(Metadata::with_id(id.to_string())),
         };
 
         Ok(Response::new(response))
@@ -215,9 +223,25 @@ impl Control for ControlHandler {
 
     async fn start_follow_chain(
         &self,
-        _request: Request<StartSyncRequest>,
+        request: Request<StartSyncRequest>,
     ) -> Result<Response<Self::StartFollowChainStream>, Status> {
-        todo!()
+        let request = request.into_inner();
+        let id = request.metadata.as_ref().map_or_else(
+            || Err(Status::data_loss(ERR_METADATA_IS_MISSING)),
+            |meta| Ok(meta.beacon_id.clone()),
+        )?;
+        let (tx, rx) = Callback::new();
+
+        self.beacons()
+            .cmd(BeaconCmd::Follow(request, tx), &id)
+            .await
+            .map_err(|err| Status::unknown(err.to_string()))?;
+
+        let stream_rx = rx
+            .await
+            .map_err(|err| Status::unknown(err.to_string()))?
+            .map_err(|err| Status::unknown(err.to_string()))?;
+        Ok(Response::new(Box::pin(ReceiverStream::new(stream_rx))))
     }
 
     async fn start_check_chain(
@@ -257,11 +281,11 @@ pub async fn start_server<N: NewTcpListener>(
 
     Server::builder()
         .add_service(ControlServer::new(ControlHandler(daemon.clone())))
-        .add_service(DkgControlServer::new(DkgControlHandler::new(daemon)))
+        .add_service(DkgControlServer::new(DkgControlHandler::new(
+            daemon.clone(),
+        )))
         .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async move {
-            debug!("Control server started");
-            let _ = cancel.cancelled().await;
-            debug!("Control server: received shutdown request");
+            let () = cancel.cancelled().await;
         })
         .await
         .map_err(|err| {
@@ -274,19 +298,15 @@ pub async fn start_server<N: NewTcpListener>(
     Ok(())
 }
 
-/// Control client capable of issuing proto commands to a [`DEFAULT_CONTROL_HOST`] running daemon
+/// Control client capable of issuing proto commands to a running daemon.
 pub struct ControlClient {
     client: _ControlClient<Channel>,
 }
 
 impl ControlClient {
     pub async fn new(port: &str) -> anyhow::Result<Self> {
-        let address = format!("grpc://{CONTROL_HOST}:{port}");
-        let uri = Uri::from_str(&address)?;
-        let channel = Channel::builder(uri)
-            .connect()
-            .await
-            .map_err(|error| ConnectionError { address, error })?;
+        let address = format!("http://{CONTROL_HOST}:{port}");
+        let channel = Channel::from_shared(address)?.connect().await?;
         let client = _ControlClient::new(channel);
 
         Ok(Self { client })
@@ -294,35 +314,81 @@ impl ControlClient {
 
     pub async fn ping_pong(&mut self) -> anyhow::Result<()> {
         let request = Ping {
-            metadata: Metadata::with_default(),
+            metadata: Some(Metadata::with_default()),
         };
         let _ = self.client.ping_pong(request).await?;
 
         Ok(())
     }
 
-    pub async fn load_beacon(&mut self, beacon_id: &str) -> anyhow::Result<()> {
+    pub async fn status(&mut self, beacon_id: String) -> anyhow::Result<StatusResponse> {
+        let request = StatusRequest {
+            metadata: Some(Metadata::with_id(beacon_id)),
+        };
+        let responce = self.client.status(request).await?;
+        Ok(responce.into_inner())
+    }
+
+    pub async fn load_beacon(&mut self, beacon_id: String) -> anyhow::Result<()> {
         let request = LoadBeaconRequest {
-            metadata: Metadata::with_id(beacon_id),
+            metadata: Some(Metadata::with_id(beacon_id)),
         };
         let _ = self.client.load_beacon(request).await?;
 
         Ok(())
     }
 
-    pub async fn shutdown(&mut self, beacon_id: Option<&str>) -> anyhow::Result<bool> {
-        let metadata = match beacon_id {
-            Some(id) => Metadata::with_id(id),
-            None => None,
-        };
+    pub async fn shutdown(&mut self, beacon_id: Option<String>) -> anyhow::Result<bool> {
+        let metadata = beacon_id.map(Metadata::with_id);
         let request = ShutdownRequest { metadata };
         let responce = self.client.shutdown(request).await?;
         let is_daemon_running = responce.get_ref().metadata.is_some();
         Ok(is_daemon_running)
     }
 
-    pub async fn sync(&mut self, _config: SyncConfig) -> anyhow::Result<()> {
-        todo!()
+    pub async fn sync(&mut self, c: SyncConfig) -> anyhow::Result<()> {
+        use std::io::Write;
+        let metadata = Metadata::with_chain_hash(&c.id, &c.chain_hash)?;
+        let request = StartSyncRequest {
+            nodes: c.sync_nodes,
+            up_to: if c.follow { 0 } else { c.up_to },
+            metadata: Some(metadata),
+        };
+
+        tracing::info!(
+            "Launching a follow request: nodes: {:?}, upTo: {}, hash {}, beaconID: {}",
+            request.nodes,
+            request.up_to,
+            c.chain_hash,
+            c.id
+        );
+
+        let mut responce = self.client.start_follow_chain(request).await?.into_inner();
+        let mut spinner = ['/', '—', '\\'].iter().cycle();
+
+        while let Ok(Some(progress)) = responce.message().await {
+            if progress.current % 300 == 0 {
+                #[allow(clippy::cast_precision_loss)]
+                let percent = (progress.current as f64 / progress.target as f64) * 100.0;
+                let symbol = spinner.next().expect("infallible");
+                print!(
+                    "\r{}  synced round up to {} - current target {}     --> {:.2} %",
+                    symbol, progress.current, progress.target, percent,
+                );
+                std::io::stdout().flush()?;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn chain_info(&mut self, beacon_id: String) -> anyhow::Result<ChainInfoPacket> {
+        let request = ChainInfoRequest {
+            metadata: Some(Metadata::with_id(beacon_id)),
+        };
+        let info = self.client.chain_info(request).await?.into_inner();
+
+        Ok(info)
     }
 }
 

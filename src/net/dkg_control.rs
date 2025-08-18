@@ -1,8 +1,7 @@
-//! This module provides client and server implementations for DkgControl service.
+//! Client and server implementations for [`DkgControl`] service.
 
 use super::control::CONTROL_HOST;
 use super::utils::Callback;
-use super::utils::ConnectionError;
 use super::utils::ToStatus;
 
 use crate::core::beacon::Actions;
@@ -26,16 +25,14 @@ use tonic::Request;
 use tonic::Response;
 use tonic::Status;
 
-use http::Uri;
 use std::ops::Deref;
-use std::str::FromStr;
 use std::sync::Arc;
 
-/// Implementor for [`DkgControl`] trait for use with DkgControlServer
+/// Implementor for [`DkgControl`] trait for use with `DkgControlServer`.
 pub struct DkgControlHandler(Arc<Daemon>);
 
 impl DkgControlHandler {
-    pub(super) fn new(daemon: Arc<Daemon>) -> Self {
+    pub fn new(daemon: Arc<Daemon>) -> Self {
         Self(daemon)
     }
 }
@@ -89,12 +86,8 @@ pub struct DkgControlClient {
 
 impl DkgControlClient {
     pub async fn new(port: &str) -> anyhow::Result<Self> {
-        let address = format!("grpc://{CONTROL_HOST}:{port}");
-        let uri = Uri::from_str(&address)?;
-        let channel = Channel::builder(uri)
-            .connect()
-            .await
-            .map_err(|error| ConnectionError { address, error })?;
+        let address = format!("http://{CONTROL_HOST}:{port}");
+        let channel = Channel::from_shared(address)?.connect().await?;
         let client = _DkgControlClient::new(channel);
 
         Ok(Self { client })
@@ -112,19 +105,13 @@ impl DkgControlClient {
 
     pub async fn dkg_join(
         &mut self,
-        beacon_id: &str,
+        beacon_id: String,
         group_file_path: Option<&str>,
     ) -> anyhow::Result<()> {
-        let group_file = if let Some(path) = group_file_path {
-            std::fs::read(path)?
-        } else {
-            vec![]
-        };
+        let group_file = group_file_path.map_or_else(|| Ok(vec![]), std::fs::read)?;
 
         let request = DkgCommand {
-            metadata: Some(CommandMetadata {
-                beacon_id: beacon_id.to_owned(),
-            }),
+            metadata: Some(CommandMetadata { beacon_id }),
             command: Some(protobuf::dkg_command::Command::Join(JoinOptions {
                 group_file,
             })),
@@ -134,11 +121,9 @@ impl DkgControlClient {
         Ok(())
     }
 
-    pub async fn dkg_accept(&mut self, beacon_id: &str) -> anyhow::Result<()> {
+    pub async fn dkg_accept(&mut self, beacon_id: String) -> anyhow::Result<()> {
         let request = DkgCommand {
-            metadata: Some(CommandMetadata {
-                beacon_id: beacon_id.to_owned(),
-            }),
+            metadata: Some(CommandMetadata { beacon_id }),
             command: Some(protobuf::dkg_command::Command::Accept(AcceptOptions {})),
         };
         let _ = self.client.command(request).await?;
