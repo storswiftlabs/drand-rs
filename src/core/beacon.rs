@@ -3,7 +3,6 @@ use crate::chain::init_chain;
 use crate::chain::ChainCmd;
 use crate::chain::ChainError;
 use crate::chain::ChainedBeacon;
-use crate::chain::PartialPacket;
 use crate::chain::StoreError;
 use crate::chain::StoreStreamResponse;
 use crate::chain::SyncError;
@@ -27,6 +26,7 @@ use crate::key::Scheme;
 
 use crate::net::control::SyncProgressResponse;
 use crate::net::pool::PoolSender;
+use crate::net::protocol::PartialMsg;
 use crate::protobuf::drand::StartSyncRequest;
 use crate::protobuf::drand::StatusResponse;
 
@@ -122,7 +122,7 @@ impl<S: Scheme> BeaconProcess<S> {
         process_cmd_tx: mpsc::Sender<BeaconCmd>,
         pool: PoolSender,
         private_listen: String,
-    ) -> Result<(Self, mpsc::Sender<PartialPacket>), FileStoreError> {
+    ) -> Result<(Self, mpsc::Sender<PartialMsg>), FileStoreError> {
         let keypair: Pair<S> = Toml::toml_decode(pair).ok_or(FileStoreError::TomlError)?;
         let our_addr = keypair.public_identity().address.clone();
         let id = fs.get_beacon_id().ok_or(FileStoreError::FailedToReadID)?;

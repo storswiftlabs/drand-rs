@@ -22,6 +22,8 @@ use crate::key::store::FileStoreError;
 use crate::key::Scheme;
 
 use crate::net::pool::PoolSender;
+use crate::net::protocol::PartialMsg;
+use crate::net::protocol::PartialPacket;
 use crate::net::utils::Address;
 use crate::net::utils::Callback;
 use crate::net::utils::Seconds;
@@ -55,9 +57,6 @@ use tracing::warn;
 use tracing::Span;
 
 const SHORT_SIG_BYTES: usize = 3;
-
-/// Partial packet is a turple of the packet and callback.
-pub type PartialPacket = (PartialBeaconPacket, Callback<(), ChainError>);
 
 #[derive(thiserror::Error, Debug)]
 pub enum ChainError {
@@ -144,7 +143,7 @@ pub enum ChainCmd {
 
 /// Holder to simplify channels management, see [`init_chain`] for detailed channels description.
 struct Channels {
-    rx_partial: mpsc::Receiver<PartialPacket>,
+    rx_partial: mpsc::Receiver<PartialMsg>,
     tx_cmd: mpsc::Sender<ChainCmd>,
     rx_cmd: mpsc::Receiver<ChainCmd>,
     tx_resync: mpsc::Sender<BeaconPacket>,
@@ -376,11 +375,12 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
     async fn process_partial(
         &self,
         reg: &mut Registry<S, B>,
-        partial: PartialBeaconPacket,
+        partial: PartialPacket,
     ) -> Result<(), ChainError> {
-        let p_round = partial.round;
+        let p_round = partial.packet.round;
         let c_round = reg.current_round();
         let ls_round = reg.latest_stored().round();
+        debug!(parent: &self.l, "processing partial: from {}, round {p_round}", partial.from);
 
         if p_round <= ls_round {
             debug!(parent: &self.l, "ignoring partial for round: {p_round}, current {c_round}, latest_stored {ls_round}");
@@ -400,7 +400,7 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
 
         // Add packet to cache if p_round hits the allowed range and signature is not duplicated.
         if p_round > ls_round + 1 && p_round <= ls_round + 1 + CACHE_LIMIT_ROUNDS {
-            let Some(is_added) = reg.cache_mut().add_packet(partial) else {
+            let Some(is_added) = reg.cache_mut().add_packet(partial.packet) else {
                 // Logical error.
                 error!(parent: &self.l, "cache_height {}: attempt to add non-allowed round {p_round}, current {c_round}, please report this.", reg.cache().height());
                 return Err(ChainError::InvalidRound {
@@ -417,10 +417,10 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
 
         // Process packet as sigshare.
         } else if p_round == ls_round + 1 {
-            let Some(idx) = get_partial_index::<S>(&partial.partial_sig) else {
+            let Some(idx) = get_partial_index::<S>(&partial.packet.partial_sig) else {
                 return Err(ChainError::InvalidShareLenght {
                     expected: <S::Sig as energon::traits::Group>::POINT_SIZE + 2,
-                    received: partial.partial_sig.len(),
+                    received: partial.packet.partial_sig.len(),
                 });
             };
 
@@ -429,7 +429,7 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
                 debug!(parent: &self.l, "ignoring already cached sigshare for round {p_round}");
                 return Ok(());
             }
-            let (valid_sigshare, node_addr) = self.ec.verify_partial(&partial)?;
+            let (valid_sigshare, node_addr) = self.ec.verify_partial(&partial.packet)?;
 
             // Recover and save beacon.
             // Note: Sigshares are prechecked and sorted by their index.
@@ -828,7 +828,7 @@ pub fn init_chain<S: Scheme, B: BeaconRepr>(
     id: String,
     our_addres: Address,
     t: &TaskTracker,
-) -> (mpsc::Sender<PartialPacket>, mpsc::Sender<ChainCmd>) {
+) -> (mpsc::Sender<PartialMsg>, mpsc::Sender<ChainCmd>) {
     // #[hot]
     // Shortcut channel to send partial beacons from server side to chain handler directly.
     let (tx_partial, rx_partial) = mpsc::channel(1);

@@ -8,6 +8,7 @@ use super::utils::StartServerError;
 use super::utils::ToStatus;
 use super::utils::ERR_METADATA_IS_MISSING;
 
+use crate::chain::ChainError;
 use crate::core::beacon::BeaconCmd;
 use crate::core::daemon::Daemon;
 use crate::protobuf::dkg::dkg_public_server::DkgPublicServer;
@@ -40,6 +41,16 @@ use tonic::Response;
 use tonic::Status;
 use tonic::Streaming;
 use tracing::error;
+
+/// Contains partial beacon packet and sender IP.
+pub struct PartialPacket {
+    pub packet: PartialBeaconPacket,
+    // X-REAL-IP from request metadata.
+    pub from: String,
+}
+
+/// Alias for partial beacon packet with callback.
+pub type PartialMsg = (PartialPacket, Callback<(), ChainError>);
 
 /// Implementor for [`Protocol`] trait for use with `ProtocolServer`.
 pub struct ProtocolHandler(Arc<Daemon>);
@@ -78,8 +89,18 @@ impl Protocol for ProtocolHandler {
         &self,
         request: Request<PartialBeaconPacket>,
     ) -> Result<Response<Empty>, Status> {
-        let partial = request.into_inner();
+        let from = request
+            .metadata()
+            .get("x-real-ip")
+            .map_or_else(|| "", |v| v.to_str().unwrap_or_default())
+            .to_string();
+
+        let partial = PartialPacket {
+            packet: request.into_inner(),
+            from,
+        };
         let (tx, rx) = Callback::new();
+
         self.beacons()
             .send_partial((partial, tx))
             .await

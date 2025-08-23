@@ -8,7 +8,7 @@ mod sync;
 mod ticker;
 pub mod time;
 
-pub use handler::{init_chain, ChainCmd, ChainError, PartialPacket};
+pub use handler::{init_chain, ChainCmd, ChainError};
 pub use store::{ChainedBeacon, StoreError, StoreStreamResponse, UnChainedBeacon};
 pub use sync::SyncError;
 

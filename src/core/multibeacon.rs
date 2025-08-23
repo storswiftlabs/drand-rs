@@ -2,13 +2,13 @@ use super::beacon::BeaconCmd;
 use super::beacon::BeaconID;
 use super::beacon::BeaconProcess;
 
-use crate::chain::PartialPacket;
 use crate::cli::Config;
 use crate::key::store::FileStore;
 use crate::key::store::FileStoreError;
 use crate::key::Scheme;
 use crate::net::pool::Pool;
 use crate::net::pool::PoolSender;
+use crate::net::protocol::PartialMsg;
 
 use arc_swap::ArcSwap;
 use arc_swap::ArcSwapAny;
@@ -31,7 +31,7 @@ pub struct BeaconHandler {
     /// Sender for beacon commands
     pub process_tx: Sender<BeaconCmd>,
     /// Sender for partial signature packets (hot path)
-    pub partial_tx: mpsc::Sender<PartialPacket>,
+    pub partial_tx: mpsc::Sender<PartialMsg>,
 }
 
 impl BeaconHandler {
@@ -134,8 +134,8 @@ impl MultiBeacon {
         Ok(())
     }
 
-    pub async fn send_partial(&self, partial: PartialPacket) -> Result<(), BeaconHandlerError> {
-        let id = partial.0.metadata.as_ref().map_or_else(
+    pub async fn send_partial(&self, partial: PartialMsg) -> Result<(), BeaconHandlerError> {
+        let id = partial.0.packet.metadata.as_ref().map_or_else(
             || Err(BeaconHandlerError::MetadataRequired),
             |meta| Ok(meta.beacon_id.as_str()),
         )?;
