@@ -36,25 +36,15 @@ message ChainStoreStatus {
 
 message Address { string address = 1; }
 
-message StatusRequest {
-  // the check_conn contains the list of addresses to check connectivity to,
-  // i.e. does a GRPC health check on it.
-  // If the field is absent or empty, then all nodes in the group file are
-  // tested.
-  repeated Address check_conn = 1;
-  Metadata metadata = 2;
-}
+message StatusRequest { Metadata metadata = 1; }
 
-// StatusResponse contains different indicators of the status of the local drand
-// node process and as well some view on the connectivity with other nodes if
-// ask during the StatusRequest.
-message StatusResponse {
-  DkgStatus dkg = 1;
-  uint32 epoch = 2;
-  BeaconStatus beacon = 3;
-  ChainStoreStatus chain_store = 4;
-  map<string, bool> connections = 5;
-}
+// StatusResponse might contain different indicators of the status of the local
+// drand node process.
+//
+// Currently, we only need the round of the latest stored beacon.
+// Note: Fresh nodes might return such round if they have followed some
+// chain node.
+message StatusResponse { uint64 latest_stored_round = 1; }
 
 message Empty { Metadata metadata = 1; }
 

@@ -1,20 +1,12 @@
 //! Types are re-exported directly if their fields DO NOT contain:
 //!  - option<T> instead of T
-//!  - protected new pattern types  
-//!  
-//! Note: generic types might be converted directly into protobuf later.
+//!  - protected new pattern types
 
-pub use protobuf::drand::BeaconStatus;
-pub use protobuf::drand::ChainStoreStatus;
-pub use protobuf::drand::ListBeaconIDsRequest;
-pub use protobuf::drand::ListBeaconIDsResponse;
-pub use protobuf::drand::ListSchemesRequest;
-pub use protobuf::drand::MetricsRequest;
-pub use protobuf::drand::MetricsResponse;
-pub use protobuf::drand::NodeVersion;
-pub use protobuf::drand::SyncProgress;
-
-use super::utils::*;
+use super::utils::from_vec;
+use super::utils::try_from_vec;
+use super::utils::ConvertProto;
+use super::utils::RequireSome;
+use super::utils::TransportError;
 use crate::dkg::status::Status as DkgStatus;
 use crate::net::utils::Address;
 use crate::net::utils::Seconds;
@@ -51,92 +43,6 @@ impl From<DkgStatus> for crate::protobuf::drand::DkgStatus {
     fn from(value: DkgStatus) -> Self {
         Self {
             status: value as u32,
-        }
-    }
-}
-
-pub struct StatusRequest {
-    pub check_conn: Vec<Address>,
-    pub metadata: Metadata,
-}
-
-impl ConvertProto for crate::protobuf::drand::StatusRequest {
-    type Inner = StatusRequest;
-
-    fn validate(self) -> Result<Self::Inner, TransportError> {
-        let Self {
-            check_conn,
-            metadata,
-        } = self;
-
-        Ok(Self::Inner {
-            check_conn: try_from_vec(check_conn)?,
-            metadata: metadata.require_some()?,
-        })
-    }
-}
-
-impl From<StatusRequest> for crate::protobuf::drand::StatusRequest {
-    fn from(value: StatusRequest) -> Self {
-        let StatusRequest {
-            check_conn,
-            metadata,
-        } = value;
-
-        Self {
-            check_conn: from_vec(check_conn),
-            metadata: Some(metadata),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct StatusResponse {
-    pub dkg: DkgStatus,
-    pub epoch: u32,
-    pub beacon: BeaconStatus,
-    pub chain_store: ChainStoreStatus,
-    pub connections: std::collections::HashMap<String, bool>,
-}
-
-impl ConvertProto for crate::protobuf::drand::StatusResponse {
-    type Inner = StatusResponse;
-
-    fn validate(self) -> Result<Self::Inner, TransportError> {
-        let Self {
-            dkg,
-            epoch,
-            beacon,
-            chain_store,
-            connections,
-        } = self;
-
-        Ok(Self::Inner {
-            dkg: dkg.require_some()?.validate()?,
-            epoch,
-            beacon: beacon.require_some()?,
-            chain_store: chain_store.require_some()?,
-            connections,
-        })
-    }
-}
-
-impl From<StatusResponse> for crate::protobuf::drand::StatusResponse {
-    fn from(value: StatusResponse) -> Self {
-        let StatusResponse {
-            dkg,
-            epoch,
-            beacon,
-            chain_store,
-            connections,
-        } = value;
-
-        Self {
-            dkg: Some(dkg.into()),
-            epoch,
-            beacon: Some(beacon),
-            chain_store: Some(chain_store),
-            connections,
         }
     }
 }
@@ -185,16 +91,6 @@ impl From<Identity> for crate::protobuf::drand::Identity {
 pub struct Node {
     pub public: Identity,
     pub index: u32,
-}
-
-impl Node {
-    pub fn new(public: Identity, index: u32) -> Self {
-        Self { public, index }
-    }
-
-    pub fn into_parts(self) -> (Identity, u32) {
-        (self.public, self.index)
-    }
 }
 
 impl ConvertProto for crate::protobuf::drand::Node {
@@ -297,66 +193,6 @@ impl From<GroupPacket> for crate::protobuf::drand::GroupPacket {
     }
 }
 
-pub struct ChainInfoPacket {
-    pub public_key: Vec<u8>,
-    pub period: u32,
-    pub genesis_time: i64,
-    pub hash: Vec<u8>,
-    pub group_hash: Vec<u8>,
-    pub scheme_id: String,
-    pub metadata: Metadata,
-}
-
-impl ConvertProto for crate::protobuf::drand::ChainInfoPacket {
-    type Inner = ChainInfoPacket;
-
-    fn validate(self) -> Result<Self::Inner, TransportError> {
-        let Self {
-            public_key,
-            period,
-            genesis_time,
-            hash,
-            group_hash,
-            scheme_id,
-            metadata,
-        } = self;
-
-        Ok(Self::Inner {
-            public_key,
-            period,
-            genesis_time,
-            hash,
-            group_hash,
-            scheme_id,
-            metadata: metadata.require_some()?,
-        })
-    }
-}
-
-impl From<ChainInfoPacket> for crate::protobuf::drand::ChainInfoPacket {
-    fn from(value: ChainInfoPacket) -> Self {
-        let ChainInfoPacket {
-            public_key,
-            period,
-            genesis_time,
-            hash,
-            group_hash,
-            scheme_id,
-            metadata,
-        } = value;
-
-        Self {
-            public_key,
-            period,
-            genesis_time,
-            hash,
-            group_hash,
-            scheme_id,
-            metadata: Some(metadata),
-        }
-    }
-}
-
 pub struct RemoteStatusRequest {
     pub metadata: Metadata,
     pub addresses: Vec<Address>,
@@ -388,36 +224,6 @@ impl From<RemoteStatusRequest> for crate::protobuf::drand::RemoteStatusRequest {
         Self {
             metadata: Some(metadata),
             addresses: from_vec(addresses),
-        }
-    }
-}
-
-pub struct RemoteStatusResponse {
-    pub statuses: std::collections::HashMap<String, StatusResponse>,
-}
-
-impl ConvertProto for crate::protobuf::drand::RemoteStatusResponse {
-    type Inner = RemoteStatusResponse;
-
-    fn validate(self) -> Result<Self::Inner, TransportError> {
-        let mut statuses = std::collections::HashMap::with_capacity(self.statuses.len());
-
-        for (key, value) in self.statuses.into_iter() {
-            let _ = statuses.insert(key, value.validate()?);
-        }
-
-        Ok(Self::Inner { statuses })
-    }
-}
-
-impl From<RemoteStatusResponse> for crate::protobuf::drand::RemoteStatusResponse {
-    fn from(value: RemoteStatusResponse) -> Self {
-        Self {
-            statuses: value
-                .statuses
-                .into_iter()
-                .map(|(key, value)| (key, value.into()))
-                .collect(),
         }
     }
 }

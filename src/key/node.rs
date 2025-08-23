@@ -1,5 +1,6 @@
 use super::keys::Identity;
 use super::Scheme;
+use crate::net::utils::Address;
 
 /// Node is a wrapper around identity that additionally includes the index that
 /// the node has within this group. The index is computed initially when the
@@ -27,5 +28,9 @@ impl<S: Scheme> Node<S> {
 
     pub fn index(&self) -> u32 {
         self.index
+    }
+
+    pub fn into_peer(self) -> Address {
+        self.identity.address
     }
 }

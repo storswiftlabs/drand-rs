@@ -1,5 +1,5 @@
-use crate::core::beacon::ChainInfoError;
-use crate::core::beacon::SyncError;
+use crate::chain::ChainError;
+use crate::chain::StoreError;
 use crate::core::multibeacon::BeaconHandlerError;
 use crate::dkg::ActionsError;
 use crate::key::PointSerDeError;
@@ -9,19 +9,45 @@ use crate::protobuf::drand::NodeVersion;
 
 use http::uri::Authority;
 use std::error::Error;
+use std::fmt::Debug;
 use std::fmt::Display;
 use std::str::FromStr;
+use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
+use tonic::transport::Channel;
 use tonic::Status;
 
 pub(super) const ERR_METADATA_IS_MISSING: &str = "metadata is missing";
-// TODO: tls enabled by default, const value will be gated behind default/insecure features.
-pub const URI_SCHEME: &str = "http";
 
-/// Implementation of authority component of a URI which is always contain host and port.
-/// For validation rules, see [`Address::precheck`].
-#[derive(Debug, Eq, PartialEq, Clone)]
+/// Connection timeout for transport channel.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[cfg(not(any(test, feature = "insecure")))]
+/// Returns a channel for a generic Tonic client with TLS configuration.
+/// Returns an error if the connection cannot be established.
+pub async fn connect(peer: &Address) -> anyhow::Result<Channel> {
+    let channel = Channel::from_shared(format!("https://{peer}"))?
+        .tls_config(tonic::transport::ClientTlsConfig::new().with_native_roots())?
+        .connect_timeout(CONNECT_TIMEOUT)
+        .connect()
+        .await?;
+    Ok(channel)
+}
+
+#[cfg(any(test, feature = "insecure"))]
+/// Returns a channel for a generic Tonic client without TLS configuration.
+/// Returns an error if the connection cannot be established.
+pub async fn connect(peer: &Address) -> anyhow::Result<Channel> {
+    let channel = Channel::from_shared(format!("http://{peer}"))?
+        .connect_timeout(CONNECT_TIMEOUT)
+        .connect()
+        .await?;
+    Ok(channel)
+}
+
+/// Address is protected type of URI Authority which always contains host:port (see [`Address::precheck`]).
+#[derive(Eq, PartialEq, Clone)]
 pub struct Address(Authority);
 
 impl Address {
@@ -60,6 +86,12 @@ impl Display for Address {
     }
 }
 
+impl Debug for Address {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0.as_str())
+    }
+}
+
 #[derive(thiserror::Error, Debug)]
 #[error("expected valid host:port, received {0}")]
 pub struct InvalidAddress(String);
@@ -81,7 +113,7 @@ impl Seconds {
         Self { value }
     }
 
-    pub fn get_value(&self) -> u32 {
+    pub fn get_value(self) -> u32 {
         self.value
     }
 }
@@ -143,23 +175,19 @@ impl Metadata {
     /// Default implementation of `Metadata` which always contains [`NodeVersion`]
     ///
     /// Note: This function  should be used instead of default impl provided by [`::prost::Message`]
-    pub(super) fn with_default() -> Option<Self> {
-        let metadata = Self {
+    pub(super) fn with_default() -> Self {
+        Self {
             node_version: Some(VERSION),
             ..Default::default()
-        };
-
-        Some(metadata)
+        }
     }
 
-    pub fn with_id(beacon_id: &str) -> Option<Self> {
-        let metadata = Self {
+    pub fn with_id(beacon_id: String) -> Self {
+        Self {
             node_version: Some(VERSION),
-            beacon_id: beacon_id.into(),
+            beacon_id,
             chain_hash: vec![],
-        };
-
-        Some(metadata)
+        }
     }
 
     pub fn with_chain_hash(beacon_id: &str, chain_hash: &str) -> anyhow::Result<Self> {
@@ -172,17 +200,17 @@ impl Metadata {
         Ok(metadata)
     }
 
-    /// Bypass go-version check. This is weird and should be aligned.
-    pub fn mimic_version(beacon_id: &str, chain_hash: &[u8]) -> Self {
+    /// Bypass version check.
+    pub fn golang_node_version(beacon_id: String, chain_hash: Option<&[u8]>) -> Self {
         Metadata {
             node_version: Some(NodeVersion {
                 major: 2,
                 minor: 1,
-                patch: 0,
+                patch: 2,
                 prerelease: String::new(),
             }),
-            beacon_id: beacon_id.into(),
-            chain_hash: chain_hash.into(),
+            beacon_id,
+            chain_hash: chain_hash.unwrap_or_default().into(),
         }
     }
 }
@@ -199,6 +227,8 @@ pub trait NewTcpListener {
 
 pub struct ControlListener;
 pub struct NodeListener;
+/// TODO: random sockets for e2e.
+#[allow(dead_code, reason = "tests")]
 pub struct TestListener;
 
 impl NewTcpListener for ControlListener {
@@ -253,13 +283,13 @@ impl ToStatus for tokio::sync::oneshot::error::RecvError {
     }
 }
 
-impl ToStatus for ChainInfoError {
+impl ToStatus for ChainError {
     fn to_status(&self, id: &str) -> Status {
         Status::aborted(format!("beacon id '{id}', {self}"))
     }
 }
 
-impl ToStatus for SyncError {
+impl ToStatus for StoreError {
     fn to_status(&self, id: &str) -> Status {
         Status::aborted(format!("beacon id '{id}', {self}"))
     }
@@ -267,18 +297,7 @@ impl ToStatus for SyncError {
 
 impl ToStatus for BeaconHandlerError {
     fn to_status(&self, id: &str) -> Status {
-        match self {
-            BeaconHandlerError::UnknownID => {
-                Status::invalid_argument(format!("beacon id '{id}' is not running"))
-            }
-            // This error should not be possible. Means that beacon cmd receiver has been dropped.
-            BeaconHandlerError::SendError => {
-                Status::internal(format!("beacon id '{id}' internal SendError"))
-            }
-            BeaconHandlerError::AlreadyLoaded => {
-                Status::invalid_argument(format!("beacon id '{id}' is already running"))
-            }
-        }
+        Status::unknown(format!("beacon id '{id}', {self}"))
     }
 }
 
@@ -319,11 +338,12 @@ impl<T, E: Error> Callback<T, E> {
         (Self { inner: tx }, rx)
     }
 
-    /// Sends a response back and tracks all outcoming errors
-    #[inline(always)]
+    /// Sends a response back and tracks all outcoming errors if verbose flag is set.
     pub fn reply(self, result: Result<T, E>) {
-        if let Err(err) = &result {
-            tracing::error!("failed to proceed request: {err}")
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            if let Err(err) = &result {
+                tracing::error!("callback returns with the error: {err}");
+            }
         }
 
         if self.inner.send(result).is_err() {

@@ -6,41 +6,54 @@ use crate::cli::Config;
 use crate::key::store::FileStore;
 use crate::key::store::FileStoreError;
 use crate::key::Scheme;
+use crate::net::pool::Pool;
+use crate::net::pool::PoolSender;
+use crate::net::protocol::PartialMsg;
 
 use arc_swap::ArcSwap;
 use arc_swap::ArcSwapAny;
 use arc_swap::Guard;
-use energon::drand::schemes::*;
+use energon::drand::schemes::DefaultScheme;
+use energon::drand::schemes::SigsOnG1Scheme;
+use energon::drand::schemes::UnchainedScheme;
+
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::mpsc;
 use tokio::sync::mpsc::Sender;
-use tokio_util::task::TaskTracker;
 
-pub type Snapshot = Guard<Arc<Vec<BeaconHandler>>>;
+type Snapshot = Guard<Arc<Vec<BeaconHandler>>>;
 
 /// Handler for sending commands to the beacon node
 #[derive(Clone)]
 pub struct BeaconHandler {
     pub beacon_id: BeaconID,
-    pub tx: Sender<BeaconCmd>,
-    pub tracker: TaskTracker,
+    /// Sender for beacon commands
+    pub process_tx: Sender<BeaconCmd>,
+    /// Sender for partial signature packets (hot path)
+    pub partial_tx: mpsc::Sender<PartialMsg>,
 }
 
 impl BeaconHandler {
-    pub fn new(id: &str, fs: FileStore) -> Result<Self, FileStoreError> {
-        // get scheme from filestore
-        let pair = fs.load_key_pair_toml()?;
+    pub fn new(
+        fs: FileStore,
+        pool: PoolSender,
+        private_listen: String,
+    ) -> Result<Self, FileStoreError> {
+        let pair = &fs.load_key_pair_toml()?;
         let scheme = pair
             .get_scheme_id()
             .ok_or(FileStoreError::InvalidPairSchemes)?;
 
-        // Attempt to initialize Beacon<S>
         let handler = match scheme {
-            DefaultScheme::ID => BeaconProcess::<DefaultScheme>::run(fs, pair, id)?,
-            UnchainedScheme::ID => BeaconProcess::<UnchainedScheme>::run(fs, pair, id)?,
-            SigsOnG1Scheme::ID => BeaconProcess::<SigsOnG1Scheme>::run(fs, pair, id)?,
-            BN254UnchainedOnG1Scheme::ID => {
-                BeaconProcess::<BN254UnchainedOnG1Scheme>::run(fs, pair, id)?
+            DefaultScheme::ID => {
+                BeaconProcess::<DefaultScheme>::run(fs, pair, pool, private_listen)?
+            }
+            UnchainedScheme::ID => {
+                BeaconProcess::<UnchainedScheme>::run(fs, pair, pool, private_listen)?
+            }
+            SigsOnG1Scheme::ID => {
+                BeaconProcess::<SigsOnG1Scheme>::run(fs, pair, pool, private_listen)?
             }
             _ => return Err(FileStoreError::FailedInitID)?,
         };
@@ -51,72 +64,99 @@ impl BeaconHandler {
     pub fn id(&self) -> &BeaconID {
         &self.beacon_id
     }
-    pub fn sender(&self) -> &Sender<BeaconCmd> {
-        &self.tx
-    }
 }
 
-/// An atomic storage to keep [`BeaconHandler`] collection
-pub struct MultiBeacon(ArcSwapAny<Arc<Vec<BeaconHandler>>>);
+pub struct MultiBeacon {
+    /// Atomic storage for beacon handlers.
+    beacons: ArcSwapAny<Arc<Vec<BeaconHandler>>>,
+    /// Sender for partial beacons pool.
+    tx_pool: PoolSender,
+}
 
 impl MultiBeacon {
     /// This call is success only if *all* detected storages has minimal valid structure.
     /// Succesfull value contains a turple with valid absolute path to multibeacon folder.
-    pub fn new(config: &Config) -> Result<(PathBuf, Self), FileStoreError> {
+    pub fn new(config: Config) -> Result<(PathBuf, Self), FileStoreError> {
+        let private_listen = config.private_listen.clone();
+
+        // Connection pool for partial beacon packets is shared across beacon ids.
+        let pool_span = tracing::info_span!("", partials_pool = &private_listen);
+        let pool = Pool::start(pool_span);
+
         let (multibeacon_path, fstores) = FileStore::read_multibeacon_folder(&config.folder)?;
-        let mut handlers = vec![];
-        match &config.id {
-            // Non-empty value means request to load single beacon id
+        let beacons: Vec<BeaconHandler> = match &config.id {
+            // Load single id
             Some(id) => {
                 let fs = fstores
                     .into_iter()
                     .find(|fs| fs.get_beacon_id() == Some(id))
                     .ok_or(FileStoreError::BeaconNotFound)?;
-                let handler = BeaconHandler::new(id, fs)?;
-                handlers.push(handler);
+                vec![BeaconHandler::new(fs, pool.clone(), config.private_listen)?]
             }
-            // Empty value means request to load all present beacon ids
-            None => {
-                for fs in fstores.into_iter() {
-                    let id = fs
-                        .get_beacon_id()
-                        .ok_or(FileStoreError::BeaconNotFound)?
-                        .to_owned();
-                    let handler = BeaconHandler::new(&id, fs)?;
-                    handlers.push(handler);
-                }
-            }
-        }
-        let multibeacon = Self(ArcSwap::from(Arc::new(handlers)));
+            // Load all ids
+            None => fstores
+                .into_iter()
+                .map(|fs| BeaconHandler::new(fs, pool.clone(), config.private_listen.clone()))
+                .collect::<Result<_, _>>()?,
+        };
+        let multibeacon = Self {
+            beacons: ArcSwap::from(Arc::new(beacons)),
+            tx_pool: pool,
+        };
 
         Ok((multibeacon_path, multibeacon))
     }
 
     pub fn snapshot(&self) -> Snapshot {
-        self.0.load()
+        self.beacons.load()
     }
 
     /// Replaces the value inside this instance
     pub fn replace_store(&self, val: Arc<Vec<BeaconHandler>>) {
-        self.0.store(val)
+        self.beacons.store(val);
     }
 
     /// Sends a command to the beacon identified by `id`.
     /// Returns an error if the id is not presented in store or if sending the command fails.
     pub async fn cmd(&self, cmd: BeaconCmd, id: &str) -> Result<(), BeaconHandlerError> {
-        let store = self.0.load();
+        let store = self.beacons.load();
         let handler = store
             .iter()
             .find(|h| h.beacon_id.is_eq(id))
             .ok_or(BeaconHandlerError::UnknownID)?;
 
         handler
-            .tx
+            .process_tx
             .send(cmd)
             .await
             .map_err(|_| BeaconHandlerError::SendError)?;
 
         Ok(())
+    }
+
+    pub async fn send_partial(&self, partial: PartialMsg) -> Result<(), BeaconHandlerError> {
+        let id = partial.0.packet.metadata.as_ref().map_or_else(
+            || Err(BeaconHandlerError::MetadataRequired),
+            |meta| Ok(meta.beacon_id.as_str()),
+        )?;
+
+        let store = self.beacons.load();
+        let handler = store
+            .iter()
+            .find(|h| h.beacon_id.is_eq(id))
+            .ok_or(BeaconHandlerError::UnknownID)?;
+
+        handler
+            .partial_tx
+            .send(partial)
+            .await
+            .map_err(|_| BeaconHandlerError::SendError)?;
+
+        Ok(())
+    }
+
+    pub(super) fn get_pool(&self) -> PoolSender {
+        self.tx_pool.clone()
     }
 }
 
@@ -124,9 +164,10 @@ impl MultiBeacon {
 pub enum BeaconHandlerError {
     #[error("Beacon id is not found")]
     UnknownID,
-    /// For diagnostic, should not be possible.
     #[error("SendError: Beacon cmd receiver has been dropped")]
     SendError,
     #[error("Beacon id is already loaded")]
     AlreadyLoaded,
+    #[error("Packet metadata is missing")]
+    MetadataRequired,
 }

@@ -77,7 +77,8 @@ impl TryFrom<u32> for Status {
 
 impl Status {
     #[rustfmt::skip]
-    pub fn is_valid_state_change(&self, next: Self) -> Result<(), StateError> {
+    pub fn is_valid_state_change(self, next: Self) -> Result<(), StateError> {
+        #[allow(clippy::enum_glob_use)]
         use self::Status::*;
 
         let is_valid = match self {
@@ -92,14 +93,12 @@ impl Status {
             Left => matches!(next, Joined | Aborted | Proposed),
             Aborted => matches!(next, Proposing | Proposed),
             TimedOut => matches!(next, Proposing | Proposed | Aborted),
-            // XXX: a node can be `Failed` but still be included in the group file under some ?? circumstances.
-            // 	    In such a case, it should be added as a remainer on the next DKG rather than a joiner.
             Failed => matches!(next, Proposing | Proposed | Left | Aborted),
         };
 
         if !is_valid {
             return Err(StateError::InvalidStateChange {
-                from: *self,
+                from: self,
                 to: next,
             });
         };
@@ -107,7 +106,7 @@ impl Status {
         Ok(())
     }
 
-    pub fn is_terminal(&self) -> bool {
+    pub fn is_terminal(self) -> bool {
         matches!(self, Status::Aborted | Status::TimedOut | Status::Failed)
     }
 }
@@ -118,9 +117,10 @@ impl std::fmt::Display for Status {
     }
 }
 
+pub struct InvalidStatus;
+
 impl FromStr for Status {
-    // Error type: this implementation used ONLY to decode State TOML representation, where Status encoded as String for readability.
-    type Err = ();
+    type Err = InvalidStatus;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
@@ -136,7 +136,7 @@ impl FromStr for Status {
             "Joined" => Ok(Status::Joined),
             "Left" => Ok(Status::Left),
             "Failed" => Ok(Status::Failed),
-            _ => Err(()),
+            _ => Err(InvalidStatus),
         }
     }
 }

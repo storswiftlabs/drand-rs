@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 use tracing::error;
 
-/// Directory located at $PWD/<base_folder>/multibeacon/<beacon_id>/
+/// Directory located at `base_folder/multibeacon/beacon_id/`.
 const DKG_STORE_DIR: &str = "dkg";
 /// TOML encoded representation of the current [`State`].
 const CURRENT_FILE: &str = "current.toml";
@@ -43,7 +43,7 @@ impl DkgStore {
             (true, false) => {
                 std::fs::create_dir(&store.path).map_err(DkgStoreError::CreateDir)?;
                 std::fs::set_permissions(&store.path, Permissions::from_mode(DIR_PERM))
-                    .map_err(DkgStoreError::Permission)?
+                    .map_err(DkgStoreError::Permission)?;
             }
             // Brocken configuration
             (false, false) => {
@@ -62,11 +62,11 @@ impl DkgStore {
                 ) && state.time_expired()
                 {
                     state.status = Status::TimedOut;
-                    store.save_current(&state)?
+                    store.save_current(&state)?;
                 } else if state.status() == &Status::Executing {
                     // Node can not be loaded into executing state regardless of timeout(drand-go v2.1.0).
                     state.status = Status::Failed;
-                    store.save_current(&state)?
+                    store.save_current(&state)?;
                 }
             }
             Err(DkgStoreError::NotFound) => store.save_current(&State::<S>::fresh(id))?,

@@ -53,30 +53,15 @@ pub struct Address {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StatusRequest {
-    /// the check_conn contains the list of addresses to check connectivity to,
-    /// i.e. does a GRPC health check on it.
-    /// If the field is absent or empty, then all nodes in the group file are
-    /// tested.
-    #[prost(message, repeated, tag = "1")]
-    pub check_conn: ::prost::alloc::vec::Vec<Address>,
-    #[prost(message, optional, tag = "2")]
+    #[prost(message, optional, tag = "1")]
     pub metadata: ::core::option::Option<Metadata>,
 }
-/// StatusResponse contains different indicators of the status of the local drand
-/// node process and as well some view on the connectivity with other nodes if
-/// ask during the StatusRequest.
-#[derive(Clone, PartialEq, ::prost::Message)]
+/// StatusResponse might contain different indicators of the status of the local
+/// drand node process.
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct StatusResponse {
-    #[prost(message, optional, tag = "1")]
-    pub dkg: ::core::option::Option<DkgStatus>,
-    #[prost(uint32, tag = "2")]
-    pub epoch: u32,
-    #[prost(message, optional, tag = "3")]
-    pub beacon: ::core::option::Option<BeaconStatus>,
-    #[prost(message, optional, tag = "4")]
-    pub chain_store: ::core::option::Option<ChainStoreStatus>,
-    #[prost(map = "string, bool", tag = "5")]
-    pub connections: ::std::collections::HashMap<::prost::alloc::string::String, bool>,
+    #[prost(uint64, tag = "1")]
+    pub latest_stored_round: u64,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Empty {

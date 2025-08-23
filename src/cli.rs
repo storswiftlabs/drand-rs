@@ -1,26 +1,29 @@
 use crate::core::beacon;
 use crate::core::daemon::Daemon;
-
 use crate::key::keys::Pair;
 use crate::key::store::FileStore;
 use crate::key::Scheme;
-
 use crate::net::control;
 use crate::net::control::ControlClient;
 use crate::net::dkg_control::DkgControlClient;
+use crate::net::health::HealthClient;
 use crate::net::protocol;
+use crate::net::protocol::ProtocolClient;
 use crate::net::utils::Address;
 use crate::net::utils::ControlListener;
 use crate::net::utils::NodeListener;
 
+use anyhow::bail;
+use anyhow::Result;
 use clap::arg;
 use clap::command;
 use clap::Parser;
 use clap::Subcommand;
-
-use anyhow::bail;
-use anyhow::Result;
-use energon::drand::schemes::*;
+use energon::drand::schemes::DefaultScheme;
+use energon::drand::schemes::SigsOnG1Scheme;
+use energon::drand::schemes::UnchainedScheme;
+use energon::points::KeyPoint;
+use energon::traits::Affine;
 
 /// Generate the long-term keypair (drand.private, drand.public) for this node, and load it on the drand daemon if it is up and running
 #[derive(Debug, Parser, Clone)]
@@ -61,9 +64,6 @@ pub struct Config {
 /// Sync your local randomness chain with other nodes and validate your local beacon chain. To follow a remote node, it requires the use of the 'follow' flag.
 #[derive(Debug, Parser, Clone)]
 pub struct SyncConfig {
-    /// Folder to keep all drand cryptographic information, with absolute path.
-    #[arg(long, default_value_t = FileStore::drand_home())]
-    pub folder: String,
     /// Set the port you want to listen to for control port commands. If not specified, we will use the default value.
     #[arg(long, default_value = control::DEFAULT_CONTROL_PORT)]
     pub control: String,
@@ -73,19 +73,20 @@ pub struct SyncConfig {
     /// <ADDRESS:PORT>,<...> of (multiple) reachable drand daemon(s). When checking our local database, using our local daemon address will result in a dry run.
     #[arg(long)]
     pub sync_nodes: Vec<String>,
-    /// Specify a round at which the drand daemon will stop syncing the chain, typically used to bootstrap a new node in chained mode
+    /// Specify a round at which the drand daemon will stop syncing the chain, typically used to bootstrap a new node.
+    /// Note: The `up_to` value is ignored when the '--follow' flag is used.
     #[arg(long, default_value = "0")]
     pub up_to: u64,
     /// Indicates the id for the randomness generation process which will be started
     #[arg(long)]
     pub id: String,
-    /// Indicates whether we want to follow another daemon, if not we perform a check of our local DB. Requires to specify the chain-hash using the 'chain-hash' flag.
+    /// Indicates whether we want to follow another daemon up to latest chain height.
     #[arg(long)]
     pub follow: bool,
 }
 
-#[derive(Subcommand, Clone, Debug)]
 /// Commands for interacting with the DKG
+#[derive(Subcommand, Clone, Debug)]
 pub enum Dkg {
     Join {
         /// Set the port you want to listen to for control port commands. If not specified, we will use the default value.
@@ -108,10 +109,46 @@ pub enum Dkg {
     },
 }
 
+/// Local information retrieval about the node's cryptographic material and current state.
+#[derive(Subcommand, Clone, Debug)]
+pub enum Show {
+    ChainInfo {
+        /// Set the port you want to listen to for control port commands. If not specified, we will use the default value.
+        #[arg(long, default_value = control::DEFAULT_CONTROL_PORT)]
+        control: String,
+        /// Indicates the id for the randomness generation process which will be started
+        #[arg(long)]
+        id: String,
+    },
+    Status {
+        /// Set the port you want to listen to for control port commands. If not specified, we will use the default value.
+        #[arg(long, default_value = control::DEFAULT_CONTROL_PORT)]
+        control: String,
+        /// Indicates the id for the randomness generation process which will be started
+        #[arg(long)]
+        id: String,
+    },
+}
+
+/// Multiple commands of utility functions, such as reseting a state, checking the connection of a peer...
+#[derive(Subcommand, Clone, Debug)]
+pub enum Util {
+    /// Check node at the given `ADDRESS` (you can put multiple ones) over the gRPC communication.
+    Check {
+        /// Indicates the id for the randomness generation process which will be started.
+        #[arg(long, default_value = None)]
+        id: Option<String>,
+        addresses: Vec<String>,
+    },
+}
+
 #[derive(Debug, Parser, Clone)]
-#[command(name = "git")]
-#[command(about = "", long_about = None)]
-pub struct CLI {
+#[command(
+    name = "drand rust implementation (BETA)", 
+    version = env!("CARGO_PKG_VERSION"), 
+    about = "distributed randomness service"
+)]
+pub struct Cli {
     #[arg(long, global = true)]
     pub verbose: bool,
     #[command(subcommand)]
@@ -143,25 +180,34 @@ pub enum Cmd {
     Sync(SyncConfig),
     #[command(subcommand)]
     Dkg(Dkg),
+    #[command(subcommand)]
+    Show(Show),
+    #[command(subcommand)]
+    Util(Util),
 }
 
-impl CLI {
+impl Cli {
     pub async fn run(self) -> Result<()> {
-        // Logs are disabled in tests by default.
-        #[cfg(not(test))]
-        crate::log::init_log(self.verbose)?;
+        crate::log::setup_tracing(self.verbose)?;
 
         match self.commands {
-            Cmd::GenerateKeypair(config) => keygen_cmd(&config).await?,
+            Cmd::GenerateKeypair(config) => keygen_cmd(config).await?,
             Cmd::Start(config) => start_cmd(config).await?,
-            Cmd::Load { control, id } => load_cmd(&control, &id).await?,
-            Cmd::Stop { control, id } => stop_cmd(&control, id.as_deref()).await?,
+            Cmd::Load { control, id } => load_beacon_cmd(&control, id).await?,
+            Cmd::Stop { control, id } => stop_cmd(&control, id).await?,
             Cmd::Sync(config) => sync_cmd(config).await?,
             Cmd::Dkg(dkg) => match dkg {
                 Dkg::Join { control, id, group } => {
-                    join_cmd(&control, &id, group.as_deref()).await?
+                    dkg_join_cmd(&control, id, group.as_deref()).await?;
                 }
-                Dkg::Accept { control, id } => accept_cmd(&control, &id).await?,
+                Dkg::Accept { control, id } => dkg_accept_cmd(&control, id).await?,
+            },
+            Cmd::Show(show) => match show {
+                Show::ChainInfo { control, id } => chain_info_cmd(&control, id).await?,
+                Show::Status { control, id } => status_cmd(&control, id).await?,
+            },
+            Cmd::Util(util) => match util {
+                Util::Check { id, addresses } => util_check_cmd(id.as_deref(), addresses).await?,
             },
         }
 
@@ -169,35 +215,28 @@ impl CLI {
     }
 }
 
-async fn keygen_cmd(config: &KeyGenConfig) -> Result<()> {
+async fn keygen_cmd(config: KeyGenConfig) -> Result<()> {
     println!("Generating private / public key pair");
     match config.scheme.as_str() {
-        DefaultScheme::ID => keygen::<DefaultScheme>(config).await?,
-        UnchainedScheme::ID => keygen::<UnchainedScheme>(config).await?,
-        SigsOnG1Scheme::ID => keygen::<SigsOnG1Scheme>(config).await?,
-        BN254UnchainedOnG1Scheme::ID => keygen::<BN254UnchainedOnG1Scheme>(config).await?,
+        DefaultScheme::ID => keygen::<DefaultScheme>(&config)?,
+        UnchainedScheme::ID => keygen::<UnchainedScheme>(&config)?,
+        SigsOnG1Scheme::ID => keygen::<SigsOnG1Scheme>(&config)?,
         _ => bail!("keygen: unknown scheme: {}", config.scheme),
     }
 
-    // Note: Loading keys into the daemon at `keygen_cmd` is disabled in tests.
-    //       Testing [`ControlClient::load_beacon`] is done outside this function.
-    #[cfg(not(test))]
     // If keys were generated successfully, daemon needs to load them.
     match control::ControlClient::new(&config.control).await {
         Ok(mut client) => {
-            client.load_beacon(&config.id).await?;
+            client.load_beacon(config.id).await?;
         }
-        Err(_) => {
-            // Just print, exit code 0
-            eprintln!("Keys couldn't be loaded on drand daemon. If it is not running, these new keys will be loaded on startup")
-        }
+        Err(_) => eprintln!("Keys couldn't be loaded on drand daemon. If it is not running, these new keys will be loaded on startup"),
     }
 
     Ok(())
 }
 
 /// Generic helper for [`keygen_cmd`]
-async fn keygen<S: Scheme>(config: &KeyGenConfig) -> Result<()> {
+fn keygen<S: Scheme>(config: &KeyGenConfig) -> Result<()> {
     let address = Address::precheck(&config.address)?;
     let pair = Pair::<S>::generate(address)?;
     let store = FileStore::new_checked(&config.folder, &config.id)?;
@@ -207,50 +246,51 @@ async fn keygen<S: Scheme>(config: &KeyGenConfig) -> Result<()> {
 }
 
 async fn start_cmd(config: Config) -> Result<()> {
-    let node_address = Address::precheck(&config.private_listen)?;
-    let daemon = Daemon::new(&config).await?;
+    let private_listen = Address::precheck(&config.private_listen)?;
+    let control_port = config.control.clone();
+    let daemon = Daemon::new(config)?;
     // Start control server
     let control = daemon.tracker.spawn({
         let daemon = daemon.clone();
-        control::start_server::<ControlListener>(daemon, config.control)
+        control::start_server::<ControlListener>(daemon, control_port)
     });
     // Start node server
     let node = daemon.tracker.spawn({
         let daemon = daemon.clone();
-        protocol::start_server::<NodeListener>(daemon, node_address)
+        protocol::start_server::<NodeListener>(daemon, private_listen)
     });
 
-    if tokio::try_join!(control, node).is_err() {
-        panic!("can not start node");
-    };
+    assert!(
+        tokio::try_join!(control, node).is_ok(),
+        "can not start node"
+    );
 
     Ok(())
 }
 
-/// Load beacon id into drand node
-async fn load_cmd(control_port: &str, beacon_id: &str) -> Result<()> {
+async fn load_beacon_cmd(control_port: &str, beacon_id: String) -> Result<()> {
     let mut client = ControlClient::new(control_port).await?;
     client.load_beacon(beacon_id).await?;
 
     Ok(())
 }
 
-async fn stop_cmd(control_port: &str, beacon_id: Option<&str>) -> anyhow::Result<()> {
+async fn stop_cmd(control_port: &str, beacon_id: Option<String>) -> anyhow::Result<()> {
     let mut conn = ControlClient::new(control_port).await?;
 
-    match conn.shutdown(beacon_id).await {
+    match conn.shutdown(beacon_id.clone()).await {
         Ok(is_daemon_running) => {
             if is_daemon_running {
-                println!("beacon process [{:?}] stopped correctly. Bye.\n", beacon_id)
+                println!("beacon process [{beacon_id:?}] stopped correctly. Bye.");
             } else {
-                println!("drand daemon stopped correctly. Bye.\n")
+                println!("drand daemon stopped correctly. Bye.");
             }
         }
         Err(err) => {
             if let Some(id) = beacon_id {
-                println!("error stopping beacon process: [{id}], status: {err}")
+                println!("error stopping beacon process: [{id}], status: {err}");
             } else {
-                println!("error stopping drand daemon, status: {err}")
+                println!("error stopping drand daemon, status: {err}");
             }
         }
     }
@@ -265,16 +305,97 @@ async fn sync_cmd(config: SyncConfig) -> Result<()> {
     Ok(())
 }
 
-async fn join_cmd(control_port: &str, beacon_id: &str, groupfile_path: Option<&str>) -> Result<()> {
+async fn dkg_join_cmd(
+    control_port: &str,
+    beacon_id: String,
+    groupfile_path: Option<&str>,
+) -> Result<()> {
     let mut client = DkgControlClient::new(control_port).await?;
     client.dkg_join(beacon_id, groupfile_path).await?;
+    println!("Joined the DKG successfully!");
 
     Ok(())
 }
 
-async fn accept_cmd(control_port: &str, beacon_id: &str) -> Result<()> {
+async fn dkg_accept_cmd(control_port: &str, beacon_id: String) -> Result<()> {
     let mut client = DkgControlClient::new(control_port).await?;
     client.dkg_accept(beacon_id).await?;
+
+    Ok(())
+}
+
+async fn chain_info_cmd(control_port: &str, beacon_id: String) -> Result<()> {
+    let mut client = ControlClient::new(control_port).await?;
+    let info = client.chain_info(beacon_id).await?;
+    println!("{info}");
+
+    Ok(())
+}
+
+async fn status_cmd(control_port: &str, beacon_id: String) -> Result<()> {
+    let mut client = ControlClient::new(control_port).await?;
+    let status = client.status(beacon_id.clone()).await?;
+    println!(
+        "Beacon ID: {beacon_id}\nLatest stored round: {}",
+        status.latest_stored_round
+    );
+
+    Ok(())
+}
+
+async fn util_check_cmd(beacon_id: Option<&str>, addresses: Vec<String>) -> Result<()> {
+    let peers = addresses
+        .iter()
+        .map(|addr| Address::precheck(addr.as_str()))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut invalid_ids: Vec<&Address> = Vec::with_capacity(peers.len());
+    for peer in &peers {
+        if let Err(err) = {
+            match beacon_id {
+                Some(id) => check_identity_address(peer, id.to_string()).await,
+                None => HealthClient::check(peer).await,
+            }
+        } {
+            if tracing::enabled!(tracing::Level::DEBUG) {
+                println!("drand: error checking id {peer}: {}", err.root_cause());
+            } else {
+                println!("drand: error checking id {peer}");
+            }
+
+            invalid_ids.push(peer);
+            continue;
+        }
+        println!("drand: id {peer} answers correctly");
+    }
+    if !invalid_ids.is_empty() {
+        println!("following nodes don't answer: {invalid_ids:?}");
+    }
+
+    Ok(())
+}
+
+async fn check_identity_address(peer: &Address, beacon_id: String) -> Result<()> {
+    let mut client = ProtocolClient::new(peer).await?;
+    let resp = client.get_identity(beacon_id).await?;
+
+    if resp.address != *peer {
+        bail!(
+            "mismatch of address: contact {peer} reply with {}",
+            resp.address
+        )
+    }
+    if match resp.scheme_name.as_str() {
+        DefaultScheme::ID => KeyPoint::<DefaultScheme>::deserialize(&resp.key).is_err(),
+        SigsOnG1Scheme::ID => KeyPoint::<SigsOnG1Scheme>::deserialize(&resp.key).is_err(),
+        UnchainedScheme::ID => KeyPoint::<UnchainedScheme>::deserialize(&resp.key).is_err(),
+        _ => bail!(
+            "received an invalid / unsupported SchemeName in identity response: {}",
+            resp.scheme_name
+        ),
+    } {
+        bail!("could not unmarshal public key");
+    };
 
     Ok(())
 }

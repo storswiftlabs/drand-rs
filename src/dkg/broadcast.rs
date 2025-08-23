@@ -1,23 +1,26 @@
 use crate::key::Scheme;
+use crate::net::dkg_public::DkgPublicClient;
 use crate::net::utils::Address;
-use crate::net::utils::URI_SCHEME;
 
-use crate::protobuf::dkg::dkg_public_client::DkgPublicClient;
 use crate::protobuf::dkg::packet::Bundle as ProtoBundle;
 use crate::protobuf::dkg::DkgPacket;
 use crate::protobuf::drand::Metadata;
 use crate::transport::dkg::Participant;
 
-use energon::backends::error::BackendsError;
-use energon::kyber::dkg::*;
+use energon::kyber::dkg::Bundle;
+use energon::kyber::dkg::BundleReceiver;
+use energon::kyber::dkg::Deal;
+use energon::kyber::dkg::DealBundle;
+use energon::kyber::dkg::Justification;
+use energon::kyber::dkg::JustificationBundle;
+use energon::kyber::dkg::Response;
+use energon::kyber::dkg::ResponseBundle;
 use energon::points::KeyPoint;
 use energon::traits::Affine;
 use energon::traits::ScalarField;
 
-use std::str::FromStr;
 use tokio::sync::broadcast;
 use tokio_util::task::TaskTracker;
-use tonic::transport::Channel;
 use tracing::debug;
 use tracing::error;
 use tracing::Span;
@@ -60,39 +63,45 @@ impl Broadcast {
             if &p.address == me {
                 continue;
             }
-            if let Some(uri) = to_uri(&p.address) {
-                let addr = p.address.to_string();
-                let mut rx = self.sender.subscribe();
-                debug!(parent: &self.log, "dkg broadcast: added new address [{addr}]");
 
-                t.spawn(async move {
-                    let mut client = DkgPublicClient::new(Channel::builder(uri).connect_lazy());
+            let mut rx = self.sender.subscribe();
+            debug!(parent: &self.log, "dkg broadcast: added new address [{}]", p.address);
+            let peer = p.address.clone();
+            t.spawn(async move {
+                let mut conn_result = DkgPublicClient::new(&peer).await;
 
-                    while let Ok(msg) = rx.recv().await {
-                        match msg {
-                            BroadcastCmd::Stop => break,
-                            BroadcastCmd::Packet(packet) => {
-                                if let Err(err) = client.broadcast_dkg(packet).await {
-                                    error!("dkg broadcast: failed to send packet to {addr}, error: {err}")
-                                }
+                while let Ok(msg) = rx.recv().await {
+                    match msg {
+                        BroadcastCmd::Stop => break,
+                        BroadcastCmd::Packet(packet) => {
+                            if conn_result.is_err() {
+                                conn_result = DkgPublicClient::new(&peer).await;
                             }
+
+                            match conn_result {
+                                Ok(ref mut client) => {
+                                    if let Err(err) = client.broadcast_dkg(packet).await {
+                                        error!("dkg broadcast: send packet to {peer}: {err}");
+                                    }
+                                }
+                                Err(ref err) => {
+                                    error!("dkg broadcast: connect to {peer}: {err}");
+                                }
+                            };
                         }
                     }
-                });
-            }
+                }
+            });
         }
 
         t.spawn(async move {
             while let Some(bundle) = rx.recv().await {
-                match into_proto(bundle, &self.beacon_id) {
-                    Ok(proto) => {
-                        if self.sender.send(BroadcastCmd::Packet(proto)).is_err() {
-                            error!(parent: &self.log, "BUG: dkg broadcast: channel is closed")
-                        }
-                    }
-                    Err(err) => {
-                         error!(parent: &self.log, "BUG: dkg broadcast: failed to convert bundle to proto: {err:?}")
-                    }
+                let Ok(proto) = into_proto(bundle, &self.beacon_id) else {
+                    error!(parent: &self.log, "dkg broadcast: failed to convert bundle to proto");
+                    return;
+                };
+                if self.sender.send(BroadcastCmd::Packet(proto)).is_err() {
+                    error!(parent: &self.log, "dkg broadcast: channel is closed");
                 }
             }
         });
@@ -107,13 +116,11 @@ pub(super) trait Convert: Sized {
     fn into_proto(self) -> Result<Self::Proto, ConvertError>;
 }
 
-#[derive(Debug)]
 pub enum ConvertError {
     /// Optional fields related to prost implementation.
     /// See <https://github.com/tokio-rs/prost?tab=readme-ov-file#field-modifiers>
     EmptyProto,
-    #[allow(non_camel_case_types)]
-    BUG_FromInner(BackendsError),
+    FromInner,
 }
 
 /// Convert bundle into protobuf representation
@@ -126,7 +133,7 @@ fn into_proto<S: Scheme>(bundle: Bundle<S>, id: &str) -> Result<DkgPacket, Conve
 
     let packet = DkgPacket {
         dkg: Some(crate::protobuf::dkg::Packet {
-            metadata: Metadata::with_id(id),
+            metadata: Some(Metadata::with_id(id.to_string())),
             bundle: Some(proto_bundle),
         }),
     };
@@ -162,7 +169,7 @@ impl<S: Scheme> Convert for Bundle<S> {
 
         Ok(Self::Proto {
             dkg: Some(crate::protobuf::dkg::Packet {
-                metadata: Metadata::with_id("kva"),
+                metadata: None,
                 bundle: Some(bundle),
             }),
         })
@@ -178,7 +185,7 @@ impl<S: Scheme> Convert for JustificationBundle<S> {
         for j in p.justifications {
             justifications.push(Justification::<S> {
                 share_index: j.share_index,
-                share: S::Scalar::from_bytes_be(&j.share).map_err(ConvertError::BUG_FromInner)?,
+                share: S::Scalar::from_bytes_be(&j.share).map_err(|_| ConvertError::FromInner)?,
             });
         }
 
@@ -201,9 +208,9 @@ impl<S: Scheme> Convert for JustificationBundle<S> {
                 share: j
                     .share
                     .to_bytes_be()
-                    .map_err(ConvertError::BUG_FromInner)?
+                    .map_err(|_| ConvertError::FromInner)?
                     .into(),
-            })
+            });
         }
 
         let proto = Self::Proto {
@@ -228,7 +235,7 @@ impl<S: Scheme> Convert for DealBundle<S> {
                 .iter()
                 .map(|commit| KeyPoint::<S>::deserialize(commit))
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(ConvertError::BUG_FromInner)?,
+                .map_err(|_| ConvertError::FromInner)?,
             deals: p
                 .deals
                 .into_iter()
@@ -248,7 +255,7 @@ impl<S: Scheme> Convert for DealBundle<S> {
         let mut commits = Vec::with_capacity(self.public.len());
 
         for c in self.public {
-            commits.push(c.serialize().map_err(ConvertError::BUG_FromInner)?.into());
+            commits.push(c.serialize().map_err(|_| ConvertError::FromInner)?.into());
         }
 
         let proto = Self::Proto {
@@ -310,7 +317,3 @@ impl Convert for ResponseBundle {
     }
 }
 
-pub fn to_uri(addr: &Address) -> Option<http::Uri> {
-    // TODO: change to builder after TLS is added
-    http::Uri::from_str(&format!("{URI_SCHEME}://{}", addr.as_str())).ok()
-}

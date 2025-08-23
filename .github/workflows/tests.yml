@@ -24,11 +24,11 @@ jobs:
           rustup default 1.84.0
       - uses: Swatinem/rust-cache@v2
       - name: Test with arkworks
-        run: cargo test --no-default-features --release --verbose --features arkworks,memstore
+        run: cargo test --no-default-features --release --verbose --features arkworks
       - name: Lint with arkworks
         uses: crusty-pie/clippy@v1
         with:
-          args: --release --no-default-features --features arkworks,memstore
+          args: --release --no-default-features --features arkworks
 
   test-blstrs:
     runs-on: ubuntu-latest
@@ -42,8 +42,8 @@ jobs:
           rustup default 1.84.0
       - uses: Swatinem/rust-cache@v2
       - name: Test with blstrs
-        run: cargo test --no-default-features --release --verbose --features blstrs,memstore
+        run: cargo test --no-default-features --release --verbose --features blstrs
       - name: Lint with blstrs
         uses: crusty-pie/clippy@v1
         with:
-          args: --release --no-default-features --features blstrs,memstore
+          args: --release --no-default-features --features blstrs

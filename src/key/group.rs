@@ -1,6 +1,6 @@
 use super::keys::DistPublic;
 use super::Hash;
-use super::PointSerDeError;
+
 use super::Scheme;
 use crate::key::node::Node;
 use crate::net::utils::Seconds;
@@ -14,7 +14,7 @@ pub struct Group<S: Scheme> {
     pub threshold: u32,
     /// Period to use for the beacon randomness generation
     pub period: Seconds,
-    /// CatchupPeriod is a delay to insert while in a catchup mode
+    /// `CatchupPeriod` is a delay to insert while in a catchup mode
     /// also can be thought of as the minimum period allowed between
     /// beacon and subsequent partial generation
     pub catchup_period: Seconds,
@@ -24,9 +24,8 @@ pub struct Group<S: Scheme> {
     // transition from the old network to the new network.
     pub transition_time: u64,
     /// Seed of the genesis block. When doing a DKG from scratch, it will be
-    /// populated directly from the list of nodes and other parameters. WHen
-    /// doing a resharing, this seed is taken from the first group of the
-    /// network.
+    /// populated directly from the list of nodes and other parameters. When
+    /// doing a resharing, this seed is taken from the first group of the network.
     pub genesis_seed: Vec<u8>,
     /// ID is the unique identifier for this group
     pub beacon_id: String,
@@ -71,22 +70,16 @@ impl<S: Scheme> Group<S> {
 impl<S: Scheme> Hash for Group<S> {
     type Hasher = crev_common::Blake2b256;
 
-    fn hash(&self) -> Result<[u8; 32], PointSerDeError> {
-        // TODO(L): impl Hash for Node<S> and DistPublic<S>
+    fn hash(&self) -> [u8; 32] {
         let mut h = Self::Hasher::new();
 
-        for node in self.nodes.iter() {
+        for node in &self.nodes {
             h.update({
                 let mut hh = Self::Hasher::new();
                 hh.update(node.index().to_le_bytes());
-                hh.update(
-                    node.public()
-                        .key()
-                        .serialize()
-                        .map_err(PointSerDeError::KeyPoint)?,
-                );
+                hh.update(node.public().key().serialize().unwrap());
                 hh.finalize().as_slice()
-            })
+            });
         }
 
         h.update(self.threshold.to_le_bytes());
@@ -100,18 +93,18 @@ impl<S: Scheme> Hash for Group<S> {
             h.update({
                 let mut hh = Self::Hasher::new();
                 for commit in self.dist_key.commits() {
-                    let bytes = commit.serialize().map_err(PointSerDeError::KeyPoint)?;
-                    hh.update(bytes)
+                    let bytes = commit.serialize().unwrap();
+                    hh.update(bytes);
                 }
                 hh.finalize().as_slice()
-            })
+            });
         }
 
         if !crate::core::beacon::is_default_beacon_id(&self.beacon_id) {
-            h.update(self.beacon_id.as_bytes())
+            h.update(self.beacon_id.as_bytes());
         }
 
-        Ok(h.finalize().into())
+        h.finalize().into()
     }
 }
 

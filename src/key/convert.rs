@@ -10,9 +10,9 @@ use energon::traits::Affine;
 /// Error originates from points serialize/deserialize.
 #[derive(thiserror::Error, Debug)]
 pub enum PointSerDeError {
-    #[error("key_point error: {0}")]
+    #[error("key: {0}")]
     KeyPoint(BackendsError),
-    #[error("sig_point error: {0}")]
+    #[error("sig: {0}")]
     SigPoint(BackendsError),
 }
 
@@ -35,7 +35,7 @@ impl<S: Scheme> TryFrom<&Identity<S>> for crate::transport::drand::Identity {
 
     fn try_from(identity: &Identity<S>) -> Result<Self, Self::Error> {
         Ok(Self {
-            address: identity.address.to_owned(),
+            address: identity.address.clone(),
             key: identity
                 .key()
                 .serialize()
@@ -79,7 +79,7 @@ impl<S: Scheme> TryFrom<&Identity<S>> for crate::transport::dkg::Participant {
 
     fn try_from(identity: &Identity<S>) -> Result<Self, Self::Error> {
         Ok(Self {
-            address: identity.address.to_owned(),
+            address: identity.address.clone(),
             key: identity
                 .key()
                 .serialize()

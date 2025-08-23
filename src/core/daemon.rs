@@ -6,7 +6,6 @@ use super::multibeacon::MultiBeacon;
 use crate::cli::Config;
 use crate::key::store::FileStore;
 use crate::key::store::FileStoreError;
-use crate::log::Logger;
 use crate::net::utils::Callback;
 use crate::net::utils::StartServerError;
 
@@ -19,7 +18,6 @@ use tokio_util::task::TaskTracker;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
-use tracing::Span;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -32,35 +30,34 @@ pub enum DaemonError {
     BeaconHandler(#[from] BeaconHandlerError),
     #[error(transparent)]
     ServerError(#[from] StartServerError),
-    #[error("beacon is not found")]
-    BeaconNotFound,
 }
 
 pub struct Daemon {
+    private_listen: String,
     pub tracker: TaskTracker,
     pub token: CancellationToken,
     pub beacons: MultiBeacon,
     multibeacon_path: PathBuf,
-    logger: Logger,
 }
 
 impl Daemon {
-    pub async fn new(config: &Config) -> Result<Arc<Self>, DaemonError> {
+    pub fn new(config: Config) -> Result<Arc<Self>, DaemonError> {
         let tracker: TaskTracker = TaskTracker::new();
         let token: CancellationToken = CancellationToken::new();
+        let private_listen = config.private_listen.clone();
 
-        let logger = Logger::register_node(&config.private_listen);
-        debug!(parent: &logger.span,
-              "DrandDaemon initializing: private_listen: {}, control_port: {}, folder: {}", 
-              config.private_listen, config.control, config.folder);
+        info!(
+            "Drand daemon initializing: private_listen: {}, control_port: {}, folder: {}",
+            config.private_listen, config.control, config.folder,
+        );
 
         let (multibeacon_path, beacons) = MultiBeacon::new(config)?;
         let daemon = Arc::new(Self {
+            private_listen,
             tracker,
             token,
             beacons,
             multibeacon_path,
-            logger,
         });
 
         Ok(daemon)
@@ -94,14 +91,14 @@ impl Daemon {
 
             self.beacons().replace_store(Arc::new(new_store));
 
-            let sender = handler.sender().clone();
+            let process_tx = handler.process_tx.clone();
             tokio::spawn(async move {
                 let (tx, rx) = Callback::new();
                 // Shutdown is graceful:
                 //  - beacon receiver is not dropped,
                 //  - callback awaited is_ok
                 //  - result from callback is_ok
-                let is_graceful = sender.send(BeaconCmd::Shutdown(tx)).await.is_ok()
+                let is_graceful = process_tx.send(BeaconCmd::Shutdown(tx)).await.is_ok()
                     && rx.await.is_ok_and(|result| result.is_ok());
                 let _ = tx_graceful.send(is_graceful);
             });
@@ -122,7 +119,7 @@ impl Daemon {
             let mut is_graceful = true;
             for h in snapshot.iter() {
                 let (beacon_tx, beacon_rx) = Callback::new();
-                if let Err(send_err) = h.sender().send(BeaconCmd::Shutdown(beacon_tx)).await {
+                if let Err(send_err) = h.process_tx.send(BeaconCmd::Shutdown(beacon_tx)).await {
                     error!("should not be possible, id '{}', err: {send_err}", h.id());
                     is_graceful = false;
                 }
@@ -135,9 +132,6 @@ impl Daemon {
             tracker.close();
             token.cancel();
 
-            // TODO: replace sleeping once next modules added.
-            //  - confirmed shutdown from connection pool
-            //  - confirmed shutdown from DB (if shared across beacons)
             sleep(Duration::from_millis(100)).await;
 
             // Number of tasks == 1 means the only control server is still
@@ -162,40 +156,37 @@ impl Daemon {
         // Return error if given id is already loaded
         if store.iter().any(|h| h.beacon_id.is_eq(id)) {
             return Err(BeaconHandlerError::AlreadyLoaded);
-        } else {
-            let store = FileStore {
-                beacon_path: self.multibeacon_path.join(id),
-            };
-            if let Err(err) = store.validate() {
-                error!("failed to validate store: {err}, beacon id: {id}");
-                return Err(BeaconHandlerError::UnknownID);
-            };
-
-            let new_handler = BeaconHandler::new(id, store).map_err(|err| {
-                error!("failed to initialize BeaconHandler: {err}, beacon id: {id}");
-                BeaconHandlerError::UnknownID
-            })?;
-
-            // Update multibeacon storage with new handler
-            // TODO: this should be moved into MultiBeacon method
-            let mut handlers = self
-                .beacons()
-                .snapshot()
-                .iter()
-                .cloned()
-                .collect::<Vec<BeaconHandler>>();
-            handlers.push(new_handler);
-            self.beacons().replace_store(Arc::new(handlers));
         }
+        let store = FileStore {
+            beacon_path: self.multibeacon_path.join(id),
+        };
+        if let Err(err) = store.validate() {
+            error!("failed to validate store: {err}, beacon id: {id}");
+            return Err(BeaconHandlerError::UnknownID);
+        };
+
+        let new_handler =
+            BeaconHandler::new(store, self.beacons.get_pool(), self.private_listen.clone())
+                .map_err(|err| {
+                    error!("failed to initialize BeaconHandler: {err}, beacon id: {id}");
+                    BeaconHandlerError::UnknownID
+                })?;
+
+        // Update multibeacon storage with new handler
+        // TODO: this should be moved into MultiBeacon method
+        let mut handlers = self
+            .beacons()
+            .snapshot()
+            .iter()
+            .cloned()
+            .collect::<Vec<BeaconHandler>>();
+        handlers.push(new_handler);
+        self.beacons().replace_store(Arc::new(handlers));
 
         Ok(())
     }
 
     pub fn beacons(&self) -> &MultiBeacon {
         &self.beacons
-    }
-
-    pub fn log(&self) -> &Span {
-        &self.logger.span
     }
 }

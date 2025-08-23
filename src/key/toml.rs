@@ -30,7 +30,7 @@ pub trait Toml: Sized {
     fn toml_decode(value: &Self::Inner) -> Option<Self>;
 }
 
-/// PairToml is a toml representation of a [`Pair`]
+/// `PairToml` is a toml representation of a [`Pair`]
 pub struct PairToml {
     private: DocumentMut,
     public: DocumentMut,
@@ -47,7 +47,7 @@ impl PairToml {
         Some(Self::new(private, public))
     }
 
-    /// Returns a str representation of associated [Scheme::ID] if public and private contain the same `SchemeName`.
+    /// Returns a str representation of associated [`Scheme::ID`] if public and private contain the same `SchemeName`.
     pub fn get_scheme_id(&self) -> Option<&str> {
         let private_scheme = self.private.get("SchemeName")?.as_str()?;
         let public_scheme = self.public.get("SchemeName")?.as_str()?;
@@ -126,14 +126,14 @@ impl<S: Scheme> Toml for Node<S> {
 
     fn toml_encode(&self) -> Option<Self::Inner> {
         let mut table = self.public().toml_encode()?;
-        let _ = table.insert("Index", (self.index() as i64).into());
+        let _ = table.insert("Index", (i64::from(self.index())).into());
 
         Some(prefix_keys(table))
     }
 
     fn toml_decode(table: &Self::Inner) -> Option<Self> {
         let public = Identity::toml_decode(table)?;
-        let index = table.get("Index")?.as_integer()? as u32;
+        let index = u32::try_from(table.get("Index")?.as_integer()?).ok()?;
 
         Some(Self::new(public, index))
     }
@@ -144,8 +144,8 @@ impl<S: Scheme> Toml for DistPublic<S> {
 
     fn toml_encode(&self) -> Option<Self::Inner> {
         let mut commits = Array::new();
-        for commit in self.commits().iter() {
-            commits.push(Value::from(hex::encode(commit.serialize().ok()?)))
+        for commit in self.commits() {
+            commits.push(Value::from(hex::encode(commit.serialize().ok()?)));
         }
         let mut table = Self::Inner::new();
         let _ = table.insert("Coefficients", commits.into());
@@ -156,8 +156,8 @@ impl<S: Scheme> Toml for DistPublic<S> {
     fn toml_decode(table: &Self::Inner) -> Option<Self> {
         let array = table.get("Coefficients")?.as_array()?;
         let mut commits = Vec::with_capacity(array.len());
-        for commit in array.iter() {
-            commits.push(Affine::deserialize(&hex::decode(commit.as_str()?).ok()?).ok()?)
+        for commit in array {
+            commits.push(Affine::deserialize(&hex::decode(commit.as_str()?).ok()?).ok()?);
         }
 
         Some(Self::new(commits))
@@ -169,16 +169,19 @@ impl<S: Scheme> Toml for Group<S> {
 
     fn toml_encode(&self) -> Option<Self::Inner> {
         let mut nodes = ArrayOfTables::new();
-        for node in self.nodes().iter() {
-            nodes.push(node.toml_encode()?)
+        for node in self.nodes() {
+            nodes.push(node.toml_encode()?);
         }
 
         let mut doc = Self::Inner::new();
-        doc.insert("Threshold", (self.threshold as i64).into());
+        doc.insert("Threshold", i64::from(self.threshold).into());
         doc.insert("Period", self.period.to_string().into());
         doc.insert("CatchupPeriod", self.catchup_period.to_string().into());
-        doc.insert("GenesisTime", (self.genesis_time as i64).into());
-        doc.insert("TransitionTime", (self.transition_time as i64).into());
+        doc.insert("GenesisTime", i64::try_from(self.genesis_time).ok()?.into());
+        doc.insert(
+            "TransitionTime",
+            i64::try_from(self.transition_time).ok()?.into(),
+        );
         doc.insert("GenesisSeed", hex::encode(&self.genesis_seed).into());
         doc.insert("SchemeID", S::ID.into());
         doc.insert("ID", self.beacon_id.as_str().into());
@@ -192,10 +195,10 @@ impl<S: Scheme> Toml for Group<S> {
         if S::ID != table.get("SchemeID")?.as_str()? {
             return None;
         }
-        let threshold = table.get("Threshold")?.as_integer()? as u32;
+        let threshold = u32::try_from(table.get("Threshold")?.as_integer()?).ok()?;
         let period = table.get("Period")?.as_str().map(Seconds::from_str)?.ok()?;
-        let genesis_time = table.get("GenesisTime")?.as_integer()? as u64;
-        let transition_time = table.get("TransitionTime")?.as_integer()? as u64;
+        let genesis_time = u64::try_from(table.get("GenesisTime")?.as_integer()?).ok()?;
+        let transition_time = u64::try_from(table.get("TransitionTime")?.as_integer()?).ok()?;
         let genesis_seed = table.get("GenesisSeed")?.as_str().map(hex::decode)?.ok()?;
         let beacon_id = table.get("ID")?.as_str()?.into();
 
@@ -238,12 +241,12 @@ impl<S: Scheme> Toml for DistKeyShare<S> {
         let share_bytes = self.pri_share.value().to_bytes_be().ok()?;
 
         let mut commits = Array::new();
-        for commit in self.commits.iter() {
-            commits.push(Value::from(hex::encode(commit.serialize().ok()?)))
+        for commit in &self.commits {
+            commits.push(Value::from(hex::encode(commit.serialize().ok()?)));
         }
 
         let mut table = Self::Inner::new();
-        let _ = table.insert("Index", (self.pri_share.index() as i64).into());
+        let _ = table.insert("Index", i64::from(self.pri_share.index()).into());
         let _ = table.insert("Share", hex::encode(share_bytes).into());
         let _ = table.insert("Commits", commits.into());
         let _ = table.insert("SchemeName", S::ID.into());
@@ -255,15 +258,15 @@ impl<S: Scheme> Toml for DistKeyShare<S> {
         if S::ID != table.get("SchemeName")?.as_str()? {
             return None;
         }
-        let index = table.get("Index")?.as_integer()? as u32;
+        let index = u32::try_from(table.get("Index")?.as_integer()?).ok()?;
         let private_key_bytes = hex::decode(table.get("Share")?.as_str()?).ok()?;
         let private_key = ScalarField::from_bytes_be(&private_key_bytes).ok()?;
         let pri_share = PriShare::new(index, private_key);
 
         let commits_array = table.get("Commits")?.as_array()?;
         let mut commits = Vec::with_capacity(commits_array.len());
-        for commit in commits_array.iter() {
-            commits.push(Affine::deserialize(&hex::decode(commit.as_str()?).ok()?).ok()?)
+        for commit in commits_array {
+            commits.push(Affine::deserialize(&hex::decode(commit.as_str()?).ok()?).ok()?);
         }
 
         Some(Self { commits, pri_share })
@@ -277,12 +280,12 @@ impl<S: Scheme> Toml for Share<S> {
         let share_bytes = self.private().value().to_bytes_be().ok()?;
 
         let mut commits = Array::new();
-        for commit in self.public().commits().iter() {
-            commits.push(Value::from(hex::encode(commit.serialize().ok()?)))
+        for commit in self.public().commits() {
+            commits.push(Value::from(hex::encode(commit.serialize().ok()?)));
         }
 
         let mut table = Self::Inner::new();
-        let _ = table.insert("Index", (self.private().index() as i64).into());
+        let _ = table.insert("Index", i64::from(self.private().index()).into());
         let _ = table.insert("Share", hex::encode(share_bytes).into());
         let _ = table.insert("Commits", commits.into());
         let _ = table.insert("SchemeName", S::ID.into());
@@ -294,15 +297,15 @@ impl<S: Scheme> Toml for Share<S> {
         if S::ID != table.get("SchemeName")?.as_str()? {
             return None;
         }
-        let index = table.get("Index")?.as_integer()? as u32;
+        let index = u32::try_from(table.get("Index")?.as_integer()?).ok()?;
         let private_key_bytes = hex::decode(table.get("Share")?.as_str()?).ok()?;
         let private_key = ScalarField::from_bytes_be(&private_key_bytes).ok()?;
         let pri_share = PriShare::new(index, private_key);
 
         let commits_array = table.get("Commits")?.as_array()?;
         let mut commits = Vec::with_capacity(commits_array.len());
-        for commit in commits_array.iter() {
-            commits.push(Affine::deserialize(&hex::decode(commit.as_str()?).ok()?).ok()?)
+        for commit in commits_array {
+            commits.push(Affine::deserialize(&hex::decode(commit.as_str()?).ok()?).ok()?);
         }
 
         Some(Self::new(DistPublic::new(commits), pri_share))
@@ -313,10 +316,10 @@ impl<S: Scheme> Toml for Share<S> {
 fn prefix_keys(mut table: Table) -> Table {
     let keys: Vec<String> = table.iter().map(|(key, _)| key.into()).collect();
 
-    for key in keys.iter() {
+    for key in keys {
         if let Some(mut key_mut) = table.key_mut(key.as_str()) {
             // double-space prefix for consistency with golang implementation
-            key_mut.leaf_decor_mut().set_prefix("  ")
+            key_mut.leaf_decor_mut().set_prefix("  ");
         }
     }
 
@@ -360,7 +363,7 @@ mod tests {
     #[rustfmt::skip]
     mod toml_samples {
 
-        /// filename: drand_group.toml
+        /// filename: `drand_group.toml`
         pub fn group() -> &'static str {
 r#"Threshold = 4
 Period = "3s"
@@ -418,14 +421,14 @@ ID = "default"
 "#
         }
 
-        /// filename: drand_id.private
+        /// filename: `drand_id.private`
         pub fn private_key() -> &'static str {
 r#"Key = "4dee50f69880dce2b793ed2bad9966bc1d333c0ab28f2eff2794753e65202747"
 SchemeName = "pedersen-bls-chained"
 "#
         }
 
-        /// filename: drand_id.public
+        /// filename: `drand_id.public`
         pub fn identity() -> &'static str {
 r#"Address = "127.0.0.1:38161"
 Key = "ab37151b401ba77a9a5bf002d8381b7a9b45f789dc4c3dc40faf0421b7d409c1496e487626ae45482517fffa3de12741"
@@ -434,7 +437,7 @@ SchemeName = "pedersen-bls-chained"
 "#
         }
 
-        /// filename: dist_key.private
+        /// filename: `dist_key.private`
         pub fn dist_key() -> &'static str {
 r#"Index = 4
 Share = "675431249f101cf5001b4dd0dd8f25107a2c547b77b0693309731906b12fca98"

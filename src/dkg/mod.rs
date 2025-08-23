@@ -2,11 +2,11 @@ pub mod actions_active;
 pub mod actions_passive;
 pub mod actions_signing;
 pub mod broadcast;
-pub(super) mod execution;
+pub mod execution;
 pub mod state;
 pub mod status;
-pub(super) mod store;
-pub(super) mod utils;
+pub mod store;
+pub mod utils;
 
 pub use energon::kyber::dkg::Node as DkgNode;
 
@@ -20,8 +20,6 @@ pub enum ActionsError {
     MissingParticipant,
     #[error("invalid packet signature")]
     InvalidSignature,
-    #[error("gossip packet signature is too short")]
-    GossipSignatureLen,
     #[error("failed to initialize participant")]
     IntoParticipant,
     #[error("dkg config: failed to create new dkg nodes from participants")]
@@ -47,5 +45,5 @@ pub enum ActionsError {
     #[error("reshare: previous share can not be empty")]
     ResharePrevShareRequired,
     #[error("TODO: this dkg action is not implemented yet")]
-    TODO,
+    Todo,
 }
