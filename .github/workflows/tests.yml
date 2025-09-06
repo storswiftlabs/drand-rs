@@ -3,10 +3,10 @@ name: UnitTest
 on:
   push:
     branches:
-      - dev/v2
+      - main
   pull_request:
     branches:
-      - dev/v2
+      - main
 
 env:
   CARGO_TERM_COLOR: always
