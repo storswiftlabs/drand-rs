@@ -1,28 +1,60 @@
+/*
+ * Protobuf file containing empty message definition
+ */
 syntax = "proto3";
 
-package common;
+package drand;
 
-message Address {
-  string address = 1;
-  bool tls = 2;
+message NodeVersion {
+  uint32 major = 1;
+  uint32 minor = 2;
+  uint32 patch = 3;
+  string prerelease = 4;
 }
 
-message StatusRequest {
-  // the check_conn contains the list of addresses to check connectivity to,
-  // i.e. calls Home() on it.
-  // If the field is absent or empty, then there is no connectivity checks.
-  repeated Address check_conn = 1;
-  Metadata metadata = 2;
+message Metadata {
+  NodeVersion node_version = 1;
+  string beaconID = 2;
+  bytes chain_hash = 3;
 }
+
+message DkgStatus { uint32 status = 1; }
+
+message BeaconStatus {
+  uint32 status = 1;
+  bool is_running = 2;
+  bool is_stopped = 3;
+  bool is_started = 4;
+  bool is_serving = 5;
+}
+
+message ChainStoreStatus {
+  bool is_empty = 1;
+  uint64 last_stored = 2;
+  uint64 expected_last = 3;
+}
+
+message Address { string address = 1; }
+
+message StatusRequest { Metadata metadata = 1; }
+
+// StatusResponse might contain different indicators of the status of the local
+// drand node process.
+//
+// Currently, we only need the round of the latest stored beacon.
+// Note: Fresh nodes might return such round if they have followed some
+// chain node.
+message StatusResponse { uint64 latest_stored_round = 1; }
 
 message Empty { Metadata metadata = 1; }
 
-// REMINDER: This fields should be kept in sync with IdentityResponse message
+// REMINDER: This fields should be kept in sync with IdentityResponse message,
+// except for the beaconID and schemeID
 message Identity {
   string address = 1;
   bytes key = 2;
-  bool tls = 3;
-  // BLS signature over the identity to prove possession of the private key
+  // BLS signature over the identity to prove possession of the private key, it
+  // also verify the scheme used
   bytes signature = 4;
 }
 
@@ -49,6 +81,9 @@ message GroupPacket {
   string schemeID = 9;
   Metadata metadata = 10;
 }
+message GroupRequest { Metadata metadata = 1; }
+
+message ChainInfoRequest { Metadata metadata = 1; }
 
 message ChainInfoPacket {
   // marshalled public key
@@ -65,17 +100,4 @@ message ChainInfoPacket {
   // indicates a set of values the process will use to act in specific ways
   string schemeID = 6;
   Metadata metadata = 7;
-}
-
-message NodeVersion {
-  uint32 major = 1;
-  uint32 minor = 2;
-  uint32 patch = 3;
-  string prerelease = 4;
-}
-
-message Metadata {
-  NodeVersion node_version = 1;
-  string beaconID = 2;
-  bytes chain_hash = 3;
 }

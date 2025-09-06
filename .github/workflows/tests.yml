@@ -1,0 +1,49 @@
+name: UnitTest
+
+on:
+  push:
+    branches:
+      - dev/v2
+  pull_request:
+    branches:
+      - dev/v2
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test-arkworks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Install Rust
+        run: |
+          rustup toolchain install 1.84.0 --profile minimal --component rustfmt,clippy
+          rustup default 1.84.0
+      - uses: Swatinem/rust-cache@v2
+      - name: Test with arkworks
+        run: cargo test --no-default-features --release --verbose --features arkworks
+      - name: Lint with arkworks
+        uses: crusty-pie/clippy@v1
+        with:
+          args: --release --no-default-features --features arkworks
+
+  test-blstrs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Install Rust
+        run: |
+          rustup toolchain install 1.84.0 --profile minimal --component rustfmt,clippy
+          rustup default 1.84.0
+      - uses: Swatinem/rust-cache@v2
+      - name: Test with blstrs
+        run: cargo test --no-default-features --release --verbose --features blstrs
+      - name: Lint with blstrs
+        uses: crusty-pie/clippy@v1
+        with:
+          args: --release --no-default-features --features blstrs

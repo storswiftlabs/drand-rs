@@ -1,171 +1,331 @@
-// Copyright (C) 2023-2024 StorSwift Inc.
-// This file is part of the Drand-RS library.
-
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at:
-// http://www.apache.org/licenses/LICENSE-2.0
-
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 use super::group::Group;
-use super::keys::DistKeyShare;
 use super::keys::Pair;
-use super::toml::FromToml;
-use super::toml::IntoToml;
-use super::toml::ScalarSerialized;
+use super::toml::PairToml;
+use super::toml::Toml;
+use super::Scheme;
 
-use crate::core::Scheme;
-use anyhow::bail;
-use anyhow::Result;
+use energon::kyber::dkg::DistKeyShare;
+use std::fs::File;
+use std::fs::Permissions;
+use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
+use tracing::info;
 
-pub const MULTIBEACON_FOLDER: &str = "multibeacon";
-const DEFAULT_FOLDER: &str = ".drand";
-const KEY_FOLDER: &str = "key";
-const GROUP_FOLDER: &str = "groups";
+// Filesystem constants
+const DEFAULT_DIR: &str = ".drand";
+const MULTIBEACON_DIR: &str = "multibeacon";
+const KEY_DIR: &str = "key";
+const GROUP_DIR: &str = "groups";
+const DB_DIR: &str = "db";
 const PRIVATE_ID_FILE: &str = "drand_id.private";
 const PUBLIC_ID_FILE: &str = "drand_id.public";
-const PRIVATE_DIST_KEY_FILE: &str = "dist_key.private";
+const PRIVATE_SHARE_FILE: &str = "dist_key.private";
 const GROUP_FILE: &str = "drand_group.toml";
 
-#[derive(Debug, Clone)]
-pub struct FileStore {
-    inner: Arc<InnerFS>,
+/// Directories permission
+const DIR_PERM: u32 = 0o740;
+/// Private id permission
+const PRIVATE_PERM: u32 = 0o600;
+/// Public id permission
+const PUBLIC_PERM: u32 = 0o664;
+
+#[derive(thiserror::Error, Debug)]
+#[error("file_store: {0}")]
+pub enum FileStoreError {
+    #[error("invalid data")]
+    InvalidData,
+    #[error(transparent)]
+    IO(#[from] std::io::Error),
+    #[error("file already exists in {0}")]
+    FileAlreadyExists(PathBuf),
+    #[error("file is not found at {0}")]
+    FileNotFound(PathBuf),
+    #[error("toml error")]
+    TomlError,
+    #[error("schemes in public and private parts must be equal and non-empty")]
+    InvalidPairSchemes,
+    #[error("beacon id is not found in filestore")]
+    BeaconNotFound,
+    #[error("beacon id is failed to init, unknown scheme")]
+    FailedInitID,
+    #[error("failed ro read beacon id from path")]
+    FailedToReadID,
+    #[error("chain_store error: {0}")]
+    ChainStore(#[from] crate::chain::StoreError),
+    #[error("dkg_store error: {0}")]
+    DkgStore(#[from] crate::dkg::store::DkgStoreError),
 }
 
-#[derive(Debug)]
-pub struct InnerFS {
-    _base_folder: PathBuf,
-    key_folder: PathBuf,
-    private_key_file: PathBuf,
-    public_key_file: PathBuf,
-    group_file: PathBuf,
-    private_dist_key_file: PathBuf,
+/// `FileStore` holds absolute path of `beacon_id` and abstracts the
+/// loading and saving private/public cryptographic materials.
+#[derive(Clone)]
+pub struct FileStore {
+    pub beacon_path: PathBuf,
 }
 
 impl FileStore {
-    pub fn create_new(base_folder: PathBuf) -> Result<Self> {
-        let key_folder = base_folder.join(KEY_FOLDER);
-        std::fs::create_dir_all(&key_folder)?;
-
-        let private_key_file = key_folder.join(PRIVATE_ID_FILE);
-        let public_key_file = key_folder.join(PUBLIC_ID_FILE);
-        let group_folder = base_folder.join(GROUP_FOLDER);
-        std::fs::create_dir_all(&group_folder)?;
-
-        let group_file = group_folder.join(GROUP_FILE);
-        let private_dist_key_file = group_folder.join(PRIVATE_DIST_KEY_FILE);
-
-        Ok(FileStore {
-            inner: Arc::new(InnerFS {
-                key_folder,
-                private_key_file,
-                public_key_file,
-                _base_folder: base_folder,
-                group_file,
-                private_dist_key_file,
-            }),
-        })
-    }
-
-    pub fn set(base_folder: &str, beacon_id: &str) -> Self {
-        let base_folder = PathBuf::from(base_folder).join(MULTIBEACON_FOLDER).join(beacon_id);
-        let key_folder = base_folder.join(KEY_FOLDER);
-        let private_key_file = key_folder.join(PRIVATE_ID_FILE);
-        let public_key_file = key_folder.join(PUBLIC_ID_FILE);
-
-        let group_folder = base_folder.join(GROUP_FOLDER);
-        let group_file = group_folder.join(GROUP_FILE);
-        let private_dist_key_file = group_folder.join(PRIVATE_DIST_KEY_FILE);
-        Self {
-            inner: Arc::new(InnerFS {
-                key_folder,
-                private_key_file,
-                public_key_file,
-                _base_folder: base_folder,
-                group_file,
-                private_dist_key_file,
-            }),
+    /// Creates filesystem for given `beacon_id` and validates storage structure.
+    pub fn new_checked(base_path: &str, beacon_id: &str) -> Result<Self, FileStoreError> {
+        let base_path = absolute_path(base_path)?;
+        if !base_path.try_exists()? {
+            new_secure_dir(&base_path)?;
         }
+
+        let multibeacon_path = base_path.join(MULTIBEACON_DIR);
+        if !multibeacon_path.try_exists()? {
+            new_secure_dir(&multibeacon_path)?;
+        }
+
+        let beacon_path = multibeacon_path.join(beacon_id);
+        if beacon_path.try_exists()? {
+            return Err(FileStoreError::FileAlreadyExists(beacon_path));
+        }
+        new_secure_dir(&beacon_path)?;
+
+        // Create beacon sub folders
+        new_secure_dir(&beacon_path.join(KEY_DIR))?;
+        new_secure_dir(&beacon_path.join(GROUP_DIR))?;
+        new_secure_dir(&beacon_path.join(DB_DIR))?;
+
+        Ok(Self { beacon_path })
     }
 
-    pub fn save_pair<S: Scheme>(&self, pair: &Pair<S>) -> Result<()> {
-        std::fs::write(&self.private_key_file, pair.private().to_toml()?)?;
-        std::fs::write(&self.public_key_file, pair.public().to_toml()?)?;
-        println!("Generated keys at: {}\n{}\n", self.key_folder.display(), pair.public());
+    /// A check for minimal valid filestore structure.
+    pub fn validate(&self) -> Result<(), FileStoreError> {
+        if !self.beacon_path.try_exists()? {
+            return Err(FileStoreError::FileNotFound(self.beacon_path.clone()));
+        }
+
+        let private = self.private_id_file();
+        if !private.try_exists()? {
+            return Err(FileStoreError::FileNotFound(private));
+        }
+
+        let public_id = self.public_id_file();
+        if !public_id.try_exists()? {
+            return Err(FileStoreError::FileNotFound(public_id));
+        }
+
         Ok(())
     }
 
-    pub fn save_distributed<S: Scheme>(
-        &self,
-        group: &Group<S>,
-        share: &DistKeyShare<S>,
-    ) -> Result<&PathBuf> {
-        std::fs::write(&self.group_file, group.to_toml()?)?;
-        std::fs::write(&self.private_dist_key_file, share.to_toml()?)?;
-
-        Ok(&self.private_dist_key_file)
-    }
-
-    pub fn load_pair_raw(&self) -> Result<super::common::Pair> {
-        let private_str = read_to_string(&self.private_key_file)?;
-        let public_str = read_to_string(&self.public_key_file)?;
-
-        let private = ScalarSerialized::from_toml(&private_str)?;
-        let public = super::common::Identity::from_toml(&public_str)?;
-        Ok(super::common::Pair::init(private, public))
-    }
-
-    pub fn load_share<S: Scheme>(&self) -> Result<DistKeyShare<S>> {
-        let share_str = read_to_string(&self.private_dist_key_file)?;
-        let share = DistKeyShare::from_toml(&share_str)?;
-        Ok(share)
-    }
-
-    pub fn show_dist_key_path(&self) -> &str {
-        self.private_dist_key_file.to_str().unwrap()
-    }
-
-    pub fn verify_path(path: &str, id: &str) -> Result<PathBuf> {
-        let mut path = Path::new(path).to_owned();
-        // maybe too strict
-        if path.is_relative() {
-            bail!("expected absolute folder path, received: {path:?}",)
+    /// Returns an absolute path to multibeacon folder and non-empty list of pre-validated filestores
+    pub fn read_multibeacon_folder(folder: &str) -> Result<(PathBuf, Vec<Self>), FileStoreError> {
+        // Check if 'multibeacon' exists
+        let base = absolute_path(folder)?;
+        let multibeacon = base.join(MULTIBEACON_DIR);
+        if !multibeacon.try_exists()? {
+            return Err(FileStoreError::FileNotFound(multibeacon));
         }
-        path = path.join(MULTIBEACON_FOLDER).join(id);
-        if path.exists() {
-            bail!("Keypair already present in {path:?}\nRemove them before generating new one",)
-        }
+        // Attempt to read and validate stores
+        let mut stores = vec![];
+        let entries = std::fs::read_dir(&multibeacon)?;
 
-        Ok(path)
+        for entry in entries.flatten() {
+            if let Some(beacon_id) = entry.file_name().to_str() {
+                let store = Self {
+                    beacon_path: multibeacon.join(beacon_id),
+                };
+                store.validate()?;
+                stores.push(store);
+            }
+        }
+        if stores.is_empty() {
+            return Err(FileStoreError::BeaconNotFound);
+        }
+        info!(
+            "Detected stores, folder: {multibeacon:?}, amount: {}",
+            stores.len()
+        );
+
+        Ok((multibeacon, stores))
+    }
+
+    pub fn save_key_pair<S: Scheme>(&self, pair: &Pair<S>) -> Result<(), FileStoreError> {
+        let pair_toml = pair.toml_encode().ok_or(FileStoreError::TomlError)?;
+
+        // save private
+        let mut f = File::create(self.private_id_file())?;
+        f.set_permissions(Permissions::from_mode(PRIVATE_PERM))?;
+        f.write_all(pair_toml.private().as_bytes())?;
+
+        // save public
+        let mut f = File::create(self.public_id_file())?;
+        f.set_permissions(Permissions::from_mode(PUBLIC_PERM))?;
+        f.write_all(pair_toml.public().as_bytes())?;
+
+        println!(
+            "Generated keys at: {}\n{}\n",
+            self.beacon_path.join(KEY_DIR).display(),
+            pair_toml.public()
+        );
+
+        Ok(())
+    }
+
+    pub fn save_group<S: Scheme>(&self, group: &Group<S>) -> Result<(), FileStoreError> {
+        let group_toml = group.toml_encode().ok_or(FileStoreError::TomlError)?;
+        let mut f = File::create(self.group_file())?;
+        f.set_permissions(Permissions::from_mode(PUBLIC_PERM))?;
+        f.write_all(group_toml.to_string().as_bytes())?;
+
+        Ok(())
+    }
+
+    pub fn load_group<S: Scheme>(&self) -> Result<Group<S>, FileStoreError> {
+        let group_str = std::fs::read_to_string(self.group_file())?;
+        let group: Group<S> =
+            Toml::toml_decode(&group_str.parse().map_err(|_| FileStoreError::TomlError)?)
+                .ok_or(FileStoreError::TomlError)?;
+
+        Ok(group)
+    }
+
+    pub fn save_share<S: Scheme>(&self, share: &DistKeyShare<S>) -> Result<(), FileStoreError> {
+        let share_toml = share.toml_encode().ok_or(FileStoreError::TomlError)?;
+        let mut f = File::create(self.private_share_file())?;
+        f.set_permissions(Permissions::from_mode(PRIVATE_PERM))?;
+        f.write_all(share_toml.to_string().as_bytes())?;
+
+        Ok(())
+    }
+
+    /// Returns [`PairToml`] to handle a case where generic type is not initialized yet.
+    pub fn load_key_pair_toml(&self) -> Result<PairToml, FileStoreError> {
+        let private_str = std::fs::read_to_string(self.private_id_file())?;
+        let public_str = std::fs::read_to_string(self.public_id_file())?;
+        let pair_toml = PairToml::parse(private_str.as_str(), public_str.as_str())
+            .ok_or(FileStoreError::TomlError)?;
+
+        Ok(pair_toml)
+    }
+
+    pub fn load_share<S: Scheme>(&self) -> Result<DistKeyShare<S>, FileStoreError> {
+        let share_str = std::fs::read_to_string(self.private_share_file())?;
+        Toml::toml_decode(&share_str.parse().map_err(|_| FileStoreError::TomlError)?)
+            .ok_or(FileStoreError::TomlError)
     }
 
     pub fn drand_home() -> String {
         match home::home_dir() {
-            Some(path) => path.join(DEFAULT_FOLDER).display().to_string(),
+            Some(path) => path.join(DEFAULT_DIR).display().to_string(),
             None => {
                 panic!("Couldn't get home directory")
             }
         }
     }
+
+    pub fn is_fresh_run(&self) -> Result<bool, FileStoreError> {
+        match (
+            self.group_file().exists(),
+            self.private_share_file().exists(),
+        ) {
+            (true, true) => Ok(false),
+            (false, false) => Ok(true),
+            (true, false) => Err(FileStoreError::FileNotFound(self.private_share_file())),
+            (false, true) => Err(FileStoreError::FileNotFound(self.group_file())),
+        }
+    }
+
+    /// Beacon ID value is protected at the level of filesystem.
+    pub fn get_beacon_id(&self) -> Option<&str> {
+        Path::new(&self.beacon_path).file_name()?.to_str()
+    }
+
+    fn private_id_file(&self) -> PathBuf {
+        self.beacon_path.join(KEY_DIR).join(PRIVATE_ID_FILE)
+    }
+
+    fn public_id_file(&self) -> PathBuf {
+        self.beacon_path.join(KEY_DIR).join(PUBLIC_ID_FILE)
+    }
+
+    pub fn group_file(&self) -> PathBuf {
+        self.beacon_path.join(GROUP_DIR).join(GROUP_FILE)
+    }
+
+    pub fn private_share_file(&self) -> PathBuf {
+        self.beacon_path.join(GROUP_DIR).join(PRIVATE_SHARE_FILE)
+    }
+
+    pub fn chain_store_path(&self) -> PathBuf {
+        self.beacon_path.join(DB_DIR)
+    }
 }
 
-fn read_to_string(p: &Path) -> Result<String> {
-    std::fs::read_to_string(p)
-        .map_err(|e| anyhow::anyhow!("Error reading: {}, :{e:?}", p.display()))
+fn absolute_path(base_path: &str) -> Result<PathBuf, FileStoreError> {
+    let absolute = if Path::new(base_path).is_absolute() {
+        PathBuf::from(base_path)
+    } else {
+        let current_dir = std::env::current_dir()?;
+        current_dir.join(base_path)
+    };
+
+    Ok(absolute)
 }
 
-impl std::ops::Deref for FileStore {
-    type Target = InnerFS;
+fn new_secure_dir(folder: &PathBuf) -> Result<(), FileStoreError> {
+    std::fs::create_dir(folder)?;
+    std::fs::set_permissions(folder, Permissions::from_mode(DIR_PERM))?;
 
-    fn deref(&self) -> &Self::Target {
-        &self.inner
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::net::utils::Address;
+    use energon::drand::schemes::DefaultScheme;
+
+    // #Required permissions
+    //
+    // /tmp/../testnet                      740
+    //  └── multibeacon                     740
+    //        └── default                   740
+    //            ├── groups                740
+    //            │   ├── dist_key.private  600
+    //            │   └── drand_group.toml  664
+    //            └── key                   740
+    //                ├── drand_id.private  600
+    //                └── drand_id.public   664
+
+    #[test]
+    fn check_permissions_and_data() {
+        // Build absolute path for base folder 'testnet'
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let base_path = temp_dir
+            .path()
+            .join("testnet")
+            .as_path()
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        // Create new store, save share and pair
+        let store = FileStore::new_checked(base_path.as_str(), "some_id").unwrap();
+        let address = Address::default();
+        let pair: Pair<DefaultScheme> = Pair::generate(address).unwrap();
+        let share = DistKeyShare::<DefaultScheme>::default();
+        store.save_key_pair(&pair).unwrap();
+        store.save_share(&share).unwrap();
+
+        assert_perm(store.private_id_file(), PRIVATE_PERM);
+        assert_perm(store.public_id_file(), PUBLIC_PERM);
+        assert_perm(store.private_share_file(), PRIVATE_PERM);
+        assert_perm(base_path.as_str().into(), DIR_PERM);
+
+        // Load back the share and pair
+        let loaded_share: DistKeyShare<DefaultScheme> = store.load_share().unwrap();
+        let pair_toml = store.load_key_pair_toml().unwrap();
+        let loaded_pair: Pair<DefaultScheme> = Toml::toml_decode(&pair_toml).unwrap();
+
+        assert!(pair == loaded_pair);
+        assert!(share == loaded_share);
+    }
+
+    fn assert_perm(path: PathBuf, mode: u32) {
+        assert!(std::fs::metadata(path).unwrap().permissions().mode() & 0o777 == mode);
     }
 }

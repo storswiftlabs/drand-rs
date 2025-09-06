@@ -15,7 +15,7 @@ message Packet {
     ResponseBundle response = 2;
     JustificationBundle justification = 3;
   }
-  common.Metadata metadata = 4;
+  drand.Metadata metadata = 4;
 }
 
 // DealBundle is a packet issued by a dealer that contains each individual

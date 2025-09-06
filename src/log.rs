@@ -1,86 +1,29 @@
-// Copyright (C) 2023-2024 StorSwift Inc.
-// This file is part of the Drand-RS library.
-
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at:
-// http://www.apache.org/licenses/LICENSE-2.0
-
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-use std::sync::Arc;
-use tracing::Span;
+use tracing::dispatcher;
 use tracing_subscriber::fmt::time;
 use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
-pub fn init_log(verbose: bool) -> anyhow::Result<()> {
-    let filter = EnvFilter::builder().parse_lossy(match verbose {
-        true => "drand=trace",
-        false => "drand=info",
-    });
+pub fn setup_tracing(verbose: bool) -> anyhow::Result<()> {
+    if !dispatcher::has_been_set() {
+        let filter = EnvFilter::builder().parse_lossy(if verbose {
+            "drand=debug,energon=debug"
+        } else {
+            "drand=info,energon=debug"
+        });
 
-    let layer = tracing_subscriber::fmt::layer()
-        .with_timer(time::time())
-        .with_target(false)
-        .with_file(true)
-        .with_line_number(true)
-        .with_ansi(true);
+        let layer = tracing_subscriber::fmt::layer()
+            .with_timer(time::time())
+            .with_target(false)
+            .with_file(true)
+            .with_line_number(true)
+            .with_ansi(true);
 
-    tracing_subscriber::registry()
-        .with(layer)
-        .with(filter)
-        .try_init()
-        .map_err(|e| anyhow::anyhow!(e))
-}
-
-pub struct Logger {
-    host: Arc<str>,
-    pub span: Span,
-}
-
-impl Logger {
-    pub fn register_node(private_listen: &str) -> Self {
-        let span = tracing::info_span!("", node = private_listen);
-        Self { host: private_listen.into(), span }
+        tracing_subscriber::registry()
+            .with(layer)
+            .with(filter)
+            .try_init()?;
     }
 
-    pub fn register_pool(&self) -> Self {
-        let span = tracing::info_span!("", pool = self.host.as_ref());
-        Self { host: Arc::clone(&self.host), span }
-    }
-    // TODO: use this to specify also dkg index
-    pub fn new_child(&self, mut args: String) -> Self {
-        args.insert_str(0, self.host.as_ref());
-        let span = tracing::info_span!("", id = args);
-        Self { host: Arc::clone(&self.host), span }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tracing::info;
-
-    #[test]
-    fn simple_log() {
-        init_log(true).unwrap();
-        let host = "127.0.0.1:321";
-        let id = "default";
-        let dkg_index = 8;
-
-        let node_log = Logger::register_node(host);
-        info!(parent: &node_log.span, "node");
-
-        let id_log = node_log.new_child(format!(".{id}"));
-        info!(parent: &id_log.span, "node.id");
-
-        let log_id_dkg = id_log.new_child(format!(".{id}.{dkg_index}"));
-        info!(parent: &log_id_dkg.span, "node.id.dkg_index");
-    }
+    Ok(())
 }
