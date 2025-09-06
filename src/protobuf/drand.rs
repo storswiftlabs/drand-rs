@@ -58,6 +58,10 @@ pub struct StatusRequest {
 }
 /// StatusResponse might contain different indicators of the status of the local
 /// drand node process.
+///
+/// Currently, we only need the round of the latest stored beacon.
+/// Note: Fresh nodes might return such round if they have followed some
+/// chain node.
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct StatusResponse {
     #[prost(uint64, tag = "1")]
