@@ -64,6 +64,24 @@ impl Cli {
         }))
     }
 
+    pub fn follow(
+        control: String,
+        id: String,
+        chain_hash: String,
+        sync_nodes: Vec<String>,
+        up_to: u64,
+        follow: bool,
+    ) -> Self {
+        Self::new(Cmd::Sync(SyncConfig {
+            control,
+            chain_hash,
+            sync_nodes,
+            up_to,
+            id,
+            follow,
+        }))
+    }
+
     pub fn stop(control: &str, id: Option<&str>) -> Self {
         Self::new(Cmd::Stop {
             control: control.to_string(),
@@ -272,7 +290,7 @@ pub struct NodesGroup {
 impl NodesGroup {
     pub async fn check_results(&mut self) {
         // Groupfiles of remainers and joiners should be same
-        self.assert_groupfiles_with_leader();
+        self.assert_groupfiles_with_leader().await;
 
         // All nodes should be in non-terminal state
         for n in &mut self.nodes {
@@ -541,8 +559,8 @@ impl NodesGroup {
     }
 
     /// Performs a byte-level comparison of the members groupfiles against the groupfile from the leader
-    pub fn assert_groupfiles_with_leader(&self) {
-        let leader_groupfile = std::fs::read(&self.group_file_path).unwrap();
+    pub async fn assert_groupfiles_with_leader(&self) {
+        let leader_groupfile = async_std::fs::read(&self.group_file_path).await.unwrap();
         // Joiners
         for j in &self.sn.joiners {
             assert_eq!(
@@ -595,7 +613,7 @@ pub async fn run_fresh_dkg(n: usize, custom_thr: Option<usize>, config: GroupCon
     sleep(Duration::from_secs(2)).await;
     nodes.members_proceed_proposal().await;
     nodes.leader_dkg_execute().await;
-    sleep(Duration::from_secs(10)).await;
+    sleep(Duration::from_secs(20)).await;
     nodes.check_results().await;
     nodes
 }
@@ -734,6 +752,33 @@ impl NodeConfig {
                 );
                 run_cmd_golang(&args).await;
             }
+        }
+    }
+
+    pub fn follow(
+        &self,
+        id: &str,
+        chain_hash: &str,
+        // Node to sync from.
+        sync_nodes: Vec<String>,
+        up_to: u64,
+        follow: bool,
+    ) {
+        match self.implementation {
+            Lang::RS => {
+                let hash = chain_hash.to_string();
+                let control = self.control.to_string();
+                let id = id.to_string();
+                tokio::task::spawn(async move {
+                    if let Err(err) = Cli::follow(control, id, hash, sync_nodes, up_to, follow)
+                        .run()
+                        .await
+                    {
+                        error!("test: [CLI::follow]: {err}");
+                    };
+                });
+            }
+            Lang::GO => panic!("test target is out of scope"),
         }
     }
 

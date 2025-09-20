@@ -312,6 +312,8 @@ impl ControlClient {
         Ok(Self { client })
     }
 
+    // TODO: add ping_pong.
+    #[allow(dead_code)]
     pub async fn ping_pong(&mut self) -> anyhow::Result<()> {
         let request = Ping {
             metadata: Some(Metadata::with_default()),

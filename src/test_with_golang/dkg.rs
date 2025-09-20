@@ -15,6 +15,10 @@ use tokio::time::sleep;
 /// Groupfiles of joiners and remainers are compared with leader-go groupfile after each reshare.
 #[tokio::test]
 async fn all_roles_dkg() {
+    let config = GroupConfig {
+        scheme: std::env::var("DRAND_TEST_SCHEME").unwrap(),
+        ..Default::default()
+    };
     // Epoch: 1
     // Scenario: all nodes joining
     // Setup: group: 9, thr: 7
@@ -30,7 +34,7 @@ async fn all_roles_dkg() {
     //    node7_RS    joiner
     //    node8_RS    joiner
     let custom_thr = Some(7);
-    let mut group = run_fresh_dkg(9, custom_thr, GroupConfig::default()).await;
+    let mut group = run_fresh_dkg(9, custom_thr, config).await;
 
     // Epoch 2
     // Scenario: 7 remainers, 2 leavers(online)
@@ -56,19 +60,15 @@ async fn all_roles_dkg() {
     group.leader_generate_proposal().await;
     group.members_proceed_proposal().await;
     group.leader_dkg_execute().await;
-    // Sleep:
-    // 5 until execution time (protocol)
-    // + 3 for fast_sync mode (phase_timeout 10)
-    // + 5 (CI/CD)
-    sleep(Duration::from_secs(13)).await;
-    //
+    sleep(Duration::from_secs(40)).await;
+
     // Check results
     // Get finished state from leader
     let finished = get_finished_state(&group.nodes[0].control, &group.config.id).await;
     assert_eq!(finished.epoch, 2);
     assert_eq!(finished.state, Status::Complete as u32);
     // Groupfiles for remainers should be equal with leader groupfile.
-    group.assert_groupfiles_with_leader();
+    group.assert_groupfiles_with_leader().await;
 
     // Epoch 3
     // Scenario: 2 joiners, 5 remainers, 2 leavers(offline)
@@ -103,7 +103,7 @@ async fn all_roles_dkg() {
     // 5 until execution time (protocol)
     // + 10 * 3 phases timeouts (protocol)
     // + 5 (CI/CD)
-    sleep(Duration::from_secs(40)).await;
+    sleep(Duration::from_secs(60)).await;
     //
     // Check results
     // Get finished state from leader
@@ -111,7 +111,7 @@ async fn all_roles_dkg() {
     assert_eq!(finished.epoch, 3);
     assert_eq!(finished.state, Status::Complete as u32);
     // Groupfiles for remainers and joiners should be equal with leader groupfile.
-    group.assert_groupfiles_with_leader();
+    group.assert_groupfiles_with_leader().await;
 
     group.stop_all().await;
     remove_nodes_fs();

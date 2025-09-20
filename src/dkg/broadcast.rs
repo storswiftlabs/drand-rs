@@ -316,4 +316,3 @@ impl Convert for ResponseBundle {
         Ok(proto)
     }
 }
-

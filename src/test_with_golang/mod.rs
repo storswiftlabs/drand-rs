@@ -1,2 +1,3 @@
+mod chain;
 mod dkg;
-pub mod utils;
+mod utils;

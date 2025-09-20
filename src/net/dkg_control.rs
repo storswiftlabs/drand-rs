@@ -93,6 +93,8 @@ impl DkgControlClient {
         Ok(Self { client })
     }
 
+    // TODO: add dkg status
+    #[allow(dead_code)]
     pub async fn dkg_status(&mut self, beacon_id: &str) -> anyhow::Result<DkgStatusResponse> {
         let request = DkgStatusRequest {
             beacon_id: beacon_id.to_owned(),

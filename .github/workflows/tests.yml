@@ -1,4 +1,4 @@
-name: UnitTest
+name: Build/Test
 
 on:
   push:
@@ -12,38 +12,103 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  test-arkworks:
+  static-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
       - name: Install protobuf-compiler
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Install Rust
-        run: |
-          rustup toolchain install 1.84.0 --profile minimal --component rustfmt,clippy
-          rustup default 1.84.0
-      - uses: Swatinem/rust-cache@v2
-      - name: Test with arkworks
-        run: cargo test --no-default-features --release --verbose --features arkworks
-      - name: Lint with arkworks
-        uses: crusty-pie/clippy@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          args: --release --no-default-features --features arkworks
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Run clippy
+        run: cargo clippy -- -D warnings
+      - name: Run rustfmt
+        run: cargo fmt --all --check
+  
+  test-unit:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: ["blstrs", "arkworks"]
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+      - name: Run test
+        run: cargo test --no-default-features --features ${{ matrix.backend }}
+  
+  test-integration-dkg:
+    runs-on: ubuntu-latest
+    name: dkg
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: ["blstrs", "arkworks"]
+        scheme: ["pedersen-bls-chained", "pedersen-bls-unchained", "bls-unchained-g1-rfc9380"]
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Run test
+        env:
+          DRAND_TEST_SCHEME: ${{ matrix.scheme }}
+          RUSTFLAGS: "-D warnings"
+        run: cargo test --no-default-features --features "test-integration ${{ matrix.backend }}"  -- test_with_golang::dkg::all_roles_dkg --exact --show-output
+  
+  test-integration-chain-follow:
+    runs-on: ubuntu-latest
+    name: follow
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: ["blstrs", "arkworks"]
+        scheme: ["pedersen-bls-chained", "pedersen-bls-unchained", "bls-unchained-g1-rfc9380"]
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Run test
+        env:
+          DRAND_TEST_SCHEME: ${{ matrix.scheme }}
+          RUSTFLAGS: "-D warnings"
+        run: cargo test --no-default-features --features "test-integration ${{ matrix.backend }}"  -- test_with_golang::chain::follow_chain --exact --show-output
 
-  test-blstrs:
+  test-integration-chain-sync:
     runs-on: ubuntu-latest
+    name: sync
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: ["blstrs", "arkworks"]
+        scheme: ["pedersen-bls-chained", "pedersen-bls-unchained", "bls-unchained-g1-rfc9380"]
     steps:
       - uses: actions/checkout@v2
       - name: Install protobuf-compiler
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Install Rust
-        run: |
-          rustup toolchain install 1.84.0 --profile minimal --component rustfmt,clippy
-          rustup default 1.84.0
-      - uses: Swatinem/rust-cache@v2
-      - name: Test with blstrs
-        run: cargo test --no-default-features --release --verbose --features blstrs
-      - name: Lint with blstrs
-        uses: crusty-pie/clippy@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          args: --release --no-default-features --features blstrs
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Run test
+        env:
+          DRAND_TEST_SCHEME: ${{ matrix.scheme }}
+          RUSTFLAGS: "-D warnings"
+        run: cargo test --no-default-features --features "test-integration ${{ matrix.backend }}"  -- test_with_golang::chain::sync --exact --show-output
