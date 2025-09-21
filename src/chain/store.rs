@@ -1,3 +1,4 @@
+use crate::core::beacon::BeaconID;
 use crate::net::utils::Callback;
 use crate::protobuf::drand::BeaconPacket;
 use crate::protobuf::drand::Metadata;
@@ -367,12 +368,12 @@ impl<B: BeaconRepr> ChainStore<B> {
     /// Starts chain store actor and returns its handle.
     ///
     /// Current implementation is [rusqlite] specific for connection management and execution.
-    pub async fn start(path: PathBuf, beacon_id: String) -> Result<Self, StoreError> {
+    pub async fn start(path: PathBuf, beacon_id: BeaconID) -> Result<Self, StoreError> {
         // Callback for the current request.
         let (cb_tx, cb_rx) = Callback::new();
         // Channel for communicating with storage actor.
         let (cmd_tx, mut cmd_rx) = mpsc::channel::<Cmd<B>>(1);
-        let l = tracing::info_span!("", chain_store = beacon_id);
+        let l = tracing::info_span!("", chain_store = beacon_id.as_str());
 
         task::spawn_blocking(move || {
             // Open a single RW connection to be reused for all actor requests except for [sync].
@@ -415,16 +416,14 @@ impl<B: BeaconRepr> ChainStore<B> {
                             return;
                         }
                     },
-                    Cmd::Sync { from_round, cb } => {
-                        match sync::<B>(&path, from_round, &beacon_id) {
-                            Ok(client_rx) => cb.reply(Ok(client_rx)),
-                            Err(err) => {
-                                error!(parent: &l, "sync: failed to open RO connection: {err}");
-                                cb.reply(Err(StoreError::Internal));
-                                return;
-                            }
+                    Cmd::Sync { from_round, cb } => match sync::<B>(&path, from_round, beacon_id) {
+                        Ok(client_rx) => cb.reply(Ok(client_rx)),
+                        Err(err) => {
+                            error!(parent: &l, "sync: failed to open RO connection: {err}");
+                            cb.reply(Err(StoreError::Internal));
+                            return;
                         }
-                    }
+                    },
                 }
             }
         });
@@ -506,7 +505,7 @@ impl<B: BeaconRepr> ChainStore<B> {
 fn sync<B: BeaconRepr>(
     path: &Path,
     start_from: u64,
-    id: &str,
+    id: BeaconID,
 ) -> Result<mpsc::Receiver<StoreStreamResponse>, Error> {
     let ro_conn =
         Connection::open_with_flags(path.join(DB_NAME), OpenFlags::SQLITE_OPEN_READ_ONLY)?;
@@ -584,11 +583,11 @@ mod test {
     async fn unchained_store() {
         let temp_dir = tempfile::TempDir::new().unwrap();
         let db_path = temp_dir.path();
-        let id = "some_id";
+        let id = BeaconID::from_static("some_id");
 
         let total_beacons = 555;
         let beacons = generate_unchained(total_beacons);
-        let store = ChainStore::<UnChainedBeacon>::start(db_path.to_path_buf(), id.to_string())
+        let store = ChainStore::<UnChainedBeacon>::start(db_path.to_path_buf(), id)
             .await
             .unwrap();
 
@@ -633,11 +632,11 @@ mod test {
     async fn chained_store() {
         let temp_dir = tempfile::TempDir::new().unwrap();
         let db_path = temp_dir.path();
-        let id = "some_id";
+        let id = BeaconID::from_static("some_id");
 
         let total_beacons = 555;
         let beacons = generate_chained(total_beacons);
-        let store = ChainStore::<ChainedBeacon>::start(db_path.to_path_buf(), id.to_string())
+        let store = ChainStore::<ChainedBeacon>::start(db_path.to_path_buf(), id)
             .await
             .unwrap();
 

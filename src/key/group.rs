@@ -100,7 +100,7 @@ impl<S: Scheme> Hash for Group<S> {
             });
         }
 
-        if !crate::core::beacon::is_default_beacon_id(&self.beacon_id) {
+        if !crate::core::beacon::BeaconID::is_default(&self.beacon_id) {
             h.update(self.beacon_id.as_bytes());
         }
 

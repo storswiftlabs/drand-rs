@@ -10,6 +10,7 @@ use tokio::sync::oneshot;
 use tracing::{debug, error, trace, warn, Span};
 
 use super::utils::Address;
+use crate::core::beacon::BeaconID;
 use crate::net::protocol::ProtocolClient;
 use crate::protobuf::drand::PartialBeaconPacket;
 
@@ -19,14 +20,11 @@ pub enum PoolCmd {
     RemoveID(BeaconID),
 }
 
-type BeaconID = String;
-
 pub struct Connection {
     conn: ProtocolClient,
-    beacon_ids: BTreeSet<String>,
+    beacon_ids: BTreeSet<BeaconID>,
 }
 
-#[derive(Debug)]
 pub struct PendingConnection {
     beacon_ids: BTreeSet<BeaconID>,
     cancel: oneshot::Sender<()>,
@@ -77,16 +75,16 @@ impl Pool {
                                 }
                                 PoolCmd::AddID(id, peers) => {
                                     let (tx_broadcast, _) = tokio::sync::broadcast::channel::<PartialBeaconPacket>(1);
-                                    if pool.enabled_beacons.insert(id.clone(), tx_broadcast).is_some() {
+                                    if pool.enabled_beacons.insert(id, tx_broadcast).is_some() {
                                         error!(parent: &pool.l, "beacon ID [{id}] is already active");
                                         continue;
                                     }
                                     for peer in peers {
                                         // check if pool already has been connected to endpoint
                                         if let Some(active)=pool.active.get(&peer){
-                                            pool.subscribe_client(&id, &peer, active.conn.clone());
+                                            pool.subscribe_client(id, &peer, active.conn.clone());
                                         }else{
-                                            pool.add_pending(id.clone(), peer, tx_new_conn.clone());
+                                            pool.add_pending(id, peer, tx_new_conn.clone());
                                         }
                                     }
                                 }
@@ -111,7 +109,7 @@ impl Pool {
             pending_conn
                 .beacon_ids
                 .iter()
-                .for_each(|beacon_id| self.subscribe_client(beacon_id, &uri, conn.clone()));
+                .for_each(|beacon_id| self.subscribe_client(*beacon_id, &uri, conn.clone()));
 
             debug!(parent: &self.l, "established connection: {uri}");
             self.active.insert(
@@ -151,13 +149,13 @@ impl Pool {
         }
     }
 
-    fn subscribe_client(&mut self, id: &BeaconID, uri: &Address, mut conn: ProtocolClient) {
+    fn subscribe_client(&mut self, id: BeaconID, uri: &Address, mut conn: ProtocolClient) {
         if let Some(active) = self.active.get_mut(uri) {
-            if !active.beacon_ids.contains(id) {
-                active.beacon_ids.insert(id.clone());
+            if !active.beacon_ids.contains(&id) {
+                active.beacon_ids.insert(id);
             }
         }
-        if let Some(sender) = self.enabled_beacons.get(id) {
+        if let Some(sender) = self.enabled_beacons.get(&id) {
             let mut receiver = sender.subscribe();
             debug!(parent: &self.l, "connection {uri:?} is subscribed for [{id}]");
             tokio::spawn({
@@ -279,13 +277,13 @@ impl From<SendError<PoolCmd>> for PoolError {
 }
 
 impl PoolSender {
-    pub async fn add_id(&self, id: String, uri: Vec<Address>) -> Result<(), PoolError> {
+    pub async fn add_id(&self, id: BeaconID, uri: Vec<Address>) -> Result<(), PoolError> {
         self.sender.send(PoolCmd::AddID(id, uri)).await?;
 
         Ok(())
     }
 
-    pub async fn remove_id(&self, id: String) -> Result<(), PoolError> {
+    pub async fn remove_id(&self, id: BeaconID) -> Result<(), PoolError> {
         self.sender.send(PoolCmd::RemoveID(id)).await?;
 
         Ok(())

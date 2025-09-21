@@ -1,3 +1,4 @@
+use crate::core::beacon::BeaconID;
 use crate::key::Scheme;
 use crate::net::utils::Seconds;
 use crate::protobuf::drand::ChainInfoPacket;
@@ -12,14 +13,14 @@ use tracing::error;
 #[derive(Default, Clone, PartialEq)]
 pub struct ChainInfo<S: Scheme> {
     pub public_key: KeyPoint<S>,
-    pub beacon_id: String,
+    pub beacon_id: BeaconID,
     pub period: Seconds,
     pub genesis_time: u64,
     pub genesis_seed: Vec<u8>,
 }
 
 impl<S: Scheme> ChainInfo<S> {
-    pub fn from_packet(packet: &ChainInfoPacket, id: String) -> Option<Self> {
+    pub fn from_packet(packet: &ChainInfoPacket, id: BeaconID) -> Option<Self> {
         if S::ID != packet.scheme_id {
             error!(
                 "ChainInfo<S>::from_packet: [{id}]: scheme expected {}, received {}",
@@ -76,7 +77,7 @@ impl<S: Scheme> ChainInfo<S> {
         h.update(self.genesis_time.to_be_bytes());
         h.update(&pk_bytes);
         h.update(&self.genesis_seed);
-        if !crate::core::beacon::is_default_beacon_id(&self.beacon_id) {
+        if !BeaconID::is_default(self.beacon_id.as_str()) {
             h.update(self.beacon_id.as_bytes());
         }
 
@@ -85,15 +86,15 @@ impl<S: Scheme> ChainInfo<S> {
 }
 
 /// Returns canonical hash of protobuf encoded info packet for given beacon ID.
-pub fn hash_packet(proto: &ChainInfoPacket, beacon_id: &str) -> [u8; 32] {
+pub fn hash_packet(proto: &ChainInfoPacket, id: BeaconID) -> [u8; 32] {
     let mut h = sha2::Sha256::new();
     h.update(proto.period.to_be_bytes());
     h.update(proto.genesis_time.to_be_bytes());
     h.update(&proto.public_key);
     h.update(&proto.group_hash);
 
-    if !crate::core::beacon::is_default_beacon_id(beacon_id) {
-        h.update(beacon_id.as_bytes());
+    if !BeaconID::is_default(id.as_str()) {
+        h.update(id.as_bytes());
     }
     h.finalize().into()
 }

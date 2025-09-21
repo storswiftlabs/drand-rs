@@ -41,34 +41,56 @@ use crate::transport::dkg::GossipPacket;
 use crate::transport::dkg::Participant;
 
 use energon::drand::traits::BeaconDigest;
+
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::task::TaskTracker;
 use tracing::{error, info_span, Span};
 
+/// This value should not be changed for backward-compatibility reasons (Drand-go).
 pub const DEFAULT_BEACON_ID: &str = "default";
 
-/// There is a direct relationship between an empty string and the reserved id "default".
-pub fn is_default_beacon_id(beacon_id: &str) -> bool {
-    beacon_id == DEFAULT_BEACON_ID || beacon_id.is_empty()
-}
-
-#[derive(PartialEq, Eq)]
-pub struct BeaconID {
-    inner: Arc<str>,
-}
+#[derive(Default, Clone, Copy, PartialEq, Eq, Ord, PartialOrd)]
+pub struct BeaconID(&'static str);
 
 impl BeaconID {
-    pub fn new(id: impl Into<Arc<str>>) -> Self {
-        Self { inner: id.into() }
+    /// Creates unique identifier for beacon process on *startup*.
+    /// This is an intentional leak in order to provide an efficient type for runtime hot paths.
+    /// Memory gets cleaned up by OS when the APP process exits.
+    fn leak_once(id: String) -> Self {
+        Self(id.leak())
     }
 
-    pub fn as_str(&self) -> &str {
-        self.inner.as_ref()
+    /// There is a direct relationship between an empty string and the reserved id "default".
+    pub fn is_default(other_id: &str) -> bool {
+        other_id == DEFAULT_BEACON_ID || other_id.is_empty()
     }
 
-    pub fn is_eq(&self, id: &str) -> bool {
-        self.inner.as_ref() == id
+    pub fn as_bytes(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        self.0
+    }
+
+    pub fn is_eq(&self, other_id: &str) -> bool {
+        self.0 == other_id
+    }
+
+    #[cfg(test)]
+    pub fn from_static(id: &'static str) -> Self {
+        if id.is_empty() {
+            panic!("BeaconID is empty")
+        } else {
+            Self(id)
+        }
+    }
+}
+
+impl std::fmt::Display for BeaconID {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        self.0.fmt(f)
     }
 }
 
@@ -125,9 +147,13 @@ impl<S: Scheme> BeaconProcess<S> {
     ) -> Result<(Self, mpsc::Sender<PartialMsg>), FileStoreError> {
         let keypair: Pair<S> = Toml::toml_decode(pair).ok_or(FileStoreError::TomlError)?;
         let our_addr = keypair.public_identity().address.clone();
-        let id = fs.get_beacon_id().ok_or(FileStoreError::FailedToReadID)?;
+        let id = fs
+            .get_beacon_id()
+            .ok_or(FileStoreError::FailedToReadID)?
+            .to_string();
+        let id = BeaconID::leak_once(id);
         let is_fresh = fs.is_fresh_run()?;
-        let dkg_store = DkgStore::init::<S>(fs.beacon_path.as_path(), is_fresh, id)?;
+        let dkg_store = DkgStore::init::<S>(fs.beacon_path.as_path(), is_fresh, id.as_str())?;
         let log = info_span!("", id = format!("{private_listen}.{id}"));
         let t = TaskTracker::new();
 
@@ -137,7 +163,7 @@ impl<S: Scheme> BeaconProcess<S> {
                 fs.clone(),
                 private_listen,
                 pool,
-                id.to_string(),
+                id,
                 our_addr,
                 &t,
             )
@@ -147,7 +173,7 @@ impl<S: Scheme> BeaconProcess<S> {
                 fs.clone(),
                 private_listen,
                 pool,
-                id.to_string(),
+                id,
                 our_addr,
                 &t,
             )
@@ -155,7 +181,7 @@ impl<S: Scheme> BeaconProcess<S> {
 
         let process = Self {
             inner: Arc::new(InnerProcess {
-                beacon_id: BeaconID::new(id),
+                beacon_id: id,
                 fs,
                 keypair,
                 tracker: t,
@@ -179,7 +205,7 @@ impl<S: Scheme> BeaconProcess<S> {
         let (bp_tx, mut bp_rx) = mpsc::channel::<BeaconCmd>(1);
         // Initialize beacon process.
         let (bp, partial_tx) = Self::new(fs, pair, bp_tx.clone(), pool, private_listen)?;
-        let beacon_id = bp.beacon_id.clone();
+        let bp_id = bp.beacon_id;
         let tracker = bp.tracker().clone();
 
         tracker.spawn(async move {
@@ -228,7 +254,7 @@ impl<S: Scheme> BeaconProcess<S> {
         });
 
         Ok(BeaconHandler {
-            beacon_id,
+            beacon_id: bp_id,
             process_tx: bp_tx,
             partial_tx,
         })
@@ -336,20 +362,6 @@ impl<S: Scheme> BeaconProcess<S> {
     /// Returns public identity for `BeaconID`.
     pub fn identity(&self) -> &Identity<S> {
         self.keypair.public_identity()
-    }
-}
-
-impl Clone for BeaconID {
-    fn clone(&self) -> Self {
-        Self {
-            inner: Arc::clone(&self.inner),
-        }
-    }
-}
-
-impl std::fmt::Display for BeaconID {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        self.inner.fmt(f)
     }
 }
 

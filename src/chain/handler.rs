@@ -15,6 +15,7 @@ use super::sync::LOGS_TO_SKIP;
 use super::ticker;
 use super::time;
 
+use crate::core::beacon::BeaconID;
 use crate::key::group::Group;
 use crate::key::keys::DistPublic;
 use crate::key::store::FileStore;
@@ -159,7 +160,7 @@ pub struct ChainConfig<B: BeaconRepr> {
     fs: FileStore,
     store: ChainStore<B>,
     private_listen: String,
-    beacon_id: String,
+    id: BeaconID,
     our_addres: Address,
 }
 
@@ -179,7 +180,7 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
             fs,
             store,
             private_listen,
-            beacon_id,
+            id,
             our_addres,
         } = c;
 
@@ -187,9 +188,9 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
         let group = fs.load_group::<S>()?;
 
         // This is only possible if the groupfile has been changed manually.
-        if group.beacon_id != beacon_id {
+        if group.beacon_id != id.as_str() {
             error!(
-                "load_group: ID [{}] != chain handler ID [{beacon_id}]",
+                "load_group: ID [{}] != chain handler ID [{id}]",
                 group.beacon_id
             );
             return Err(FileStoreError::InvalidData);
@@ -229,7 +230,7 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
 
         let chain_info = ChainInfo {
             public_key,
-            beacon_id,
+            beacon_id: id,
             period,
             genesis_time,
             genesis_seed,
@@ -275,7 +276,7 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
             .collect();
 
         self.pool
-            .add_id(self.chain_info.beacon_id.clone(), peers)
+            .add_id(self.chain_info.beacon_id, peers)
             .await
             .map_err(|_| ChainError::PoolClosedRx)
     }
@@ -352,7 +353,7 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
             previous_signature,
             partial_sig,
             metadata: crate::protobuf::drand::Metadata::golang_node_version(
-                self.chain_info.beacon_id.clone(),
+                self.chain_info.beacon_id.to_string(),
                 None,
             )
             .into(),
@@ -575,7 +576,7 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
                     .collect();
                 peers.shuffle(&mut rand::rng());
 
-                let id = self.chain_info.beacon_id.clone();
+                let id = self.chain_info.beacon_id;
                 let start_from = ls_round + 1;
                 let up_to = c_round;
                 let l = tracing::info_span!(
@@ -598,10 +599,7 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
 async fn run_chain_default<S: Scheme, B: BeaconRepr>(
     mut cc: ChainConfig<B>,
 ) -> Result<Option<ChainConfig<B>>, ChainError> {
-    let l = tracing::info_span!(
-        "",
-        chain = format!("{}.{}", cc.private_listen, cc.beacon_id)
-    );
+    let l = tracing::info_span!("", chain = format!("{}.{}", cc.private_listen, cc.id));
     info!(parent: &l, "will run as fresh install -> expect to run DKG.");
     let mut chain_info = ChainInfo::<S>::default();
 
@@ -666,9 +664,9 @@ async fn follow_chain<S: Scheme, B: BeaconRepr>(
     if should_proceed {
         let l = tracing::info_span!(
             "",
-            follow_chain = format!("{}.{}", cc.private_listen, cc.beacon_id)
+            follow_chain = format!("{}.{}", cc.private_listen, cc.id)
         );
-        let new_config = start_follow_chain(req, &cc.beacon_id, &cc.store, l).await?;
+        let new_config = start_follow_chain(req, cc.id, &cc.store, l).await?;
         let new_ci = new_config.chain_info_from_packet()?;
 
         if chain_info.genesis_seed.is_empty() {
@@ -799,7 +797,7 @@ async fn run_chain<S: Scheme, B: BeaconRepr>(
     // Prepare for transition.
     // Remove old nodes from connection pool.
     h.pool
-        .remove_id(h.chain_info.beacon_id.clone())
+        .remove_id(h.chain_info.beacon_id)
         .await
         .map_err(|_| ChainError::PoolClosedRx)?;
 
@@ -808,7 +806,7 @@ async fn run_chain<S: Scheme, B: BeaconRepr>(
         pool: h.pool,
         store: h.store,
         private_listen: h.private_listen,
-        beacon_id: h.chain_info.beacon_id,
+        id: h.chain_info.beacon_id,
         fs: h.fs,
         our_addres: h.our_addres,
     };
@@ -825,7 +823,7 @@ pub fn init_chain<S: Scheme, B: BeaconRepr>(
     fs: FileStore,
     private_listen: String,
     pool: PoolSender,
-    id: String,
+    id: BeaconID,
     our_addres: Address,
     t: &TaskTracker,
 ) -> (mpsc::Sender<PartialMsg>, mpsc::Sender<ChainCmd>) {
@@ -853,7 +851,7 @@ pub fn init_chain<S: Scheme, B: BeaconRepr>(
     };
 
     t.spawn(async move {
-        let store = match ChainStore::start(fs.chain_store_path(), id.clone()).await {
+        let store = match ChainStore::start(fs.chain_store_path(), id).await {
             Ok(store) => store,
             Err(err) => {
                 error!(
@@ -869,7 +867,7 @@ pub fn init_chain<S: Scheme, B: BeaconRepr>(
             fs,
             store,
             private_listen,
-            beacon_id: id,
+            id,
             our_addres,
         };
 

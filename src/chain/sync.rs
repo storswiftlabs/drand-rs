@@ -9,6 +9,7 @@ use super::store::BeaconRepr;
 use super::store::ChainStore;
 use super::StoreError;
 
+use crate::core::beacon::BeaconID;
 use crate::key::Scheme;
 use crate::net::control::SyncProgressResponse;
 use crate::net::protocol::ProtocolClient;
@@ -115,14 +116,14 @@ impl HandleReSync {
 pub struct DefaultSyncerConfig<B: BeaconRepr> {
     store: ChainStore<B>,
     packet: ChainInfoPacket,
-    beacon_id: String,
+    beacon_id: BeaconID,
     peers: Vec<Address>,
     l: Span,
 }
 
 impl<B: BeaconRepr> DefaultSyncerConfig<B> {
     pub fn chain_info_from_packet<S: Scheme>(&self) -> Result<ChainInfo<S>, SyncError> {
-        ChainInfo::<S>::from_packet(&self.packet, self.beacon_id.clone())
+        ChainInfo::<S>::from_packet(&self.packet, self.beacon_id)
             .ok_or(SyncError::InvalidInfoPacket)
     }
 }
@@ -165,6 +166,7 @@ impl<S: Scheme, B: BeaconRepr> DefaultSyncer<S, B> {
         Ok(syncer)
     }
 
+    #[allow(clippy::too_many_lines, reason = "101/100")]
     pub fn process_follow_request(
         self,
         target: u64,
@@ -172,7 +174,6 @@ impl<S: Scheme, B: BeaconRepr> DefaultSyncer<S, B> {
     ) -> JoinHandle<Result<(), SyncError>> {
         task::spawn(async move {
             let l = &self.l;
-
             let mut last_stored = self.store.last().await?;
             if last_stored.round() >= target {
                 warn!(parent: l, "request rejected: target {target}, latest_stored {}", last_stored.round());
@@ -196,7 +197,10 @@ impl<S: Scheme, B: BeaconRepr> DefaultSyncer<S, B> {
 
                 let mut stream = match ProtocolClient::new(peer).await {
                     Ok(mut client) => {
-                        match client.sync_chain(from, self.info.beacon_id.clone()).await {
+                        match client
+                            .sync_chain(from, self.info.beacon_id.to_string())
+                            .await
+                        {
                             Ok(stream) => stream,
                             Err(err) => {
                                 error!(parent: l, "skipping {peer}: failed to get stream: {err}");
@@ -216,7 +220,7 @@ impl<S: Scheme, B: BeaconRepr> DefaultSyncer<S, B> {
                         continue 'peers;
                     };
 
-                    if self.info.beacon_id != meta.beacon_id {
+                    if self.info.beacon_id.as_str() != meta.beacon_id {
                         error!(parent: l, "stream: skipping {peer}: invalid beacon_id {} for round {}", meta.beacon_id, p.round);
                         continue 'peers;
                     }
@@ -289,7 +293,7 @@ impl<S: Scheme, B: BeaconRepr> DefaultSyncer<S, B> {
 
 pub async fn start_follow_chain<B: BeaconRepr>(
     req: &StartSyncRequest,
-    beacon_id: &str,
+    id: BeaconID,
     store: &ChainStore<B>,
     l: Span,
 ) -> Result<DefaultSyncerConfig<B>, SyncError> {
@@ -313,11 +317,11 @@ pub async fn start_follow_chain<B: BeaconRepr>(
     peers.shuffle(&mut rand::rng());
 
     // Packet beacon ID from metadata should match the chain config ID.
-    let packet = chain_info_from_peers(&peers, beacon_id, &l).await?;
+    let packet = chain_info_from_peers(&peers, id, &l).await?;
     debug!(parent: &l, "received chain info from peers:\n{packet}");
 
     // Packet hash should match the chain hash of beacon process recorded in packet metadata.
-    let hash = super::info::hash_packet(&packet, beacon_id);
+    let hash = super::info::hash_packet(&packet, id);
 
     if hash
         != *req
@@ -339,7 +343,7 @@ pub async fn start_follow_chain<B: BeaconRepr>(
     let config = DefaultSyncerConfig {
         store: store.clone(),
         packet,
-        beacon_id: beacon_id.to_string(),
+        beacon_id: id,
         peers,
         l,
     };
@@ -352,7 +356,7 @@ pub fn resync(
     start_from: u64,
     up_to: u64,
     peers: Vec<Address>,
-    id: String,
+    id: BeaconID,
     tx_synced: mpsc::Sender<BeaconPacket>,
     l: Span,
 ) -> JoinHandle<Result<(), SyncError>> {
@@ -368,7 +372,7 @@ pub fn resync(
                 });
             }
             let mut stream = match ProtocolClient::new(&peer).await {
-                Ok(mut conn) => match conn.sync_chain(last_sent + 1, id.clone()).await {
+                Ok(mut conn) => match conn.sync_chain(last_sent + 1, id.to_string()).await {
                     Ok(stream) => stream,
                     Err(err) => {
                         error!(parent: l, "failed to get stream from {peer}: {err}");
@@ -387,7 +391,7 @@ pub fn resync(
                     error!(parent: l, "skipping {peer}: no metadata for round {}", p.round);
                     continue 'peers;
                 };
-                if id != meta.beacon_id {
+                if id.as_str() != meta.beacon_id {
                     error!(parent: l, "skipping {peer}: invalid beacon id [{}] for round {}", meta.beacon_id, p.round);
                     continue 'peers;
                 }
@@ -418,17 +422,17 @@ pub fn resync(
 /// Used only by nodes without DKG setup.
 async fn chain_info_from_peers(
     peers: &[Address],
-    beacon_id: &str,
+    id: BeaconID,
     l: &Span,
 ) -> Result<ChainInfoPacket, SyncError> {
     for peer in peers {
         match PublicClient::new(peer).await {
             Ok(mut client) => {
                 debug!(parent: l, "connected to {peer}, sending chain info request..");
-                match client.chain_info(beacon_id.to_string()).await {
+                match client.chain_info(id.to_string()).await {
                     Ok(packet) => {
                         if let Some(ref m) = packet.metadata {
-                            if m.beacon_id == beacon_id {
+                            if m.beacon_id == id.as_str() {
                                 return Ok(packet);
                             }
                             warn!(parent: l, "info_from_peers: skipping {peer}: invalid beacon id: {}", m.beacon_id);
