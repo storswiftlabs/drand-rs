@@ -1,6 +1,7 @@
 use super::handler::ChainError;
 use crate::key::node::Node;
 use crate::key::Scheme;
+use crate::net::metrics::GroupMetrics;
 use crate::net::utils::Address;
 use crate::protobuf::drand::PartialBeaconPacket;
 
@@ -30,10 +31,15 @@ impl<S: Scheme> EpochNode<S> {
 pub struct EpochConfig<S: Scheme> {
     share: dkg::DistKeyShare<S>,
     remote_nodes: Vec<EpochNode<S>>,
+    group_metrics: GroupMetrics,
 }
 
 impl<S: Scheme> EpochConfig<S> {
-    pub fn new(nodes: Vec<Node<S>>, share: dkg::DistKeyShare<S>) -> Self {
+    pub fn new(
+        nodes: Vec<Node<S>>,
+        share: dkg::DistKeyShare<S>,
+        group_metrics: GroupMetrics,
+    ) -> Self {
         let poly = PubPoly {
             commits: share.commitments().to_vec(),
         };
@@ -52,6 +58,7 @@ impl<S: Scheme> EpochConfig<S> {
         Self {
             share,
             remote_nodes,
+            group_metrics,
         }
     }
 
@@ -89,7 +96,7 @@ impl<S: Scheme> EpochConfig<S> {
         self.share.pri_share.index()
     }
 
-    pub fn thr(&self) -> usize {
-        self.share.commits.len()
+    pub fn metrics_for_group(&self) -> GroupMetrics {
+        self.group_metrics
     }
 }

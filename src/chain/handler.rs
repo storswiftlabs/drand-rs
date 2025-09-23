@@ -22,6 +22,8 @@ use crate::key::store::FileStore;
 use crate::key::store::FileStoreError;
 use crate::key::Scheme;
 
+use crate::net::metrics;
+use crate::net::metrics::GroupMetrics;
 use crate::net::pool::PoolSender;
 use crate::net::protocol::PartialMsg;
 use crate::net::protocol::PartialPacket;
@@ -198,7 +200,7 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
 
         // Map group and share into epoch config.
         let Group {
-            threshold: _,
+            threshold,
             period,
             catchup_period,
             genesis_time,
@@ -212,7 +214,10 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
         let share = fs.load_share::<S>()?;
         let public_key = commits.swap_remove(0);
         drop(commits);
-        let ec = EpochConfig::new(nodes, share);
+
+        let group_size = nodes.len();
+        let metrics = GroupMetrics::new(group_size, threshold);
+        let ec = EpochConfig::new(nodes, share, metrics);
 
         // Create spans for handler and partial cache.
         let span_meta = format!("{private_listen}.{}.{}", beacon_id, ec.our_index());
@@ -256,7 +261,7 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
             latest_stored,
             channels.tx_catchup.clone(),
             channels.tx_resync.clone(),
-            chain_handler.ec.thr(),
+            threshold as usize,
             l_partial,
         );
 
@@ -484,6 +489,15 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
             self.store.put(valid_beacon.clone()).await?;
             let storage_time = start.elapsed().as_millis();
             info!(parent: &self.l,"{{\"NEW_BEACON_STORED\": \"{{ round: {r_round}, sig: {}, prevSig: {:?} }}\", \"time_discrepancy_ms\": {discrepancy}, \"storage_time_ms\": {storage_time}", valid_beacon.short_sig(), valid_beacon.short_prev_sig().unwrap_or_default());
+
+            metrics::report_metrics_on_put(
+                self.chain_info.beacon_id,
+                discrepancy,
+                r_round,
+                self.ec.metrics_for_group(),
+            );
+
+            // Update registry.
             reg.update_latest_stored(valid_beacon);
             reg.align_cache(&self.ec, &self.l);
 
@@ -529,21 +543,30 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
                 &p_signature,
             ) {
                 let valid_beacon = B::new(reg.latest_stored(), p.signature);
+                let discrepancy = time::round_discrepancy_ms(
+                    self.chain_info.period,
+                    self.chain_info.genesis_time,
+                    p.round,
+                );
+
+                // Store beacon; measure storage time.
+                let start = Instant::now();
+                self.store.put(valid_beacon.clone()).await?;
+                let storage_time = start.elapsed().as_millis();
+
                 // Skip logs if round is too far from current round.
                 if reg.current_round() - p.round < LOGS_TO_SKIP || p.round % 300 == 0 {
-                    let discrepancy = time::round_discrepancy_ms(
-                        self.chain_info.period,
-                        self.chain_info.genesis_time,
-                        p.round,
-                    );
-                    // Store beacon; measure storage time.
-                    let start = Instant::now();
-                    self.store.put(valid_beacon.clone()).await?;
-                    let storage_time = start.elapsed().as_millis();
                     info!(parent: l,"NEW_BEACON_STORED: round {}, time_discrepancy_ms: {discrepancy}, storage_time_ms: {storage_time}", p.round);
-                } else {
-                    self.store.put(valid_beacon.clone()).await?;
                 }
+
+                metrics::report_metrics_on_put(
+                    self.chain_info.beacon_id,
+                    discrepancy,
+                    p.round,
+                    self.ec.metrics_for_group(),
+                );
+
+                // Update registry.
                 reg.update_latest_stored(valid_beacon);
                 reg.extend_resync_expiry_time();
             } else {

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 #![warn(clippy::pedantic)]
-#![allow(clippy::unreadable_literal)]
+#![allow(clippy::unreadable_literal, clippy::inline_always)]
 mod chain;
 mod cli;
 mod core;

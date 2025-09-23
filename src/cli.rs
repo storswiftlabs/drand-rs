@@ -56,6 +56,9 @@ pub struct Config {
     /// Set the listening (binding) address of the private API. Useful if you have some kind of proxy.
     #[arg(long)]
     pub private_listen: String,
+    /// Launch a metrics server at the specified host:port.
+    #[arg(long, default_value = None)]
+    pub metrics: Option<String>,
     /// Indicates the id for the randomness generation process which will be started
     #[arg(long, default_value = None)]
     pub id: Option<String>,
@@ -248,6 +251,12 @@ fn keygen<S: Scheme>(config: &KeyGenConfig) -> Result<()> {
 async fn start_cmd(config: Config) -> Result<()> {
     let private_listen = Address::precheck(&config.private_listen)?;
     let control_port = config.control.clone();
+
+    // Start metrics server
+    if let Some(ref address) = config.metrics {
+        crate::net::metrics::setup_metrics(address)?;
+    }
+
     let daemon = Daemon::new(config)?;
     // Start control server
     let control = daemon.tracker.spawn({

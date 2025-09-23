@@ -70,10 +70,11 @@ impl BeaconID {
         self.0.as_bytes()
     }
 
+    #[inline(always)]
     pub fn as_str(&self) -> &'static str {
         self.0
     }
-
+    #[inline(always)]
     pub fn is_eq(&self, other_id: &str) -> bool {
         self.0 == other_id
     }

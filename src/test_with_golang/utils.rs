@@ -712,6 +712,7 @@ impl NodeConfig {
                     private_listen: self.private_listen.clone(),
                     // Load all ids.
                     id: None,
+                    metrics: None,
                 };
                 tokio::task::spawn(async move { Cli::start(config).run().await.unwrap() });
             }

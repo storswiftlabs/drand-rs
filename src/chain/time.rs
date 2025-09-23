@@ -49,8 +49,9 @@ pub fn time_of_round(period: u32, genesis: u64, round: u64) -> u64 {
 
 /// Returns time discrepancy for given round.
 pub fn round_discrepancy_ms(period: Seconds, genesis_time: u64, round: u64) -> u128 {
-    let expected = u128::from(time_of_round(period.get_value(), genesis_time, round)) * 1000;
-    time_now().as_millis() - expected
+    let time_now_ms = time_now().as_millis();
+    let round_time_ms = u128::from(time_of_round(period.get_value(), genesis_time, round)) * 1000;
+    time_now_ms - round_time_ms
 }
 
 /// Returns current Unix time as duration.
