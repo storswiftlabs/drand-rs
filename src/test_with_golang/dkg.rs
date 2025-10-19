@@ -3,6 +3,7 @@
 //! which is useful for continuous resharing with different thresholds and participant roles (see: [`random_scenarios`]).
 use super::utils::*;
 use crate::dkg::status::Status;
+use crate::net::dkg_control::DkgControlClient;
 use std::time::Duration;
 use tokio::time::sleep;
 
@@ -146,4 +147,38 @@ async fn random_scenarios() {
         sleep(Duration::from_secs(12)).await;
         group.check_results().await;
     }
+}
+
+#[tokio::test]
+async fn dkg_abort() {
+    // Start go and rs node
+    let mut group = NodesGroup::generate_nodes(2, GroupConfig::default(), None).await;
+    group.start_daemons();
+    sleep(Duration::from_secs(5)).await;
+
+    // Initiate DKG proposal
+    group.sn.joiners = vec![0, 1];
+    group.sn.thr = 2;
+    group.leader_generate_proposal().await;
+    sleep(Duration::from_secs(2)).await;
+
+    // Current status of node-rs should be `Proposed`
+    let mut client_rs = DkgControlClient::new(&group.nodes[1].control)
+        .await
+        .unwrap();
+    let status = client_rs.dkg_status(&group.config.id).await.unwrap();
+    let curr_status = Status::try_from(status.current.unwrap().state).unwrap();
+    assert_eq!(curr_status, Status::Proposed);
+
+    // Abort DKG (leader-go action)
+    group.nodes[0].dkg_abort(&group.config).await;
+    sleep(Duration::from_secs(2)).await;
+
+    // Current status of node-rs should be `Aborted`
+    let status = client_rs.dkg_status(&group.config.id).await.unwrap();
+    let curr_status = Status::try_from(status.current.unwrap().state).unwrap();
+    assert_eq!(curr_status, Status::Aborted);
+
+    group.stop_all().await;
+    remove_nodes_fs();
 }

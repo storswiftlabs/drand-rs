@@ -9,6 +9,7 @@ use crate::core::beacon::BeaconCmd;
 use crate::core::daemon::Daemon;
 use crate::protobuf::dkg as protobuf;
 use crate::protobuf::dkg::AcceptOptions;
+use crate::protobuf::dkg::RejectOptions;
 use crate::transport::ConvertProto;
 
 use protobuf::dkg_control_client::DkgControlClient as _DkgControlClient;
@@ -127,6 +128,16 @@ impl DkgControlClient {
         let request = DkgCommand {
             metadata: Some(CommandMetadata { beacon_id }),
             command: Some(protobuf::dkg_command::Command::Accept(AcceptOptions {})),
+        };
+        let _ = self.client.command(request).await?;
+
+        Ok(())
+    }
+
+    pub async fn dkg_reject(&mut self, beacon_id: String) -> anyhow::Result<()> {
+        let request = DkgCommand {
+            metadata: Some(CommandMetadata { beacon_id }),
+            command: Some(protobuf::dkg_command::Command::Reject(RejectOptions {})),
         };
         let _ = self.client.command(request).await?;
 

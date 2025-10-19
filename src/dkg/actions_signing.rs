@@ -140,7 +140,12 @@ impl GossipAuth for StartExecution {
 
 impl GossipAuth for AbortDkg {
     fn encode(&self) -> Vec<u8> {
-        ["Aborted:".as_bytes(), self.reason.as_bytes()].concat()
+        [
+            "Aborted:".as_bytes(),
+            self.reason.as_bytes(),
+            "\n".as_bytes(),
+        ]
+        .concat()
     }
 }
 

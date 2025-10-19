@@ -566,13 +566,25 @@ impl From<DkgCommand> for protobuf::dkg::DkgCommand {
 }
 
 pub enum Command {
+    // Leader node cmds
+    //
+    /// Initial DKG
     Initial(FirstProposalOptions),
+    /// Reshape the current group
     Resharing(ProposalOptions),
-    Join(JoinOptions),
-    Accept(AcceptOptions),
-    Reject(RejectOptions),
+    /// Start DKG execution
     Execute(ExecutionOptions),
+    /// Abort DKG for all members
     Abort(AbortOptions),
+
+    // Member node cmds
+    //
+    /// Join into new or existing group
+    Join(JoinOptions),
+    /// Remain in the group
+    Accept(AcceptOptions),
+    /// Reject DKG proposal
+    Reject(RejectOptions),
 }
 
 impl ConvertProto for protobuf::dkg::dkg_command::Command {

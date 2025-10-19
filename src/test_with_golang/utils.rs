@@ -756,6 +756,19 @@ impl NodeConfig {
         }
     }
 
+    pub async fn dkg_abort(&self, c: &GroupConfig) {
+        match self.implementation {
+            Lang::RS => panic!("test target is out of scope"),
+            Lang::GO => {
+                let args = format!(
+                    "dkg abort --id {} --control {} > {}/node{}_abort.log 2>&1",
+                    c.id, self.control, self.folder_path, self.cmd_i
+                );
+                run_cmd_golang(&args).await;
+            }
+        }
+    }
+
     pub fn follow(
         &self,
         id: &str,

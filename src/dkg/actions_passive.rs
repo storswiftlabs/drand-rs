@@ -36,7 +36,10 @@ impl<S: Scheme> ActionsPassive for BeaconProcess<S> {
 
         // We must verify the message against the next state, as the current state upon first proposal will be empty.
         // Packet data is moved into state, for this reason packet is cloned.
-        state.apply(&me, packet.clone())?;
+        state
+            .apply(&me, packet.clone())
+            .map_err(ActionsError::DBState)?;
+
         self.verify_msg(&packet, &state).await?;
         self.dkg_store().save_current(&state)?;
 

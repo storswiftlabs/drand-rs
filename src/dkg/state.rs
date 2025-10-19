@@ -3,7 +3,6 @@ use super::actions_signing::enc_timestamp;
 use super::actions_signing::GossipAuth;
 use super::status::StateError;
 use super::status::Status;
-use super::ActionsError;
 
 use crate::key::group::minimum_t;
 use crate::key::group::Group;
@@ -419,31 +418,18 @@ impl<S: Scheme> State<S> {
         Ok(())
     }
 
-    pub fn apply(&mut self, me: &Participant, packet: GossipPacket) -> Result<(), ActionsError> {
+    pub fn apply(&mut self, me: &Participant, packet: GossipPacket) -> Result<(), DBStateError> {
         let metadata = &packet.metadata;
 
         match packet.data {
-            GossipData::Proposal(terms) => self
-                .proposed(me, terms, metadata)
-                .map_err(ActionsError::DBState),
-            GossipData::Execute(_execute) => {
-                self.executing(me, metadata).map_err(ActionsError::DBState)
-            }
-            GossipData::Accept(accept) => self
-                .received_acceptance(accept.acceptor, metadata)
-                .map_err(ActionsError::DBState),
-            GossipData::Reject(_reject_proposal) => {
-                error!("GossipData::Reject is not implemented");
-                Err(ActionsError::Todo)
-            }
-            GossipData::Abort(_abort_dkg) => {
-                error!("GossipData::Abort is not implemented");
-                Err(ActionsError::Todo)
-            }
-            GossipData::Dkg(_dkg_packet) => {
-                error!("GossipData::Dkg is not implemented");
-                Err(ActionsError::Todo)
-            }
+            GossipData::Proposal(terms) => self.proposed(me, terms, metadata),
+            GossipData::Execute(_execute) => self.executing(me, metadata),
+            GossipData::Accept(accept) => self.received_acceptance(accept.acceptor, metadata),
+            GossipData::Abort(_abort_dkg) => self.aborted(metadata),
+            // TODO: add before joining mainnet
+            GossipData::Reject(_reject_proposal) => Ok(()),
+            // DKG packets are not gossiped in Drand-go
+            GossipData::Dkg(_dkg_packet) => Ok(()),
         }
     }
 
@@ -562,6 +548,42 @@ impl<S: Scheme> State<S> {
         self.rejectors.retain(|i| i != &me);
         self.acceptors.push(me);
         self.status = Status::Accepted;
+
+        Ok(())
+    }
+
+    pub(super) fn aborted(&mut self, metadata: &GossipMetadata) -> Result<(), DBStateError> {
+        self.status.is_valid_state_change(Status::Aborted)?;
+
+        if self.leader.address != metadata.address {
+            return Err(DBStateError::OnlyLeaderCanRemoteAbort);
+        }
+
+        self.status = Status::Aborted;
+
+        Ok(())
+    }
+
+    pub(super) fn rejected(&mut self, me: Participant) -> Result<(), DBStateError> {
+        self.status.is_valid_state_change(Status::Rejected)?;
+
+        if self.time_expired() {
+            return Err(DBStateError::TimeoutReached);
+        }
+
+        // Joiners should just not run the `Join` command if they don't want to join
+        if self.joining.contains(&me) {
+            return Err(DBStateError::CannotRejectProposalWhereJoining);
+        }
+
+        // Leavers get no say if the rest of the network wants them out
+        if self.leaving.contains(&me) {
+            return Err(DBStateError::CannotRejectProposalWhereLeaving);
+        }
+
+        self.acceptors.retain(|i| i != &me);
+        self.rejectors.push(me);
+        self.status = Status::Rejected;
 
         Ok(())
     }

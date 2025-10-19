@@ -30,6 +30,10 @@ pub trait ActionsActive {
         &self,
         state: State<Self::Scheme>,
     ) -> impl Future<Output = Result<(), ActionsError>>;
+    fn start_reject(
+        &self,
+        state: State<Self::Scheme>,
+    ) -> impl Future<Output = Result<(), ActionsError>>;
 }
 
 impl<S: Scheme> ActionsActive for BeaconProcess<S> {
@@ -62,6 +66,8 @@ impl<S: Scheme> ActionsActive for BeaconProcess<S> {
         match cmd {
             Command::Join(join_options) => self.start_join(&mut state, join_options).await?,
             Command::Accept(_) => self.start_accept(state).await?,
+            Command::Reject(_) => self.start_reject(state).await?,
+            // Other commands are reserved for leader role.
             _ => crate::core::beacon::todo_request(&cmd)?,
         }
 
@@ -108,6 +114,16 @@ impl<S: Scheme> ActionsActive for BeaconProcess<S> {
         state.accepted(me)?;
         self.dkg_store().save_current(&state)?;
 
+        // TODO: return packet to gossip
+        Ok(())
+    }
+
+    async fn start_reject(&self, mut state: State<S>) -> Result<(), ActionsError> {
+        let me = self.as_participant()?;
+        state.rejected(me)?;
+        self.dkg_store().save_current(&state)?;
+
+        // TODO: return packet to gossip
         Ok(())
     }
 }
