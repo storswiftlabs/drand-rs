@@ -65,7 +65,7 @@ async fn all_roles_dkg() {
 
     // Check results
     // Get finished state from leader
-    let finished = get_finished_state(&group.nodes[0].control, &group.config.id).await;
+    let finished = get_finished_state(&group.nodes[0].control, group.config.id.clone()).await;
     assert_eq!(finished.epoch, 2);
     assert_eq!(finished.state, Status::Complete as u32);
     // Groupfiles for remainers should be equal with leader groupfile.
@@ -108,7 +108,7 @@ async fn all_roles_dkg() {
     //
     // Check results
     // Get finished state from leader
-    let finished = get_finished_state(&group.nodes[0].control, &group.config.id).await;
+    let finished = get_finished_state(&group.nodes[0].control, group.config.id.clone()).await;
     assert_eq!(finished.epoch, 3);
     assert_eq!(finished.state, Status::Complete as u32);
     // Groupfiles for remainers and joiners should be equal with leader groupfile.
@@ -166,7 +166,7 @@ async fn dkg_abort() {
     let mut client_rs = DkgControlClient::new(&group.nodes[1].control)
         .await
         .unwrap();
-    let status = client_rs.dkg_status(&group.config.id).await.unwrap();
+    let status = client_rs.dkg_status(group.config.id.clone()).await.unwrap();
     let curr_status = Status::try_from(status.current.unwrap().state).unwrap();
     assert_eq!(curr_status, Status::Proposed);
 
@@ -175,7 +175,7 @@ async fn dkg_abort() {
     sleep(Duration::from_secs(2)).await;
 
     // Current status of node-rs should be `Aborted`
-    let status = client_rs.dkg_status(&group.config.id).await.unwrap();
+    let status = client_rs.dkg_status(group.config.id.clone()).await.unwrap();
     let curr_status = Status::try_from(status.current.unwrap().state).unwrap();
     assert_eq!(curr_status, Status::Aborted);
 

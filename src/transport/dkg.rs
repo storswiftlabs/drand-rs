@@ -17,11 +17,12 @@ use super::utils::try_from_vec;
 use super::utils::ConvertProto;
 use super::utils::RequireSome;
 use super::utils::TransportError;
-use protobuf::drand::Metadata;
 
+use crate::dkg::status::Status;
 use crate::net::utils::Address;
 use crate::net::utils::Seconds;
 use crate::protobuf;
+use protobuf::drand::Metadata;
 
 #[derive(Debug, Default, PartialEq, Clone)]
 pub struct Participant {
@@ -621,28 +622,41 @@ impl From<Command> for protobuf::dkg::dkg_command::Command {
     }
 }
 
+// #[cold]
+/// Middle representation used to display DKG status.
+#[derive(Default)]
 pub struct DkgEntry {
+    pub state: String,
+    pub epoch: String,
     pub beacon_id: String,
-    pub state: u32,
-    pub epoch: u32,
-    pub threshold: u32,
-    pub timeout: Timestamp,
-    pub genesis_time: Timestamp,
-    pub genesis_seed: Vec<u8>,
-    pub leader: Participant,
-    pub remaining: Vec<Participant>,
-    pub joining: Vec<Participant>,
-    pub leaving: Vec<Participant>,
-    pub acceptors: Vec<Participant>,
-    pub rejectors: Vec<Participant>,
-    pub final_group: Vec<String>,
+    pub threshold: String,
+    pub timeout: String,
+    pub genesis_time: String,
+    pub genesis_seed: String,
+    pub leader: String,
+    pub joining: String,
+    pub remaining: String,
+    pub leaving: String,
+    pub acceptors: String,
+    pub rejectors: String,
+    pub final_group: String,
 }
 
-impl ConvertProto for protobuf::dkg::DkgEntry {
-    type Inner = DkgEntry;
+macro_rules! display_vec {
+    ($vec:expr) => {
+        $vec.into_iter()
+            .map(|x| x.address)
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n"
+    };
+}
 
-    fn validate(self) -> Result<Self::Inner, TransportError> {
-        let Self {
+impl TryFrom<protobuf::dkg::DkgEntry> for DkgEntry {
+    type Error = crate::dkg::status::StateError;
+
+    fn try_from(proto: protobuf::dkg::DkgEntry) -> Result<Self, Self::Error> {
+        let protobuf::dkg::DkgEntry {
             beacon_id,
             state,
             epoch,
@@ -657,90 +671,58 @@ impl ConvertProto for protobuf::dkg::DkgEntry {
             acceptors,
             rejectors,
             final_group,
-        } = self;
+        } = proto;
 
-        Ok(Self::Inner {
+        let state = Status::try_from(state)?.to_string();
+        let timeout = match timeout {
+            Some(mut t) => {
+                // ignore nanos for display
+                t.nanos = 0;
+                t.to_string()
+            }
+            None => String::new(),
+        };
+        let leader = leader.map(|l| l.address + "\n").unwrap_or_default();
+        let genesis_time = genesis_time.map(|t| t.to_string()).unwrap_or_default();
+        let genesis_seed = hex::encode(genesis_seed);
+
+        let dkg_entry = Self {
             beacon_id,
             state,
-            epoch,
-            threshold,
-            timeout: timeout.require_some()?,
-            genesis_time: genesis_time.require_some()?,
-            genesis_seed,
-            leader: leader.require_some()?.validate()?,
-            remaining: try_from_vec(remaining)?,
-            joining: try_from_vec(joining)?,
-            leaving: try_from_vec(leaving)?,
-            acceptors: try_from_vec(acceptors)?,
-            rejectors: try_from_vec(rejectors)?,
-            final_group,
-        })
-    }
-}
-
-impl From<DkgEntry> for protobuf::dkg::DkgEntry {
-    fn from(value: DkgEntry) -> Self {
-        let DkgEntry {
-            beacon_id,
-            state,
-            epoch,
-            threshold,
+            epoch: epoch.to_string(),
+            threshold: threshold.to_string(),
             timeout,
             genesis_time,
             genesis_seed,
             leader,
-            remaining,
-            joining,
-            leaving,
-            acceptors,
-            rejectors,
-            final_group,
-        } = value;
+            remaining: display_vec!(remaining),
+            joining: display_vec!(joining),
+            leaving: display_vec!(leaving),
+            acceptors: display_vec!(acceptors),
+            rejectors: display_vec!(rejectors),
+            final_group: final_group.join("\n"),
+        };
 
-        Self {
-            beacon_id,
-            state,
-            epoch,
-            threshold,
-            timeout: Some(timeout),
-            genesis_time: Some(genesis_time),
-            genesis_seed,
-            leader: Some(leader.into()),
-            remaining: from_vec(remaining),
-            joining: from_vec(joining),
-            leaving: from_vec(leaving),
-            acceptors: from_vec(acceptors),
-            rejectors: from_vec(rejectors),
-            final_group,
-        }
+        Ok(dkg_entry)
     }
 }
 
 pub struct DkgStatusResponse {
-    pub complete: DkgEntry,
     pub current: DkgEntry,
+    pub finished: Option<DkgEntry>,
 }
 
-impl ConvertProto for protobuf::dkg::DkgStatusResponse {
-    type Inner = DkgStatusResponse;
+impl TryFrom<protobuf::dkg::DkgStatusResponse> for DkgStatusResponse {
+    type Error = crate::dkg::status::StateError;
 
-    fn validate(self) -> Result<Self::Inner, TransportError> {
-        let Self { complete, current } = self;
+    fn try_from(proto: protobuf::dkg::DkgStatusResponse) -> Result<Self, Self::Error> {
+        let current = proto
+            .current
+            .ok_or(crate::dkg::status::StateError::MissingCurrentState)?
+            .try_into()?;
 
-        Ok(Self::Inner {
-            complete: complete.require_some()?.validate()?,
-            current: current.require_some()?.validate()?,
-        })
-    }
-}
+        let finished = proto.complete.map(TryInto::try_into).transpose()?;
 
-impl From<DkgStatusResponse> for protobuf::dkg::DkgStatusResponse {
-    fn from(value: DkgStatusResponse) -> Self {
-        let DkgStatusResponse { complete, current } = value;
-
-        Self {
-            complete: Some(complete.into()),
-            current: Some(current.into()),
-        }
+        Ok(Self { current, finished })
     }
 }

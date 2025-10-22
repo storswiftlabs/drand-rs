@@ -51,6 +51,8 @@ pub enum StateError {
     InvalidStateChange { from: Status, to: Status },
     #[error("impossible DKG state received: {0}")]
     ImpossibleDkgState(u32),
+    #[error("current DKG state is missing")]
+    MissingCurrentState,
 }
 
 impl TryFrom<u32> for Status {

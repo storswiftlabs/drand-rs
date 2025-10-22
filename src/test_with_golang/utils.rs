@@ -294,7 +294,7 @@ impl NodesGroup {
 
         // All nodes should be in non-terminal state
         for n in &mut self.nodes {
-            let status = get_current_status(&n.control, &self.config.id).await;
+            let status = get_current_status(&n.control, self.config.id.clone()).await;
             assert!(
                 !status.is_terminal(),
                 "terminal statuses are not expected, folder: {}, address: {}, status: {}",
@@ -858,7 +858,7 @@ pub fn remove_nodes_fs() {
     }
 }
 
-async fn get_current_status(control_port: &str, id: &str) -> Status {
+async fn get_current_status(control_port: &str, id: String) -> Status {
     let mut client = DkgControlClient::new(control_port).await.unwrap();
     let response = client.dkg_status(id).await.unwrap();
 
@@ -866,7 +866,7 @@ async fn get_current_status(control_port: &str, id: &str) -> Status {
     Status::try_from(current).unwrap()
 }
 
-pub async fn get_finished_state(control_port: &str, id: &str) -> DkgEntry {
+pub async fn get_finished_state(control_port: &str, id: String) -> DkgEntry {
     let mut client = DkgControlClient::new(control_port).await.unwrap();
     let response = client.dkg_status(id).await.unwrap();
     response.complete.unwrap()

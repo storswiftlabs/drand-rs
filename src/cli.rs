@@ -118,6 +118,14 @@ pub enum Dkg {
         #[arg(long)]
         id: String,
     },
+    Status {
+        /// Set the port you want to listen to for control port commands. If not specified, we will use the default value.
+        #[arg(long, default_value = control::DEFAULT_CONTROL_PORT)]
+        control: String,
+        /// Indicates the id for the randomness generation process which will be started
+        #[arg(long, default_value = beacon::DEFAULT_BEACON_ID)]
+        id: String,
+    },
 }
 
 /// Local information retrieval about the node's cryptographic material and current state.
@@ -213,6 +221,7 @@ impl Cli {
                 }
                 Dkg::Accept { control, id } => dkg_accept_cmd(&control, id).await?,
                 Dkg::Reject { control, id } => dkg_reject_cmd(&control, id).await?,
+                Dkg::Status { control, id } => dkg_status_cmd(&control, id).await?,
             },
             Cmd::Show(show) => match show {
                 Show::ChainInfo { control, id } => chain_info_cmd(&control, id).await?,
@@ -345,6 +354,16 @@ async fn dkg_accept_cmd(control_port: &str, beacon_id: String) -> Result<()> {
 async fn dkg_reject_cmd(control_port: &str, beacon_id: String) -> Result<()> {
     let mut client = DkgControlClient::new(control_port).await?;
     client.dkg_reject(beacon_id).await?;
+
+    Ok(())
+}
+
+async fn dkg_status_cmd(control_port: &str, beacon_id: String) -> Result<()> {
+    let mut client = DkgControlClient::new(control_port).await?;
+    let response: crate::transport::dkg::DkgStatusResponse =
+        client.dkg_status(beacon_id).await?.try_into()?;
+
+    crate::dkg::utils::print_dkg_status(response);
 
     Ok(())
 }
