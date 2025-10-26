@@ -19,6 +19,7 @@ use clap::arg;
 use clap::command;
 use clap::Parser;
 use clap::Subcommand;
+use energon::drand::schemes::BN254UnchainedOnG1Scheme;
 use energon::drand::schemes::DefaultScheme;
 use energon::drand::schemes::SigsOnG1Scheme;
 use energon::drand::schemes::UnchainedScheme;
@@ -242,6 +243,7 @@ async fn keygen_cmd(config: KeyGenConfig) -> Result<()> {
         DefaultScheme::ID => keygen::<DefaultScheme>(&config)?,
         UnchainedScheme::ID => keygen::<UnchainedScheme>(&config)?,
         SigsOnG1Scheme::ID => keygen::<SigsOnG1Scheme>(&config)?,
+        BN254UnchainedOnG1Scheme::ID => keygen::<BN254UnchainedOnG1Scheme>(&config)?,
         _ => bail!("keygen: unknown scheme: {}", config.scheme),
     }
 
@@ -433,6 +435,9 @@ async fn check_identity_address(peer: &Address, beacon_id: String) -> Result<()>
         DefaultScheme::ID => KeyPoint::<DefaultScheme>::deserialize(&resp.key).is_err(),
         SigsOnG1Scheme::ID => KeyPoint::<SigsOnG1Scheme>::deserialize(&resp.key).is_err(),
         UnchainedScheme::ID => KeyPoint::<UnchainedScheme>::deserialize(&resp.key).is_err(),
+        BN254UnchainedOnG1Scheme::ID => {
+            KeyPoint::<BN254UnchainedOnG1Scheme>::deserialize(&resp.key).is_err()
+        }
         _ => bail!(
             "received an invalid / unsupported SchemeName in identity response: {}",
             resp.scheme_name

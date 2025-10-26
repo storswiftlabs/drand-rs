@@ -13,6 +13,7 @@ use crate::net::protocol::PartialMsg;
 use arc_swap::ArcSwap;
 use arc_swap::ArcSwapAny;
 use arc_swap::Guard;
+use energon::drand::schemes::BN254UnchainedOnG1Scheme;
 use energon::drand::schemes::DefaultScheme;
 use energon::drand::schemes::SigsOnG1Scheme;
 use energon::drand::schemes::UnchainedScheme;
@@ -54,6 +55,9 @@ impl BeaconHandler {
             }
             SigsOnG1Scheme::ID => {
                 BeaconProcess::<SigsOnG1Scheme>::run(fs, pair, pool, private_listen)?
+            }
+            BN254UnchainedOnG1Scheme::ID => {
+                BeaconProcess::<BN254UnchainedOnG1Scheme>::run(fs, pair, pool, private_listen)?
             }
             _ => return Err(FileStoreError::FailedInitID)?,
         };

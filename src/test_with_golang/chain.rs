@@ -6,6 +6,7 @@ use crate::net::control::ControlClient;
 use crate::net::public::PublicClient;
 use crate::net::utils::Address;
 use crate::protobuf::drand::ChainInfoPacket;
+use energon::drand::schemes::BN254UnchainedOnG1Scheme;
 use energon::drand::schemes::DefaultScheme;
 use energon::drand::schemes::SigsOnG1Scheme;
 use energon::drand::schemes::UnchainedScheme;
@@ -155,6 +156,10 @@ async fn sync() {
         }
         UnchainedScheme::ID => {
             let group:Group<UnchainedScheme> = Toml::toml_decode(&group_str.parse().unwrap()).unwrap();
+            (group.transition_time, group.genesis_time)
+        }
+        BN254UnchainedOnG1Scheme::ID => {
+            let group:Group<BN254UnchainedOnG1Scheme> = Toml::toml_decode(&group_str.parse().unwrap()).unwrap();
             (group.transition_time, group.genesis_time)
         }
         _=> panic!("unknown scheme from group file")
