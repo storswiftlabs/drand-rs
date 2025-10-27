@@ -1,5 +1,6 @@
 use super::cache::PartialCache;
 use super::epoch::EpochConfig;
+use super::handler::ChainError;
 use super::info::ChainInfo;
 use super::store::BeaconRepr;
 use super::sync::HandleReSync;
@@ -121,8 +122,13 @@ impl<S: Scheme, B: BeaconRepr> Registry<S, B> {
     ///
     /// WARNING: To prevent burning of the partial cache,
     /// this method should NEVER be called within the logic for resync.
-    pub fn align_cache(&mut self, ec: &EpochConfig<S>, l: &Span) {
-        self.p_cache.align(ec, self.latest_stored.round(), l);
+    pub fn align_cache(&mut self, ec: &EpochConfig<S>, l: &Span) -> Result<(), ChainError> {
+        self.p_cache
+            .align(ec, self.latest_stored.round(), l)
+            .map_err(|err| {
+                tracing::error!(parent: l, "partial_cache: {err}, please report this");
+                ChainError::Internal
+            })
     }
 
     pub fn cache(&self) -> &PartialCache<S> {

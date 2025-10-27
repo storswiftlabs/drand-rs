@@ -6,12 +6,24 @@ use crate::protobuf::drand::PartialBeaconPacket;
 use energon::kyber::tbls::SigShare;
 use std::collections::VecDeque;
 use tracing::debug;
+use tracing::error;
 use tracing::warn;
 use tracing::Span;
 
 /// Partials that are up to this amount of rounds more than the last
 /// beacon we have - it is useful for quick catchup.
 pub const CACHE_LIMIT_ROUNDS: u64 = 3;
+
+/// Logical errors for partial cache.
+#[derive(thiserror::Error, Debug)]
+pub enum CacheError {
+    #[error("new stored round {latest_stored} is less then height {height}")]
+    Height { latest_stored: u64, height: u64 },
+    #[error("invalid structure: allowed rounds {allowed:?}, height {height}")]
+    Structure { allowed: Vec<u64>, height: u64 },
+    #[error("invalid delta: {0}")]
+    Delta(u64),
+}
 
 /// Contains unchecked packets received from nodes for allowed round.
 #[derive(Debug)]
@@ -111,53 +123,66 @@ impl<S: Scheme> PartialCache<S> {
     }
 
     /// Updates cache state if argument is bigger than cache metadata.
-    /// Returns packets to verify for `latest_stored +1` round if such packets exists.
-    fn update(&mut self, latest_stored: u64) -> Option<Vec<PartialBeaconPacket>> {
-        // Valid case, cache is black box for caller side.
-        if latest_stored <= self.height {
-            return None;
+    /// Returns packets to verify for `latest_stored +1` round if such packets exist.
+    fn update(&mut self, latest_stored: u64) -> Result<Option<PartialsUnchecked>, CacheError> {
+        #[allow(clippy::comparison_chain, reason = "exhaustive")]
+        if latest_stored == self.height {
+            return Ok(None);
+        } else if latest_stored < self.height {
+            return Err(CacheError::Height {
+                latest_stored,
+                height: self.height,
+            });
         }
-        // Gap between "old" and "new" latest_stored round.
-        let gap = latest_stored - self.height;
-        if let 1..=CACHE_LIMIT_ROUNDS = gap {
-            // Clear sigshares for outdated round.
+
+        let delta = latest_stored - self.height;
+        if let 1..=CACHE_LIMIT_ROUNDS = delta {
             self.valid_sigs.clear();
             self.height = latest_stored;
 
-            // Add entries for new allowed rounds.
-            for i in 1..=gap {
-                let new_allowed_round = latest_stored + i + CACHE_LIMIT_ROUNDS;
-                self.rounds_cache.push_back(PartialsUnchecked {
-                    round: new_allowed_round,
-                    packets: Vec::with_capacity(self.thr),
-                });
-            }
-
-            let mut packets_next_round = None;
-            for i in 0..gap {
-                // Last removed entry is the cache for new `latest_stored +1` round.
-                if i == gap - 1 {
-                    packets_next_round = self.rounds_cache.pop_front();
+            for _ in 0..delta {
+                match self.rounds_cache.pop_front() {
+                    Some(packets) => {
+                        // Add corresponding entry for new allowed round
+                        self.rounds_cache.push_back(PartialsUnchecked {
+                            round: packets.round + CACHE_LIMIT_ROUNDS,
+                            packets: Vec::with_capacity(self.thr),
+                        });
+                        // Stop at wanted round to aggregate
+                        if packets.round == self.height + 1 {
+                            if packets.packets.is_empty() {
+                                return Ok(None);
+                            }
+                            return Ok(Some(packets));
+                        }
+                    }
+                    None => {
+                        return Err(CacheError::Structure {
+                            allowed: self.rounds_cache.iter().map(|entry| entry.round).collect(),
+                            height: self.height,
+                        });
+                    }
                 }
             }
-
-            // Return packets to validate into `SigShare` if there are some.
-            packets_next_round
-                .filter(|r_cache| !r_cache.packets.is_empty())
-                .map(|r_cache| r_cache.packets)
+            Err(CacheError::Delta(delta))
         } else {
-            // Gap is too big, cache is completely outdated.
+            // Cache is outdated after resync.
             *self = Self::new(latest_stored, self.thr, self.l.clone());
-            None
+            Ok(None)
         }
     }
 
     /// Aligns cache for new `latest_stored` round, verifying unchecked packets for next round.
-    pub fn align(&mut self, ec: &EpochConfig<S>, latest_stored: u64, l: &Span) {
-        if let Some(next_round_packets) = self.update(latest_stored) {
-            for packet in next_round_packets {
+    pub fn align(
+        &mut self,
+        ec: &EpochConfig<S>,
+        latest_stored: u64,
+        l: &Span,
+    ) -> Result<(), CacheError> {
+        if let Some(next_round_packets) = self.update(latest_stored)? {
+            for packet in next_round_packets.packets {
                 let Some(idx) = get_partial_index::<S>(&packet.partial_sig) else {
-                    warn!(parent: l, "update_cache: ignoring packet with invalid data");
+                    warn!(parent: l, "update_cache: ignoring packet with invalid data for round {}", packet.round);
                     continue;
                 };
 
@@ -168,13 +193,14 @@ impl<S: Scheme> PartialCache<S> {
                             debug!(parent: l, "update_cache: added valid share from {node_addr} for round {}, latest_stored {}", packet.round, latest_stored);
                         }
                         Err(err) => {
-                            debug!(parent: l, "update_cache: {err}, latest_stored {}, packet_round {}", self.height, packet.round,);
-                            continue;
+                            error!(parent: l, "update_cache: {err}, latest_stored {}, packet_round {}", self.height, packet.round);
                         }
                     }
                 }
             }
         }
+
+        Ok(())
     }
 
     /// Returns the height of cache.
@@ -198,9 +224,9 @@ mod test {
     use super::*;
     use energon::drand::schemes::DefaultScheme;
 
-    /// Returns rounds acceptable by cache.
-    fn allowed_rounds(cache: &VecDeque<PartialsUnchecked>) -> Vec<u64> {
-        cache.iter().map(|r_cache| r_cache.round).collect()
+    /// Returns list of allowed rounds.
+    fn allowed_rounds(entries: &VecDeque<PartialsUnchecked>) -> Vec<u64> {
+        entries.iter().map(|entry| entry.round).collect()
     }
 
     /// Inserts all packets to cache.
@@ -235,7 +261,7 @@ mod test {
     ) {
         for latest_stored in rounds {
             assert_eq!(
-                p_cache.update(latest_stored).unwrap()[0],
+                p_cache.update(latest_stored).unwrap().unwrap().packets[0],
                 packets[usize::try_from(latest_stored).unwrap() + 1]
             );
 
@@ -291,12 +317,12 @@ mod test {
         assert_eq!(allowed_rounds(&p_cache.rounds_cache), vec![2, 3, 4]);
 
         new_stored = 1;
-        p_cache.update(new_stored);
+        p_cache.update(new_stored).unwrap();
         assert_eq!(p_cache.height, new_stored);
         assert_eq!(allowed_rounds(&p_cache.rounds_cache), vec![3, 4, 5]);
 
         new_stored = 2;
-        p_cache.update(new_stored);
+        p_cache.update(new_stored).unwrap();
         assert_eq!(p_cache.height, new_stored);
         assert_eq!(allowed_rounds(&p_cache.rounds_cache), vec![4, 5, 6]);
 
@@ -304,11 +330,11 @@ mod test {
         // - new joiner may need to sync up to latest chain height.
         // - sync always started once node is 2 rounds behing the expected height.
         new_stored = 513;
-        p_cache.update(new_stored);
+        p_cache.update(new_stored).unwrap();
         assert_eq!(allowed_rounds(&p_cache.rounds_cache), vec![515, 516, 517]);
 
         new_stored = 520;
-        p_cache.update(new_stored);
+        p_cache.update(new_stored).unwrap();
         assert_eq!(allowed_rounds(&p_cache.rounds_cache), vec![522, 523, 524]);
     }
 }

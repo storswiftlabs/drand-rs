@@ -95,6 +95,8 @@ pub enum ChainError {
     FileStoreError(#[from] FileStoreError),
     #[error("no dkg group setup yet")]
     DkgSetupRequired,
+    #[error("internal error")]
+    Internal,
 }
 
 /// Handler to initiate and react to the tBLS protocol.
@@ -291,7 +293,7 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
         &self,
         reg: &mut Registry<S, B>,
     ) -> Result<PartialBeaconPacket, ChainError> {
-        reg.align_cache(&self.ec, &self.l);
+        reg.align_cache(&self.ec, &self.l)?;
         let c_round = reg.current_round();
         let ls_round = reg.latest_stored().round();
 
@@ -402,7 +404,7 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
         }
 
         // Cache updates once per stored beacon, between updates this call is cheap.
-        reg.align_cache(&self.ec, &self.l);
+        reg.align_cache(&self.ec, &self.l)?;
 
         // Add packet to cache if p_round hits the allowed range and signature is not duplicated.
         if p_round > ls_round + 1 && p_round <= ls_round + 1 + CACHE_LIMIT_ROUNDS {
@@ -499,7 +501,7 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
 
             // Update registry.
             reg.update_latest_stored(valid_beacon);
-            reg.align_cache(&self.ec, &self.l);
+            reg.align_cache(&self.ec, &self.l)?;
 
             // Check if catchup required.
             let ls_round = reg.latest_stored().round();
