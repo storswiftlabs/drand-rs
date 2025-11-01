@@ -26,6 +26,19 @@ use energon::drand::schemes::UnchainedScheme;
 use energon::points::KeyPoint;
 use energon::traits::Affine;
 
+#[derive(Debug, Parser, Clone)]
+#[command(
+    name = "drand rust implementation (BETA)", 
+    version = env!("CARGO_PKG_VERSION"), 
+    about = "drand - distributed randomness service"
+)]
+pub struct Cli {
+    #[arg(long, global = true)]
+    pub verbose: bool,
+    #[command(subcommand)]
+    pub commands: Cmd,
+}
+
 /// Generate the long-term keypair (drand.private, drand.public) for this node, and load it on the drand daemon if it is up and running
 #[derive(Debug, Parser, Clone)]
 pub struct KeyGenConfig {
@@ -163,19 +176,6 @@ pub enum Util {
 }
 
 #[derive(Debug, Parser, Clone)]
-#[command(
-    name = "drand rust implementation (BETA)", 
-    version = env!("CARGO_PKG_VERSION"), 
-    about = "distributed randomness service"
-)]
-pub struct Cli {
-    #[arg(long, global = true)]
-    pub verbose: bool,
-    #[command(subcommand)]
-    pub commands: Cmd,
-}
-
-#[derive(Debug, Parser, Clone)]
 pub enum Cmd {
     GenerateKeypair(KeyGenConfig),
     Start(Config),
@@ -211,25 +211,25 @@ impl Cli {
         crate::log::setup_tracing(self.verbose)?;
 
         match self.commands {
-            Cmd::GenerateKeypair(config) => keygen_cmd(config).await?,
-            Cmd::Start(config) => start_cmd(config).await?,
-            Cmd::Load { control, id } => load_beacon_cmd(&control, id).await?,
-            Cmd::Stop { control, id } => stop_cmd(&control, id).await?,
-            Cmd::Sync(config) => sync_cmd(config).await?,
+            Cmd::GenerateKeypair(config) => generate_keypair(config).await?,
+            Cmd::Start(config) => start(config).await?,
+            Cmd::Load { control, id } => load_beacon(&control, id).await?,
+            Cmd::Stop { control, id } => stop(&control, id).await?,
+            Cmd::Sync(config) => sync(config).await?,
             Cmd::Dkg(dkg) => match dkg {
                 Dkg::Join { control, id, group } => {
-                    dkg_join_cmd(&control, id, group.as_deref()).await?;
+                    dkg_join(&control, id, group.as_deref()).await?;
                 }
-                Dkg::Accept { control, id } => dkg_accept_cmd(&control, id).await?,
-                Dkg::Reject { control, id } => dkg_reject_cmd(&control, id).await?,
-                Dkg::Status { control, id } => dkg_status_cmd(&control, id).await?,
+                Dkg::Accept { control, id } => dkg_accept(&control, id).await?,
+                Dkg::Reject { control, id } => dkg_reject(&control, id).await?,
+                Dkg::Status { control, id } => dkg_status(&control, id).await?,
             },
             Cmd::Show(show) => match show {
-                Show::ChainInfo { control, id } => chain_info_cmd(&control, id).await?,
-                Show::Status { control, id } => status_cmd(&control, id).await?,
+                Show::ChainInfo { control, id } => chain_info(&control, id).await?,
+                Show::Status { control, id } => status(&control, id).await?,
             },
             Cmd::Util(util) => match util {
-                Util::Check { id, addresses } => util_check_cmd(id.as_deref(), addresses).await?,
+                Util::Check { id, addresses } => util_check(id.as_deref(), addresses).await?,
             },
         }
 
@@ -237,7 +237,7 @@ impl Cli {
     }
 }
 
-async fn keygen_cmd(config: KeyGenConfig) -> Result<()> {
+async fn generate_keypair(config: KeyGenConfig) -> Result<()> {
     println!("Generating private / public key pair");
     match config.scheme.as_str() {
         DefaultScheme::ID => keygen::<DefaultScheme>(&config)?,
@@ -248,17 +248,16 @@ async fn keygen_cmd(config: KeyGenConfig) -> Result<()> {
     }
 
     // If keys were generated successfully, daemon needs to load them.
-    match control::ControlClient::new(&config.control).await {
-        Ok(mut client) => {
-            client.load_beacon(config.id).await?;
-        }
-        Err(_) => eprintln!("Keys couldn't be loaded on drand daemon. If it is not running, these new keys will be loaded on startup"),
+    if let Ok(mut client) = control::ControlClient::new(&config.control).await {
+        client.load_beacon(config.id).await?;
+    } else {
+        eprintln!("Keys couldn't be loaded on drand daemon. If it is not running, these new keys will be loaded on startup");
     }
 
     Ok(())
 }
 
-/// Generic helper for [`keygen_cmd`]
+/// Generic helper for [`generate_keypair`]
 fn keygen<S: Scheme>(config: &KeyGenConfig) -> Result<()> {
     let address = Address::precheck(&config.address)?;
     let pair = Pair::<S>::generate(address)?;
@@ -268,73 +267,54 @@ fn keygen<S: Scheme>(config: &KeyGenConfig) -> Result<()> {
     Ok(())
 }
 
-async fn start_cmd(config: Config) -> Result<()> {
+async fn start(config: Config) -> Result<()> {
     let private_listen = Address::precheck(&config.private_listen)?;
     let control_port = config.control.clone();
 
-    // Start metrics server
     if let Some(ref address) = config.metrics {
         crate::net::metrics::setup_metrics(address)?;
     }
-
     let daemon = Daemon::new(config)?;
-    // Start control server
-    let control = daemon.tracker.spawn({
-        let daemon = daemon.clone();
-        control::start_server::<ControlListener>(daemon, control_port)
-    });
-    // Start node server
-    let node = daemon.tracker.spawn({
-        let daemon = daemon.clone();
-        protocol::start_server::<NodeListener>(daemon, private_listen)
-    });
-
-    assert!(
-        tokio::try_join!(control, node).is_ok(),
-        "can not start node"
-    );
+    let t = daemon.tracker();
+    let (fut_control, fut_node) = tokio::try_join!(
+        t.spawn(control::start::<ControlListener>(
+            daemon.clone(),
+            control_port,
+        )),
+        t.spawn(protocol::start_node::<NodeListener>(daemon, private_listen,))
+    )?;
+    fut_control.and(fut_node)?;
 
     Ok(())
 }
 
-async fn load_beacon_cmd(control_port: &str, beacon_id: String) -> Result<()> {
+async fn load_beacon(control_port: &str, beacon_id: String) -> Result<()> {
     let mut client = ControlClient::new(control_port).await?;
-    client.load_beacon(beacon_id).await?;
+    client.load_beacon(beacon_id.clone()).await?;
+    println!("Beacon process [{beacon_id}] was loaded on drand.");
 
     Ok(())
 }
 
-async fn stop_cmd(control_port: &str, beacon_id: Option<String>) -> anyhow::Result<()> {
+async fn stop(control_port: &str, beacon_id: Option<String>) -> anyhow::Result<()> {
     let mut conn = ControlClient::new(control_port).await?;
-
-    match conn.shutdown(beacon_id.clone()).await {
-        Ok(is_daemon_running) => {
-            if is_daemon_running {
-                println!("beacon process [{beacon_id:?}] stopped correctly. Bye.");
-            } else {
-                println!("drand daemon stopped correctly. Bye.");
-            }
-        }
-        Err(err) => {
-            if let Some(id) = beacon_id {
-                println!("error stopping beacon process: [{id}], status: {err}");
-            } else {
-                println!("error stopping drand daemon, status: {err}");
-            }
-        }
+    if let Some(metadata) = conn.shutdown(beacon_id).await? {
+        println!("Beacon process [{}] stopped correctly.", metadata.beacon_id);
+    } else {
+        println!("Drand daemon stopped correctly.");
     }
 
     Ok(())
 }
 
-async fn sync_cmd(config: SyncConfig) -> Result<()> {
+async fn sync(config: SyncConfig) -> Result<()> {
     let mut client = ControlClient::new(&config.control).await?;
     client.sync(config).await?;
 
     Ok(())
 }
 
-async fn dkg_join_cmd(
+async fn dkg_join(
     control_port: &str,
     beacon_id: String,
     groupfile_path: Option<&str>,
@@ -346,21 +326,23 @@ async fn dkg_join_cmd(
     Ok(())
 }
 
-async fn dkg_accept_cmd(control_port: &str, beacon_id: String) -> Result<()> {
+async fn dkg_accept(control_port: &str, beacon_id: String) -> Result<()> {
     let mut client = DkgControlClient::new(control_port).await?;
     client.dkg_accept(beacon_id).await?;
+    println!("DKG accepted successfully!");
 
     Ok(())
 }
 
-async fn dkg_reject_cmd(control_port: &str, beacon_id: String) -> Result<()> {
+async fn dkg_reject(control_port: &str, beacon_id: String) -> Result<()> {
     let mut client = DkgControlClient::new(control_port).await?;
     client.dkg_reject(beacon_id).await?;
+    println!("DKG rejected successfully!");
 
     Ok(())
 }
 
-async fn dkg_status_cmd(control_port: &str, beacon_id: String) -> Result<()> {
+async fn dkg_status(control_port: &str, beacon_id: String) -> Result<()> {
     let mut client = DkgControlClient::new(control_port).await?;
     let response: crate::transport::dkg::DkgStatusResponse =
         client.dkg_status(beacon_id).await?.try_into()?;
@@ -370,7 +352,7 @@ async fn dkg_status_cmd(control_port: &str, beacon_id: String) -> Result<()> {
     Ok(())
 }
 
-async fn chain_info_cmd(control_port: &str, beacon_id: String) -> Result<()> {
+async fn chain_info(control_port: &str, beacon_id: String) -> Result<()> {
     let mut client = ControlClient::new(control_port).await?;
     let info = client.chain_info(beacon_id).await?;
     println!("{info}");
@@ -378,7 +360,7 @@ async fn chain_info_cmd(control_port: &str, beacon_id: String) -> Result<()> {
     Ok(())
 }
 
-async fn status_cmd(control_port: &str, beacon_id: String) -> Result<()> {
+async fn status(control_port: &str, beacon_id: String) -> Result<()> {
     let mut client = ControlClient::new(control_port).await?;
     let status = client.status(beacon_id.clone()).await?;
     println!(
@@ -389,7 +371,7 @@ async fn status_cmd(control_port: &str, beacon_id: String) -> Result<()> {
     Ok(())
 }
 
-async fn util_check_cmd(beacon_id: Option<&str>, addresses: Vec<String>) -> Result<()> {
+async fn util_check(beacon_id: Option<&str>, addresses: Vec<String>) -> Result<()> {
     let peers = addresses
         .iter()
         .map(|addr| Address::precheck(addr.as_str()))
@@ -439,11 +421,11 @@ async fn check_identity_address(peer: &Address, beacon_id: String) -> Result<()>
             KeyPoint::<BN254UnchainedOnG1Scheme>::deserialize(&resp.key).is_err()
         }
         _ => bail!(
-            "received an invalid / unsupported SchemeName in identity response: {}",
+            "received an invalid SchemeName in identity response: {}",
             resp.scheme_name
         ),
     } {
-        bail!("could not unmarshal public key");
+        bail!("failed to deserialize public key");
     };
 
     Ok(())

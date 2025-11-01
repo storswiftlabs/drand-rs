@@ -159,46 +159,27 @@ impl Control for ControlHandler {
         Err(Status::unimplemented("group_file: GroupRequest"))
     }
 
-    // Metadata is None: stop the daemon
-    // Metadata is Some: stop the beacon_id, if stopped beacon_id was the last - stop the daemon.
     async fn shutdown(
         &self,
         request: Request<ShutdownRequest>,
     ) -> Result<Response<ShutdownResponse>, Status> {
-        let metadata = request.get_ref().metadata.as_ref();
-        // Callback to indicate if shutdown is graceful
-        let (tx_graceful, rx_graceful) = tokio::sync::oneshot::channel::<bool>();
-
-        #[allow(unused_assignments)]
-        let mut is_graceful = false;
-        let mut is_last_beacon = true;
-
-        // Metadata is Some - request to stop given beacon_id
-        if let Some(meta) = metadata {
-            is_last_beacon = self
-                .stop_id(&meta.beacon_id, tx_graceful)
-                .map_err(|err| err.to_status(&meta.beacon_id))?;
-            is_graceful = rx_graceful
-                .await
-                .map_err(|err| err.to_status(&meta.beacon_id))?;
-        } else
-        // Metadata is None - request to stop the daemon
-        {
-            self.stop_daemon(tx_graceful);
-            is_graceful = rx_graceful
-                .await
-                .map_err(|_| Status::internal("something is very broken: RecvError"))?;
-        }
-        if !is_graceful {
-            return Err(Status::internal("shutdown is not graceful"));
-        }
-        // Encode new daemon state, see [`ControlClient::shutdown`]
-        let metadata = if is_last_beacon {
-            // No more beacons left
-            None
+        let metadata = if let Some(m) = request.into_inner().metadata {
+            if self.is_last_id_to_shutdown(&m.beacon_id) {
+                self.stop_daemon()
+                    .await
+                    .map_err(|err| err.to_status(&m.beacon_id))?;
+                None
+            } else {
+                self.stop_id(&m.beacon_id)
+                    .await
+                    .map_err(|err| err.to_status(&m.beacon_id))?;
+                Some(Metadata::with_id(m.beacon_id))
+            }
         } else {
-            // Daemon is still running
-            Some(Metadata::with_default())
+            self.stop_daemon()
+                .await
+                .map_err(|err| Status::unknown(err.to_string()))?;
+            None
         };
 
         Ok(Response::new(ShutdownResponse { metadata }))
@@ -266,7 +247,7 @@ impl Control for ControlHandler {
     }
 }
 
-pub async fn start_server<N: NewTcpListener>(
+pub async fn start<N: NewTcpListener>(
     daemon: Arc<Daemon>,
     control: N::Config,
 ) -> Result<(), StartServerError> {
@@ -277,7 +258,7 @@ pub async fn start_server<N: NewTcpListener>(
         );
         StartServerError::FailedToStartControl
     })?;
-    let cancel = daemon.token.clone();
+    let token = daemon.cancellation_token();
 
     Server::builder()
         .add_service(ControlServer::new(ControlHandler(daemon.clone())))
@@ -285,7 +266,7 @@ pub async fn start_server<N: NewTcpListener>(
             daemon.clone(),
         )))
         .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async move {
-            let () = cancel.cancelled().await;
+            let () = token.cancelled().await;
         })
         .await
         .map_err(|err| {
@@ -340,12 +321,15 @@ impl ControlClient {
         Ok(())
     }
 
-    pub async fn shutdown(&mut self, beacon_id: Option<String>) -> anyhow::Result<bool> {
+    pub async fn shutdown(
+        &mut self,
+        beacon_id: Option<String>,
+    ) -> anyhow::Result<Option<Metadata>> {
         let metadata = beacon_id.map(Metadata::with_id);
         let request = ShutdownRequest { metadata };
         let responce = self.client.shutdown(request).await?;
-        let is_daemon_running = responce.get_ref().metadata.is_some();
-        Ok(is_daemon_running)
+
+        Ok(responce.into_inner().metadata)
     }
 
     pub async fn sync(&mut self, c: SyncConfig) -> anyhow::Result<()> {

@@ -144,7 +144,7 @@ impl Protocol for ProtocolHandler {
     }
 }
 
-pub async fn start_server<N: NewTcpListener>(
+pub async fn start_node<N: NewTcpListener>(
     daemon: Arc<Daemon>,
     node_listener: N::Config,
 ) -> Result<(), StartServerError> {
@@ -152,7 +152,7 @@ pub async fn start_server<N: NewTcpListener>(
         error!("listener: {}, {}", StartServerError::FailedToStartNode, err);
         StartServerError::FailedToStartNode
     })?;
-    let cancel = daemon.token.clone();
+    let token = daemon.cancellation_token();
 
     let (_health_reporter, health_service) = tonic_health::server::health_reporter();
     Server::builder()
@@ -161,7 +161,7 @@ pub async fn start_server<N: NewTcpListener>(
         .add_service(DkgPublicServer::new(DkgPublicHandler::new(daemon)))
         .add_service(health_service)
         .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async move {
-            let () = cancel.cancelled().await;
+            let () = token.cancelled().await;
         })
         .await
         .map_err(|err| {

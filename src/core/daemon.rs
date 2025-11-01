@@ -9,18 +9,12 @@ use crate::key::store::FileStoreError;
 use crate::net::utils::Callback;
 use crate::net::utils::StartServerError;
 
-use tokio::sync::oneshot;
-use tokio::time::sleep;
-use tokio::time::Duration;
-use tokio_util::sync::CancellationToken;
-use tokio_util::task::TaskTracker;
-
-use tracing::debug;
-use tracing::error;
-use tracing::info;
-
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
+use tracing::error;
+use tracing::info;
 
 #[derive(thiserror::Error, Debug)]
 pub enum DaemonError {
@@ -34,9 +28,9 @@ pub enum DaemonError {
 
 pub struct Daemon {
     private_listen: String,
-    pub tracker: TaskTracker,
-    pub token: CancellationToken,
-    pub beacons: MultiBeacon,
+    tracker: TaskTracker,
+    token: CancellationToken,
+    beacons: MultiBeacon,
     multibeacon_path: PathBuf,
 }
 
@@ -63,92 +57,60 @@ impl Daemon {
         Ok(daemon)
     }
 
-    /// Returns true if provided id is the last one in daemon.
-    pub fn stop_id(
-        &self,
-        id: &str,
-        tx_graceful: oneshot::Sender<bool>,
-    ) -> Result<bool, BeaconHandlerError> {
+    pub fn is_last_id_to_shutdown(&self, id: &str) -> bool {
         let snapshot = self.beacons().snapshot();
-
-        // Stop daemon if ONLY given id is running now
-        if snapshot.len() == 1 && snapshot[0].id().is_eq(id) {
-            self.stop_daemon(tx_graceful);
-            Ok(true)
-        } else
-        // Otherwise stop id and update multibeacon state
-        {
-            let handler = snapshot
-                .iter()
-                .find(|h| h.id().is_eq(id))
-                .ok_or(BeaconHandlerError::UnknownID)?;
-            // TODO: this should be moved into MultiBeacon method
-            let new_store = snapshot
-                .iter()
-                .filter(|x| x.id() != handler.id())
-                .cloned()
-                .collect::<Vec<BeaconHandler>>();
-
-            self.beacons().replace_store(Arc::new(new_store));
-
-            let process_tx = handler.process_tx.clone();
-            tokio::spawn(async move {
-                let (tx, rx) = Callback::new();
-                // Shutdown is graceful:
-                //  - beacon receiver is not dropped,
-                //  - callback awaited is_ok
-                //  - result from callback is_ok
-                let is_graceful = process_tx.send(BeaconCmd::Shutdown(tx)).await.is_ok()
-                    && rx.await.is_ok_and(|result| result.is_ok());
-                let _ = tx_graceful.send(is_graceful);
-            });
-
-            Ok(false)
-        }
+        snapshot.len() == 1 && snapshot[0].id().is_eq(id)
     }
 
-    /// Stops all beacons and shutdown daemon
-    pub fn stop_daemon(&self, tx_graceful: tokio::sync::oneshot::Sender<bool>) {
+    pub async fn stop_id(&self, id: &str) -> Result<(), BeaconHandlerError> {
         let snapshot = self.beacons().snapshot();
-        // non-async: Disable new network requests for beacon(s)
+        let handler = snapshot
+            .iter()
+            .find(|h| h.id().is_eq(id))
+            .ok_or(BeaconHandlerError::UnknownID)?;
+
+        info!("processing stop_id request for [{id}] ...");
+        let new_store = snapshot
+            .iter()
+            .filter(|x| x.id() != handler.id())
+            .cloned()
+            .collect::<Vec<BeaconHandler>>();
+        self.beacons().replace_store(Arc::new(new_store));
+
+        let (tx, rx) = Callback::new();
+        handler
+            .process_tx
+            .send(BeaconCmd::Shutdown(tx))
+            .await
+            .map_err(|_| BeaconHandlerError::ClosedBpRx)?;
+
+        rx.await
+            .map_err(|_| BeaconHandlerError::DroppedCallback)?
+            .map_err(BeaconHandlerError::ShutdownError)?;
+
+        Ok(())
+    }
+
+    pub async fn stop_daemon(&self) -> Result<(), BeaconHandlerError> {
+        info!("processing stop request for daemon ...");
+        let snapshot = self.beacons().snapshot();
         self.beacons().replace_store(Arc::new(vec![]));
 
-        let tracker = self.tracker.clone();
-        let token = self.token.clone();
-        tokio::spawn(async move {
-            let mut is_graceful = true;
-            for h in snapshot.iter() {
-                let (beacon_tx, beacon_rx) = Callback::new();
-                if let Err(send_err) = h.process_tx.send(BeaconCmd::Shutdown(beacon_tx)).await {
-                    error!("should not be possible, id '{}', err: {send_err}", h.id());
-                    is_graceful = false;
-                }
-                if let Err(_) | Ok(Err(_)) = beacon_rx.await {
-                    error!("should not be possible, id '{}'", h.id());
-                    is_graceful = false;
-                }
-            }
-            debug!("waiting shutdown to complete for daemon");
-            tracker.close();
-            token.cancel();
+        for h in snapshot.iter() {
+            let (tx, rx) = Callback::new();
+            h.process_tx
+                .send(BeaconCmd::Shutdown(tx))
+                .await
+                .map_err(|_| BeaconHandlerError::ClosedBpRx)?;
 
-            sleep(Duration::from_millis(100)).await;
+            rx.await
+                .map_err(|_| BeaconHandlerError::DroppedCallback)?
+                .map_err(BeaconHandlerError::ShutdownError)?;
+        }
+        self.tracker.close();
+        self.token.cancel();
 
-            // Number of tasks == 1 means the only control server is still
-            // running - awaiting the `tx_graceful` callback
-            if tracker.len() == 1 && is_graceful {
-                let _ = tx_graceful.send(true);
-                tracker.wait().await;
-                info!("graceful shutdown completed for daemon");
-            } else {
-                error!(
-                    "shutdown is_graceful: {is_graceful}, tasks left: {}",
-                    tracker.len()
-                );
-                let _ = tx_graceful.send(false);
-                tracker.wait().await;
-            }
-        });
+        Ok(())
     }
 
     pub fn load_id(&self, id: &str) -> Result<(), BeaconHandlerError> {
@@ -173,7 +135,6 @@ impl Daemon {
                 })?;
 
         // Update multibeacon storage with new handler
-        // TODO: this should be moved into MultiBeacon method
         let mut handlers = self
             .beacons()
             .snapshot()
@@ -188,5 +149,13 @@ impl Daemon {
 
     pub fn beacons(&self) -> &MultiBeacon {
         &self.beacons
+    }
+
+    pub fn tracker(&self) -> TaskTracker {
+        self.tracker.clone()
+    }
+
+    pub fn cancellation_token(&self) -> CancellationToken {
+        self.token.clone()
     }
 }

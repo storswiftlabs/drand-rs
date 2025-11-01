@@ -25,6 +25,22 @@ use tokio::sync::mpsc::Sender;
 
 type Snapshot = Guard<Arc<Vec<BeaconHandler>>>;
 
+#[derive(thiserror::Error, Debug)]
+pub enum BeaconHandlerError {
+    #[error("beacon id is not found")]
+    UnknownID,
+    #[error("beacon id is already loaded")]
+    AlreadyLoaded,
+    #[error("packet metadata is missing")]
+    MetadataRequired,
+    #[error("receiver for beacon process has been closed unexpectedly")]
+    ClosedBpRx,
+    #[error("failed to receive stop id response - callback is dropped")]
+    DroppedCallback,
+    #[error(transparent)]
+    ShutdownError(#[from] super::beacon::ShutdownError),
+}
+
 /// Handler for sending commands to the beacon node
 #[derive(Clone)]
 pub struct BeaconHandler {
@@ -133,7 +149,7 @@ impl MultiBeacon {
             .process_tx
             .send(cmd)
             .await
-            .map_err(|_| BeaconHandlerError::SendError)?;
+            .map_err(|_| BeaconHandlerError::ClosedBpRx)?;
 
         Ok(())
     }
@@ -154,7 +170,7 @@ impl MultiBeacon {
             .partial_tx
             .send(partial)
             .await
-            .map_err(|_| BeaconHandlerError::SendError)?;
+            .map_err(|_| BeaconHandlerError::ClosedBpRx)?;
 
         Ok(())
     }
@@ -162,16 +178,4 @@ impl MultiBeacon {
     pub(super) fn get_pool(&self) -> PoolSender {
         self.tx_pool.clone()
     }
-}
-
-#[derive(thiserror::Error, Debug)]
-pub enum BeaconHandlerError {
-    #[error("Beacon id is not found")]
-    UnknownID,
-    #[error("SendError: Beacon cmd receiver has been dropped")]
-    SendError,
-    #[error("Beacon id is already loaded")]
-    AlreadyLoaded,
-    #[error("Packet metadata is missing")]
-    MetadataRequired,
 }
