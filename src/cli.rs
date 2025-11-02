@@ -1,30 +1,23 @@
-use crate::core::beacon;
-use crate::core::daemon::Daemon;
-use crate::key::keys::Pair;
-use crate::key::store::FileStore;
-use crate::key::Scheme;
-use crate::net::control;
-use crate::net::control::ControlClient;
-use crate::net::dkg_control::DkgControlClient;
-use crate::net::health::HealthClient;
-use crate::net::protocol;
-use crate::net::protocol::ProtocolClient;
-use crate::net::utils::Address;
-use crate::net::utils::ControlListener;
-use crate::net::utils::NodeListener;
-
-use anyhow::bail;
-use anyhow::Result;
-use clap::arg;
-use clap::command;
-use clap::Parser;
-use clap::Subcommand;
-use energon::drand::schemes::BN254UnchainedOnG1Scheme;
-use energon::drand::schemes::DefaultScheme;
-use energon::drand::schemes::SigsOnG1Scheme;
-use energon::drand::schemes::UnchainedScheme;
-use energon::points::KeyPoint;
-use energon::traits::Affine;
+use crate::{
+    core::{beacon, daemon::Daemon},
+    key::{keys::Pair, store::FileStore, Scheme},
+    net::{
+        control,
+        control::ControlClient,
+        dkg_control::DkgControlClient,
+        health::HealthClient,
+        protocol,
+        protocol::ProtocolClient,
+        utils::{Address, ControlListener, NodeListener},
+    },
+};
+use anyhow::{bail, Result};
+use clap::{arg, command, Parser, Subcommand};
+use energon::{
+    drand::schemes::{BN254UnchainedOnG1Scheme, DefaultScheme, SigsOnG1Scheme, UnchainedScheme},
+    points::KeyPoint,
+    traits::Affine,
+};
 
 #[derive(Debug, Parser, Clone)]
 #[command(

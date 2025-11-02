@@ -1,5 +1,4 @@
-use super::keys::Identity;
-use super::Scheme;
+use super::{keys::Identity, Scheme};
 use crate::net::utils::Address;
 
 /// Node is a wrapper around identity that additionally includes the index that

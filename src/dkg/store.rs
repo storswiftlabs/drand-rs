@@ -1,15 +1,11 @@
-use super::state::State;
-use super::status::Status;
-use crate::key::toml::Toml;
-use crate::key::Scheme;
-
-use std::fs::File;
-use std::fs::Permissions;
-use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
-use std::path::PathBuf;
-
+use super::{state::State, status::Status};
+use crate::key::{toml::Toml, Scheme};
+use std::{
+    fs::{File, Permissions},
+    io::Write,
+    os::unix::fs::PermissionsExt,
+    path::{Path, PathBuf},
+};
 use tracing::error;
 
 /// Directory located at `base_folder/multibeacon/beacon_id/`.

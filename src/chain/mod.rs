@@ -8,11 +8,11 @@ mod sync;
 mod ticker;
 pub mod time;
 
+use energon::drand::traits::BeaconDigest;
 pub use handler::{init_chain, ChainCmd, ChainError};
 pub use store::{ChainedBeacon, StoreError, StoreStreamResponse, UnChainedBeacon};
 pub use sync::SyncError;
 
-use energon::drand::traits::BeaconDigest;
 /// BLS signature check for aggregated or resynced beacons.
 /// Suitable for chained and unchained schemes.
 fn is_valid_signature<S: crate::key::Scheme>(

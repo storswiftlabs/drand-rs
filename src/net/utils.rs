@@ -1,22 +1,20 @@
-use crate::chain::ChainError;
-use crate::chain::StoreError;
-use crate::core::multibeacon::BeaconHandlerError;
-use crate::dkg::ActionsError;
-use crate::key::PointSerDeError;
-use crate::net::control::CONTROL_HOST;
-use crate::protobuf::drand::Metadata;
-use crate::protobuf::drand::NodeVersion;
-
+use crate::{
+    chain::{ChainError, StoreError},
+    core::multibeacon::BeaconHandlerError,
+    dkg::ActionsError,
+    key::PointSerDeError,
+    net::control::CONTROL_HOST,
+    protobuf::drand::{Metadata, NodeVersion},
+};
 use http::uri::Authority;
-use std::error::Error;
-use std::fmt::Debug;
-use std::fmt::Display;
-use std::str::FromStr;
-use std::time::Duration;
-use tokio::net::TcpListener;
-use tokio::sync::oneshot;
-use tonic::transport::Channel;
-use tonic::Status;
+use std::{
+    error::Error,
+    fmt::{Debug, Display},
+    str::FromStr,
+    time::Duration,
+};
+use tokio::{net::TcpListener, sync::oneshot};
+use tonic::{transport::Channel, Status};
 
 pub(super) const ERR_METADATA_IS_MISSING: &str = "metadata is missing";
 

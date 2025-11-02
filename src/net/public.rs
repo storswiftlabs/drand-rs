@@ -1,33 +1,17 @@
-//! This module provides server and client implementations for RPC Public.
-
-use super::utils::Address;
-use super::utils::Callback;
-use super::utils::ToStatus;
-use super::utils::ERR_METADATA_IS_MISSING;
-use crate::core::beacon::BeaconCmd;
-use crate::core::daemon::Daemon;
-use crate::protobuf::drand as protobuf;
-use crate::protobuf::drand::Metadata;
-
-use protobuf::public_client::PublicClient as _PublicClient;
-use protobuf::public_server::Public;
-use protobuf::ChainInfoPacket;
-use protobuf::ChainInfoRequest;
-use protobuf::ListBeaconIDsRequest;
-use protobuf::ListBeaconIDsResponse;
-use protobuf::PublicRandRequest;
-use protobuf::PublicRandResponse;
-
-use anyhow::bail;
-use anyhow::Context;
-use std::ops::Deref;
-use std::pin::Pin;
-use std::sync::Arc;
+//! Client and server implementations for RPC [`Public`] service.
+use super::utils::{Address, Callback, ToStatus, ERR_METADATA_IS_MISSING};
+use crate::{
+    core::{beacon::BeaconCmd, daemon::Daemon},
+    protobuf::drand::{
+        public_client::PublicClient as PublicClientInner, public_server::Public, ChainInfoPacket,
+        ChainInfoRequest, ListBeaconIDsRequest, ListBeaconIDsResponse, Metadata, PublicRandRequest,
+        PublicRandResponse,
+    },
+};
+use anyhow::{bail, Context};
+use std::{ops::Deref, pin::Pin, sync::Arc};
 use tokio_stream::Stream;
-use tonic::transport::Channel;
-use tonic::Request;
-use tonic::Response;
-use tonic::Status;
+use tonic::{transport::Channel, Request, Response, Status};
 
 type ResponseStream = Pin<Box<dyn Stream<Item = Result<PublicRandResponse, Status>> + Send>>;
 
@@ -95,13 +79,13 @@ impl Public for PublicHandler {
 }
 
 pub struct PublicClient {
-    client: _PublicClient<Channel>,
+    client: PublicClientInner<Channel>,
 }
 
 impl PublicClient {
     pub async fn new(address: &Address) -> anyhow::Result<Self> {
         let channel = super::utils::connect(address).await?;
-        let client = _PublicClient::new(channel);
+        let client = PublicClientInner::new(channel);
         Ok(Self { client })
     }
 

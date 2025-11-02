@@ -1,40 +1,32 @@
-use super::broadcast::Broadcast;
-use super::state::State;
-use super::store::DkgStoreError;
-use super::utils::GateKeeper;
-use super::ActionsError;
-use super::DkgNode;
-
-use crate::chain::time::time_now;
-use crate::chain::time::ROUNDS_UNTIL_TRANSITION;
-use crate::chain::ChainCmd;
-use crate::core::beacon::BeaconProcess;
-
-use crate::chain::time::current_round;
-use crate::chain::time::time_of_round;
-use crate::key::group::Group;
-use crate::key::keys::DistPublic;
-use crate::key::keys::Identity;
-use crate::key::node::Node;
-use crate::key::Hash;
-use crate::key::Scheme;
-use crate::transport::dkg::Participant;
-
-use energon::kyber::dkg::Config;
-use energon::kyber::dkg::DistKeyShare;
-use energon::kyber::dkg::DkgOutput;
-use energon::kyber::dkg::Protocol;
-use energon::traits::Affine;
-
+use super::{
+    broadcast::Broadcast, state::State, store::DkgStoreError, utils::GateKeeper, ActionsError,
+    DkgNode,
+};
+use crate::{
+    chain::{
+        time::{current_round, time_now, time_of_round, ROUNDS_UNTIL_TRANSITION},
+        ChainCmd,
+    },
+    core::beacon::BeaconProcess,
+    key::{
+        group::Group,
+        keys::{DistPublic, Identity},
+        node::Node,
+        Hash, Scheme,
+    },
+    transport::dkg::Participant,
+};
+use energon::{
+    kyber::dkg::{Config, DistKeyShare, DkgOutput, Protocol},
+    traits::Affine,
+};
 use prost_types::Timestamp;
-use sha2::Digest;
-use sha2::Sha256;
-use std::future::Future;
-use std::time::Duration;
-use std::time::SystemTime;
-use tracing::error;
-use tracing::info;
-use tracing::Span;
+use sha2::{Digest, Sha256};
+use std::{
+    future::Future,
+    time::{Duration, SystemTime},
+};
+use tracing::{error, info, Span};
 
 /// Default time of each DKG period by default.
 ///

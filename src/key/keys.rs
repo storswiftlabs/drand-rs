@@ -1,12 +1,11 @@
 use super::Scheme;
 use crate::net::utils::Address;
-
 use anyhow::Result;
-use energon::kyber::poly::PriShare;
-use energon::points::KeyPoint;
-use energon::points::SigPoint;
-use energon::traits::Affine;
-use energon::traits::ScalarField;
+use energon::{
+    kyber::poly::PriShare,
+    points::{KeyPoint, SigPoint},
+    traits::{Affine, ScalarField},
+};
 
 /// Pair is a wrapper around a random scalar and the corresponding public key
 #[derive(Debug, PartialEq)]

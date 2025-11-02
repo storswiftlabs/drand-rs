@@ -1,25 +1,16 @@
-use super::broadcast::Convert;
-use super::ActionsError;
-
-use crate::key::KeyPoint;
-use crate::key::Scheme;
-use crate::key::SigPoint;
-use crate::protobuf::dkg::packet::Bundle as ProtoBundle;
-use crate::protobuf::dkg::DkgPacket;
-use crate::transport::dkg::GossipPacket;
-use crate::transport::dkg::Participant;
-
-use energon::kyber::dkg::Bundle;
-use energon::kyber::dkg::BundleSender;
-use energon::traits::Affine;
-
+use super::{broadcast::Convert, ActionsError};
+use crate::{
+    key::{KeyPoint, Scheme, SigPoint},
+    protobuf::dkg::{packet::Bundle as ProtoBundle, DkgPacket},
+    transport::dkg::{GossipPacket, Participant},
+};
+use energon::{
+    kyber::dkg::{Bundle, BundleSender},
+    traits::Affine,
+};
 use std::collections::HashSet;
-use tabled::settings::Style;
-use tabled::Table;
-use tabled::Tabled;
-use tracing::debug;
-use tracing::trace;
-use tracing::Span;
+use tabled::{settings::Style, Table, Tabled};
+use tracing::{debug, trace, Span};
 
 const SHORT_SIG_BYTES: usize = 3;
 

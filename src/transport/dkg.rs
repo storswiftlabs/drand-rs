@@ -1,28 +1,17 @@
 //! Types are re-exported directly if their fields DO NOT contain:
 //!  - option<T> instead of T
 //!  - protected new pattern types
-
+use super::utils::{from_vec, try_from_vec, ConvertProto, RequireSome, TransportError};
+use crate::{
+    dkg::status::Status,
+    net::utils::{Address, Seconds},
+    protobuf::{self, drand::Metadata},
+};
 pub use prost_types::Timestamp;
-pub use protobuf::dkg::packet::Bundle;
-pub use protobuf::dkg::AbortDkg;
-pub use protobuf::dkg::AbortOptions;
-pub use protobuf::dkg::AcceptOptions;
-pub use protobuf::dkg::CommandMetadata;
-pub use protobuf::dkg::ExecutionOptions;
-pub use protobuf::dkg::JoinOptions;
-pub use protobuf::dkg::RejectOptions;
-
-use super::utils::from_vec;
-use super::utils::try_from_vec;
-use super::utils::ConvertProto;
-use super::utils::RequireSome;
-use super::utils::TransportError;
-
-use crate::dkg::status::Status;
-use crate::net::utils::Address;
-use crate::net::utils::Seconds;
-use crate::protobuf;
-use protobuf::drand::Metadata;
+pub use protobuf::dkg::{
+    packet::Bundle, AbortDkg, AbortOptions, AcceptOptions, CommandMetadata, ExecutionOptions,
+    JoinOptions, RejectOptions,
+};
 
 #[derive(Debug, Default, PartialEq, Clone)]
 pub struct Participant {

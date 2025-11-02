@@ -1,16 +1,10 @@
-use super::state::State;
-use super::store::DkgStoreError;
-use super::ActionsError;
-
-use crate::core::beacon::BeaconProcess;
-use crate::key::group::Group;
-use crate::key::toml::Toml;
-use crate::key::Scheme;
-
-use crate::protobuf::dkg::DkgStatusResponse;
-use crate::protobuf::dkg::JoinOptions;
-use crate::transport::dkg::Command;
-
+use super::{state::State, store::DkgStoreError, ActionsError};
+use crate::{
+    core::beacon::BeaconProcess,
+    key::{group::Group, toml::Toml, Scheme},
+    protobuf::dkg::{DkgStatusResponse, JoinOptions},
+    transport::dkg::Command,
+};
 use std::future::Future;
 use tracing::info;
 

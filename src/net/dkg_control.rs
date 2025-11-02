@@ -1,33 +1,22 @@
-//! Client and server implementations for [`DkgControl`] service.
-
-use super::control::CONTROL_HOST;
-use super::utils::Callback;
-use super::utils::ToStatus;
-
-use crate::core::beacon::Actions;
-use crate::core::beacon::BeaconCmd;
-use crate::core::daemon::Daemon;
-use crate::protobuf::dkg as protobuf;
-use crate::protobuf::dkg::AcceptOptions;
-use crate::protobuf::dkg::RejectOptions;
-use crate::transport::ConvertProto;
-
-use protobuf::dkg_control_client::DkgControlClient as _DkgControlClient;
-use protobuf::dkg_control_server::DkgControl;
-use protobuf::CommandMetadata;
-use protobuf::DkgCommand;
-use protobuf::DkgStatusRequest;
-use protobuf::DkgStatusResponse;
-use protobuf::EmptyDkgResponse;
-use protobuf::JoinOptions;
-
-use tonic::transport::Channel;
-use tonic::Request;
-use tonic::Response;
-use tonic::Status;
-
-use std::ops::Deref;
-use std::sync::Arc;
+//! Client and server implementations for RPC [`DkgControl`] service.
+use super::{
+    control::CONTROL_HOST,
+    utils::{Callback, ToStatus},
+};
+use crate::{
+    core::{
+        beacon::{Actions, BeaconCmd},
+        daemon::Daemon,
+    },
+    protobuf::dkg::{
+        dkg_command::Command, dkg_control_client::DkgControlClient as DkgControlClientInner,
+        dkg_control_server::DkgControl, AcceptOptions, CommandMetadata, DkgCommand,
+        DkgStatusRequest, DkgStatusResponse, EmptyDkgResponse, JoinOptions, RejectOptions,
+    },
+    transport::ConvertProto,
+};
+use std::{ops::Deref, sync::Arc};
+use tonic::{transport::Channel, Request, Response, Status};
 
 /// Implementor for [`DkgControl`] trait for use with `DkgControlServer`.
 pub struct DkgControlHandler(Arc<Daemon>);
@@ -82,14 +71,14 @@ impl DkgControl for DkgControlHandler {
 }
 
 pub struct DkgControlClient {
-    client: _DkgControlClient<Channel>,
+    client: DkgControlClientInner<Channel>,
 }
 
 impl DkgControlClient {
     pub async fn new(port: &str) -> anyhow::Result<Self> {
         let address = format!("http://{CONTROL_HOST}:{port}");
         let channel = Channel::from_shared(address)?.connect().await?;
-        let client = _DkgControlClient::new(channel);
+        let client = DkgControlClientInner::new(channel);
 
         Ok(Self { client })
     }
@@ -111,9 +100,7 @@ impl DkgControlClient {
 
         let request = DkgCommand {
             metadata: Some(CommandMetadata { beacon_id }),
-            command: Some(protobuf::dkg_command::Command::Join(JoinOptions {
-                group_file,
-            })),
+            command: Some(Command::Join(JoinOptions { group_file })),
         };
         let _ = self.client.command(request).await?;
 
@@ -123,7 +110,7 @@ impl DkgControlClient {
     pub async fn dkg_accept(&mut self, beacon_id: String) -> anyhow::Result<()> {
         let request = DkgCommand {
             metadata: Some(CommandMetadata { beacon_id }),
-            command: Some(protobuf::dkg_command::Command::Accept(AcceptOptions {})),
+            command: Some(Command::Accept(AcceptOptions {})),
         };
         let _ = self.client.command(request).await?;
 
@@ -133,7 +120,7 @@ impl DkgControlClient {
     pub async fn dkg_reject(&mut self, beacon_id: String) -> anyhow::Result<()> {
         let request = DkgCommand {
             metadata: Some(CommandMetadata { beacon_id }),
-            command: Some(protobuf::dkg_command::Command::Reject(RejectOptions {})),
+            command: Some(Command::Reject(RejectOptions {})),
         };
         let _ = self.client.command(request).await?;
 

@@ -1,8 +1,7 @@
 use tracing::dispatcher;
-use tracing_subscriber::fmt::time;
-use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::{
+    fmt::time, prelude::__tracing_subscriber_SubscriberExt, util::SubscriberInitExt, EnvFilter,
+};
 
 pub fn setup_tracing(verbose: bool) -> anyhow::Result<()> {
     if !dispatcher::has_been_set() {

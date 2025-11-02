@@ -2,8 +2,7 @@ use std::str::FromStr;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 #[repr(u8)]
-/// Status is pre-auth layer for any interaction with [`DBState`]
-//  DEV: partial type-state pattern might be considered
+/// Status is pre-auth layer for interaction with DKG state machine.
 pub enum Status {
     // Fresh is the state all nodes start in - both pre-genesis, and if the network is running but they aren't
     // yet participating

@@ -1,28 +1,23 @@
-use super::beacon::BeaconCmd;
-use super::beacon::BeaconID;
-use super::beacon::BeaconProcess;
-
-use crate::cli::Config;
-use crate::key::store::FileStore;
-use crate::key::store::FileStoreError;
-use crate::key::Scheme;
-use crate::net::pool::Pool;
-use crate::net::pool::PoolSender;
-use crate::net::protocol::PartialMsg;
-
-use arc_swap::ArcSwap;
-use arc_swap::ArcSwapAny;
-use arc_swap::Guard;
-use energon::drand::schemes::BN254UnchainedOnG1Scheme;
-use energon::drand::schemes::DefaultScheme;
-use energon::drand::schemes::SigsOnG1Scheme;
-use energon::drand::schemes::UnchainedScheme;
-
-use std::path::PathBuf;
-use std::sync::Arc;
+use super::beacon::{BeaconCmd, BeaconID, BeaconProcess};
+use crate::{
+    cli::Config,
+    key::{
+        store::{FileStore, FileStoreError},
+        Scheme,
+    },
+    net::{
+        pool::{Pool, PoolSender},
+        protocol::PartialMsg,
+    },
+};
+use arc_swap::{ArcSwap, ArcSwapAny, Guard};
+use energon::drand::schemes::{
+    BN254UnchainedOnG1Scheme, DefaultScheme, SigsOnG1Scheme, UnchainedScheme,
+};
+use std::{path::PathBuf, sync::Arc};
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::Sender;
 
+/// Atomic storage for beacon handlers.
 type Snapshot = Guard<Arc<Vec<BeaconHandler>>>;
 
 #[derive(thiserror::Error, Debug)]
@@ -46,7 +41,7 @@ pub enum BeaconHandlerError {
 pub struct BeaconHandler {
     pub beacon_id: BeaconID,
     /// Sender for beacon commands
-    pub process_tx: Sender<BeaconCmd>,
+    pub process_tx: mpsc::Sender<BeaconCmd>,
     /// Sender for partial signature packets (hot path)
     pub partial_tx: mpsc::Sender<PartialMsg>,
 }

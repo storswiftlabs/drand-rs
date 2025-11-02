@@ -1,63 +1,42 @@
-use super::cache::get_partial_index;
-use super::cache::CACHE_LIMIT_ROUNDS;
-use super::epoch::EpochConfig;
-use super::epoch::EpochNode;
-use super::info::ChainInfo;
-use super::registry::Registry;
-use super::store::BeaconRepr;
-use super::store::ChainStore;
-use super::store::StoreError;
-use super::store::StoreStreamResponse;
-use super::sync::start_follow_chain;
-use super::sync::DefaultSyncer;
-use super::sync::SyncError;
-use super::sync::LOGS_TO_SKIP;
-use super::ticker;
-use super::time;
-
-use crate::core::beacon::BeaconID;
-use crate::key::group::Group;
-use crate::key::keys::DistPublic;
-use crate::key::store::FileStore;
-use crate::key::store::FileStoreError;
-use crate::key::Scheme;
-
-use crate::net::metrics;
-use crate::net::metrics::GroupMetrics;
-use crate::net::pool::PoolSender;
-use crate::net::protocol::PartialMsg;
-use crate::net::protocol::PartialPacket;
-use crate::net::utils::Address;
-use crate::net::utils::Callback;
-use crate::net::utils::Seconds;
-
-use crate::protobuf::drand::BeaconPacket;
-use crate::protobuf::drand::ChainInfoPacket;
-use crate::protobuf::drand::PartialBeaconPacket;
-use crate::protobuf::drand::StartSyncRequest;
-use crate::protobuf::drand::StatusResponse;
-use crate::protobuf::drand::SyncProgress;
-
-use energon::drand::traits::BeaconDigest;
-use energon::kyber::tbls::recover_unchecked;
-use energon::kyber::tbls::TBlsError;
-use energon::points::SigPoint;
-use energon::traits::Affine;
-
+use super::{
+    cache,
+    epoch::{EpochConfig, EpochNode},
+    info::ChainInfo,
+    registry::Registry,
+    store::{BeaconRepr, ChainStore, StoreError, StoreStreamResponse},
+    sync::{self, DefaultSyncer, SyncError, LOGS_TO_SKIP},
+    ticker, time,
+};
+use crate::{
+    core::beacon::BeaconID,
+    key::{
+        group::Group,
+        keys::DistPublic,
+        store::{FileStore, FileStoreError},
+        Scheme,
+    },
+    net::{
+        metrics::{self, GroupMetrics},
+        pool::PoolSender,
+        protocol::{PartialMsg, PartialPacket},
+        utils::{Address, Callback, Seconds},
+    },
+    protobuf::drand::{
+        BeaconPacket, ChainInfoPacket, PartialBeaconPacket, StartSyncRequest, StatusResponse,
+        SyncProgress,
+    },
+};
+use energon::{drand::traits::BeaconDigest, kyber::tbls, points::SigPoint, traits::Affine};
 use rand::seq::SliceRandom;
-use std::fmt::Debug;
-use std::time::Duration;
-use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
-use tokio::time::sleep;
-use tokio::time::Instant;
+use std::{fmt::Debug, time::Duration};
+use tokio::{
+    sync::mpsc,
+    task::JoinHandle,
+    time::{sleep, Instant},
+};
 use tokio_util::task::TaskTracker;
 use tonic::Status;
-use tracing::debug;
-use tracing::error;
-use tracing::info;
-use tracing::warn;
-use tracing::Span;
+use tracing::{debug, error, info, warn, Span};
 
 const SHORT_SIG_BYTES: usize = 3;
 
@@ -90,7 +69,7 @@ pub enum ChainError {
     #[error("chain store: {0}")]
     ChainStoreError(#[from] StoreError),
     #[error("t_bls: {0}")]
-    TBlsError(#[from] TBlsError),
+    TBlsError(#[from] tbls::TBlsError),
     #[error("fs: {0}")]
     FileStoreError(#[from] FileStoreError),
     #[error("no dkg group setup yet")]
@@ -339,7 +318,7 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
             && !reg.cache().is_share_present(self.ec.our_index())
         {
             if let Some(thr_sigs) = reg.cache_mut().add_prechecked(sigshare, &self.our_addres) {
-                let Ok(recovered) = recover_unchecked(thr_sigs) else {
+                let Ok(recovered) = tbls::recover_unchecked(thr_sigs) else {
                     error!(parent: &self.l, "recover_unchecked: scalar is non-invertable");
                     panic!()
                 };
@@ -407,7 +386,7 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
         reg.align_cache(&self.ec, &self.l)?;
 
         // Add packet to cache if p_round hits the allowed range and signature is not duplicated.
-        if p_round > ls_round + 1 && p_round <= ls_round + 1 + CACHE_LIMIT_ROUNDS {
+        if p_round > ls_round + 1 && p_round <= ls_round + 1 + cache::CACHE_LIMIT_ROUNDS {
             let Some(is_added) = reg.cache_mut().add_packet(partial.packet) else {
                 // Logical error.
                 error!(parent: &self.l, "cache_height {}: attempt to add non-allowed round {p_round}, current {c_round}, please report this.", reg.cache().height());
@@ -425,7 +404,7 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
 
         // Process packet as sigshare.
         } else if p_round == ls_round + 1 {
-            let Some(idx) = get_partial_index::<S>(&partial.packet.partial_sig) else {
+            let Some(idx) = cache::get_partial_index::<S>(&partial.packet.partial_sig) else {
                 return Err(ChainError::InvalidShareLenght {
                     expected: <S::Sig as energon::traits::Group>::POINT_SIZE + 2,
                     received: partial.packet.partial_sig.len(),
@@ -442,7 +421,7 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
             // Recover and save beacon.
             // Note: Sigshares are prechecked and sorted by their index.
             if let Some(thr_sigs) = reg.cache_mut().add_prechecked(valid_sigshare, node_addr) {
-                let Ok(recovered) = recover_unchecked(thr_sigs) else {
+                let Ok(recovered) = tbls::recover_unchecked(thr_sigs) else {
                     error!(parent: &self.l, "fatal: recover_unchecked: scalar is non-invertable");
                     panic!()
                 };
@@ -691,7 +670,7 @@ async fn follow_chain<S: Scheme, B: BeaconRepr>(
             "",
             follow_chain = format!("{}.{}", cc.private_listen, cc.id)
         );
-        let new_config = start_follow_chain(req, cc.id, &cc.store, l).await?;
+        let new_config = sync::start_follow_chain(req, cc.id, &cc.store, l).await?;
         let new_ci = new_config.chain_info_from_packet()?;
 
         if chain_info.genesis_seed.is_empty() {

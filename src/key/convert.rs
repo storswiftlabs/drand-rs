@@ -1,11 +1,7 @@
 //! Conversion between inner generic types and their raw representation
-
-use super::keys::Identity;
-use super::Scheme;
+use super::{keys::Identity, Scheme};
 use crate::protobuf::drand::IdentityResponse;
-
-use energon::backends::error::BackendsError;
-use energon::traits::Affine;
+use energon::{backends::error::BackendsError, traits::Affine};
 
 /// Error originates from points serialize/deserialize.
 #[derive(thiserror::Error, Debug)]

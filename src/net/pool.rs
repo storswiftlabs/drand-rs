@@ -1,18 +1,15 @@
-//! Basic implementation of connection pool for sending `PartialBeaconPacket`.
-
-use std::collections::BTreeMap;
-use std::collections::BTreeSet;
-use std::time::Duration;
-
-use tokio::sync::broadcast;
-use tokio::sync::mpsc;
-use tokio::sync::oneshot;
-use tracing::{debug, error, trace, warn, Span};
-
+//! Basic connection pool implementation for `PartialBeaconPacket` transmission.
+//! FIXME: pool logic could be simplified.
 use super::utils::Address;
-use crate::core::beacon::BeaconID;
-use crate::net::protocol::ProtocolClient;
-use crate::protobuf::drand::PartialBeaconPacket;
+use crate::{
+    core::beacon::BeaconID, net::protocol::ProtocolClient, protobuf::drand::PartialBeaconPacket,
+};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::Duration,
+};
+use tokio::sync::{broadcast, mpsc, oneshot};
+use tracing::{debug, error, trace, warn, Span};
 
 pub enum PoolCmd {
     Partial(PartialBeaconPacket),

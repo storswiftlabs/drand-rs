@@ -1,26 +1,18 @@
-//! Client and server implementations [`DkgPublic`] service.
-
-use super::utils::Address;
-use super::utils::Callback;
-use super::utils::ToStatus;
-use crate::core::beacon::Actions;
-use crate::core::beacon::BeaconCmd;
-use crate::core::daemon::Daemon;
-
-use crate::protobuf::dkg as protobuf;
-use crate::protobuf::dkg::dkg_public_client::DkgPublicClient as _DkgPublicClient;
-use crate::transport::ConvertProto;
-use protobuf::dkg_public_server::DkgPublic;
-use protobuf::DkgPacket;
-use protobuf::EmptyDkgResponse;
-use protobuf::GossipPacket;
-use tonic::transport::Channel;
-
-use std::ops::Deref;
-use std::sync::Arc;
-use tonic::Request;
-use tonic::Response;
-use tonic::Status;
+//! Client and server implementations for RPC [`DkgPublic`] service.
+use super::utils::{Address, Callback, ToStatus};
+use crate::{
+    core::{
+        beacon::{Actions, BeaconCmd},
+        daemon::Daemon,
+    },
+    protobuf::dkg::{
+        dkg_public_client::DkgPublicClient as DkgPublicClientInner, dkg_public_server::DkgPublic,
+        DkgPacket, EmptyDkgResponse, GossipPacket,
+    },
+    transport::ConvertProto,
+};
+use std::{ops::Deref, sync::Arc};
+use tonic::{transport::Channel, Request, Response, Status};
 
 /// Implementor for [`DkgPublic`] trait for use with `DkgPublicServer`.
 pub struct DkgPublicHandler(Arc<Daemon>);
@@ -71,13 +63,13 @@ impl DkgPublic for DkgPublicHandler {
 }
 
 pub struct DkgPublicClient {
-    client: _DkgPublicClient<Channel>,
+    client: DkgPublicClientInner<Channel>,
 }
 
 impl DkgPublicClient {
     pub async fn new(address: &Address) -> anyhow::Result<Self> {
         let channel = super::utils::connect(address).await?;
-        let client = _DkgPublicClient::new(channel);
+        let client = DkgPublicClientInner::new(channel);
         Ok(Self { client })
     }
 

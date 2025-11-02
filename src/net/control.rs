@@ -1,59 +1,34 @@
 //! Client and server implementations for RPC [`Control`] service.
-
-use super::dkg_control::DkgControlHandler;
-use super::utils::Callback;
-use super::utils::NewTcpListener;
-use super::utils::StartServerError;
-use super::utils::ToStatus;
-use super::utils::ERR_METADATA_IS_MISSING;
-
-use crate::cli::SyncConfig;
-use crate::core::beacon::BeaconCmd;
-use crate::core::daemon::Daemon;
-use crate::protobuf::dkg::dkg_control_server::DkgControlServer;
-use crate::protobuf::drand as protobuf;
-
-use protobuf::control_client::ControlClient as _ControlClient;
-use protobuf::control_server::Control;
-use protobuf::control_server::ControlServer;
-use protobuf::BackupDbRequest;
-use protobuf::BackupDbResponse;
-use protobuf::ChainInfoPacket;
-use protobuf::ChainInfoRequest;
-use protobuf::GroupPacket;
-use protobuf::GroupRequest;
-use protobuf::ListSchemesRequest;
-use protobuf::ListSchemesResponse;
-use protobuf::LoadBeaconRequest;
-use protobuf::LoadBeaconResponse;
-use protobuf::Metadata;
-use protobuf::Ping;
-use protobuf::Pong;
-use protobuf::PublicKeyRequest;
-use protobuf::PublicKeyResponse;
-use protobuf::RemoteStatusRequest;
-use protobuf::RemoteStatusResponse;
-use protobuf::ShutdownRequest;
-use protobuf::ShutdownResponse;
-use protobuf::StartSyncRequest;
-use protobuf::StatusRequest;
-use protobuf::StatusResponse;
-use protobuf::SyncProgress;
-
-use tokio_stream::wrappers::ReceiverStream;
-use tonic::transport::Channel;
-use tonic::transport::Server;
-use tonic::Request;
-use tonic::Response;
-use tonic::Status;
-use tracing::debug;
-use tracing::error;
-
-use std::ops::Deref;
-use std::pin::Pin;
-use std::sync::Arc;
-use tokio_stream::wrappers::TcpListenerStream;
-use tokio_stream::Stream;
+use super::{
+    dkg_control::DkgControlHandler,
+    utils::{Callback, NewTcpListener, StartServerError, ToStatus, ERR_METADATA_IS_MISSING},
+};
+use crate::{
+    cli::SyncConfig,
+    core::{beacon::BeaconCmd, daemon::Daemon},
+    protobuf::{
+        dkg::dkg_control_server::DkgControlServer,
+        drand::{
+            control_client::ControlClient as ControlClientInner,
+            control_server::{Control, ControlServer},
+            BackupDbRequest, BackupDbResponse, ChainInfoPacket, ChainInfoRequest, GroupPacket,
+            GroupRequest, ListSchemesRequest, ListSchemesResponse, LoadBeaconRequest,
+            LoadBeaconResponse, Metadata, Ping, Pong, PublicKeyRequest, PublicKeyResponse,
+            RemoteStatusRequest, RemoteStatusResponse, ShutdownRequest, ShutdownResponse,
+            StartSyncRequest, StatusRequest, StatusResponse, SyncProgress,
+        },
+    },
+};
+use std::{ops::Deref, pin::Pin, sync::Arc};
+use tokio_stream::{
+    wrappers::{ReceiverStream, TcpListenerStream},
+    Stream,
+};
+use tonic::{
+    transport::{Channel, Server},
+    Request, Response, Status,
+};
+use tracing::{debug, error};
 
 pub const DEFAULT_CONTROL_PORT: &str = "8888";
 pub const CONTROL_HOST: &str = "127.0.0.1";
@@ -281,14 +256,14 @@ pub async fn start<N: NewTcpListener>(
 
 /// Control client capable of issuing proto commands to a running daemon.
 pub struct ControlClient {
-    client: _ControlClient<Channel>,
+    client: ControlClientInner<Channel>,
 }
 
 impl ControlClient {
     pub async fn new(port: &str) -> anyhow::Result<Self> {
         let address = format!("http://{CONTROL_HOST}:{port}");
         let channel = Channel::from_shared(address)?.connect().await?;
-        let client = _ControlClient::new(channel);
+        let client = ControlClientInner::new(channel);
 
         Ok(Self { client })
     }

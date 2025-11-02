@@ -2,8 +2,7 @@
 //! or generated randomly within the DKG state machine rules (see: [`NodesGroup::generate_roles`]),
 //! which is useful for continuous resharing with different thresholds and participant roles (see: [`random_scenarios`]).
 use super::utils::*;
-use crate::dkg::status::Status;
-use crate::net::dkg_control::DkgControlClient;
+use crate::{dkg::status::Status, net::dkg_control::DkgControlClient};
 use std::time::Duration;
 use tokio::time::sleep;
 

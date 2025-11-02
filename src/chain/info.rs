@@ -1,11 +1,10 @@
-use crate::core::beacon::BeaconID;
-use crate::key::Scheme;
-use crate::net::utils::Seconds;
-use crate::protobuf::drand::ChainInfoPacket;
-use crate::protobuf::drand::Metadata;
-
-use energon::points::KeyPoint;
-use energon::traits::Affine;
+use crate::{
+    core::beacon::BeaconID,
+    key::Scheme,
+    net::utils::Seconds,
+    protobuf::drand::{ChainInfoPacket, Metadata},
+};
+use energon::{points::KeyPoint, traits::Affine};
 use sha2::Digest;
 use tracing::error;
 

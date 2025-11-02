@@ -1,6 +1,4 @@
-use crate::dkg::status::StateError;
-use crate::net::utils::InvalidAddress;
-
+use crate::{dkg::status::StateError, net::utils::InvalidAddress};
 use tonic::Status;
 
 /// Trait for conversion from protobuf.

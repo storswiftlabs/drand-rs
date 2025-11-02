@@ -1,16 +1,16 @@
-use super::group::Group;
-use super::keys::Pair;
-use super::toml::PairToml;
-use super::toml::Toml;
-use super::Scheme;
-
+use super::{
+    group::Group,
+    keys::Pair,
+    toml::{PairToml, Toml},
+    Scheme,
+};
 use energon::kyber::dkg::DistKeyShare;
-use std::fs::File;
-use std::fs::Permissions;
-use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
-use std::path::PathBuf;
+use std::{
+    fs::{File, Permissions},
+    io::Write,
+    os::unix::fs::PermissionsExt,
+    path::{Path, PathBuf},
+};
 use tracing::info;
 
 // Filesystem constants

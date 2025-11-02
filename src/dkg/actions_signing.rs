@@ -1,18 +1,13 @@
-use super::state::State;
-use super::ActionsError;
-
-use crate::core::beacon::BeaconProcess;
-use crate::key::Scheme;
-
-use crate::protobuf::dkg::AbortDkg;
-use crate::transport::dkg::AcceptProposal;
-use crate::transport::dkg::GossipData;
-use crate::transport::dkg::GossipPacket;
-use crate::transport::dkg::Participant;
-use crate::transport::dkg::ProposalTerms;
-use crate::transport::dkg::RejectProposal;
-use crate::transport::dkg::StartExecution;
-
+use super::{state::State, ActionsError};
+use crate::{
+    core::beacon::BeaconProcess,
+    key::Scheme,
+    protobuf::dkg::AbortDkg,
+    transport::dkg::{
+        AcceptProposal, GossipData, GossipPacket, Participant, ProposalTerms, RejectProposal,
+        StartExecution,
+    },
+};
 use energon::traits::Affine;
 use prost_types::Timestamp;
 use std::future::Future;

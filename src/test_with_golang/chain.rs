@@ -1,17 +1,14 @@
 use super::utils::*;
-use crate::chain::time::*;
-use crate::key::group::Group;
-use crate::key::toml::Toml;
-use crate::net::control::ControlClient;
-use crate::net::public::PublicClient;
-use crate::net::utils::Address;
-use crate::protobuf::drand::ChainInfoPacket;
-use energon::drand::schemes::BN254UnchainedOnG1Scheme;
-use energon::drand::schemes::DefaultScheme;
-use energon::drand::schemes::SigsOnG1Scheme;
-use energon::drand::schemes::UnchainedScheme;
-use energon::drand::traits::DrandScheme;
-
+use crate::{
+    chain::time::*,
+    key::{group::Group, toml::Toml},
+    net::{control::ControlClient, public::PublicClient, utils::Address},
+    protobuf::drand::ChainInfoPacket,
+};
+use energon::drand::{
+    schemes::{BN254UnchainedOnG1Scheme, DefaultScheme, SigsOnG1Scheme, UnchainedScheme},
+    traits::DrandScheme,
+};
 use std::time::Duration;
 use tokio::time::sleep;
 

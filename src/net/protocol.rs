@@ -1,45 +1,35 @@
-//! This module provides server and client implementations for Protocol.
-use super::dkg_public::DkgPublicHandler;
-use super::public::PublicHandler;
-use super::utils::Address;
-use super::utils::Callback;
-use super::utils::NewTcpListener;
-use super::utils::StartServerError;
-use super::utils::ToStatus;
-use super::utils::ERR_METADATA_IS_MISSING;
-
-use crate::chain::ChainError;
-use crate::core::beacon::BeaconCmd;
-use crate::core::daemon::Daemon;
-use crate::protobuf::dkg::dkg_public_server::DkgPublicServer;
-use crate::protobuf::drand as protobuf;
-use crate::transport::utils::ConvertProto;
-
-use protobuf::protocol_client::ProtocolClient as _ProtocolClient;
-use protobuf::protocol_server::Protocol;
-use protobuf::protocol_server::ProtocolServer;
-use protobuf::public_server::PublicServer;
-use protobuf::BeaconPacket;
-use protobuf::Empty;
-use protobuf::IdentityRequest;
-use protobuf::IdentityResponse;
-use protobuf::PartialBeaconPacket;
-use protobuf::StatusRequest;
-use protobuf::StatusResponse;
-use protobuf::SyncRequest;
-
-use std::ops::Deref;
-use std::pin::Pin;
-use std::sync::Arc;
-use tokio_stream::wrappers::ReceiverStream;
-use tokio_stream::wrappers::TcpListenerStream;
-use tokio_stream::Stream;
-use tonic::transport::Channel;
-use tonic::transport::Server;
-use tonic::Request;
-use tonic::Response;
-use tonic::Status;
-use tonic::Streaming;
+//! Client and server implementations for RPC [`Protocol`] service.
+use super::{
+    dkg_public::DkgPublicHandler,
+    public::PublicHandler,
+    utils::{
+        Address, Callback, NewTcpListener, StartServerError, ToStatus, ERR_METADATA_IS_MISSING,
+    },
+};
+use crate::{
+    chain::ChainError,
+    core::{beacon::BeaconCmd, daemon::Daemon},
+    protobuf::{
+        dkg::dkg_public_server::DkgPublicServer,
+        drand::{
+            protocol_client::ProtocolClient as ProtocolClientInner,
+            protocol_server::{Protocol, ProtocolServer},
+            public_server::PublicServer,
+            BeaconPacket, Empty, IdentityRequest, IdentityResponse, Metadata, PartialBeaconPacket,
+            StatusRequest, StatusResponse, SyncRequest,
+        },
+    },
+    transport::utils::ConvertProto,
+};
+use std::{ops::Deref, pin::Pin, sync::Arc};
+use tokio_stream::{
+    wrappers::{ReceiverStream, TcpListenerStream},
+    Stream,
+};
+use tonic::{
+    transport::{Channel, Server},
+    Request, Response, Status, Streaming,
+};
 use tracing::error;
 
 /// Contains partial beacon packet and sender IP.
@@ -52,7 +42,7 @@ pub struct PartialPacket {
 /// Alias for partial beacon packet with callback.
 pub type PartialMsg = (PartialPacket, Callback<(), ChainError>);
 
-/// Implementor for [`Protocol`] trait for use with `ProtocolServer`.
+/// Implementor for [`Protocol`] trait for use with [`ProtocolServer`].
 pub struct ProtocolHandler(Arc<Daemon>);
 
 #[tonic::async_trait]
@@ -80,7 +70,7 @@ impl Protocol for ProtocolHandler {
             .await
             .map_err(|recv_err| recv_err.to_status(id))?
             .map_err(|cmd_err| cmd_err.to_status(id))?;
-        identity.metadata = Some(protobuf::Metadata::with_id(id.to_string()));
+        identity.metadata = Some(Metadata::with_id(id.to_string()));
 
         Ok(Response::new(identity))
     }
@@ -174,13 +164,13 @@ pub async fn start_node<N: NewTcpListener>(
 
 #[derive(Clone)]
 pub struct ProtocolClient {
-    client: _ProtocolClient<Channel>,
+    client: ProtocolClientInner<Channel>,
 }
 
 impl ProtocolClient {
     pub async fn new(address: &Address) -> anyhow::Result<Self> {
         let channel = super::utils::connect(address).await?;
-        let client = _ProtocolClient::new(channel);
+        let client = ProtocolClientInner::new(channel);
 
         Ok(Self { client })
     }
@@ -190,7 +180,7 @@ impl ProtocolClient {
         beacon_id: String,
     ) -> anyhow::Result<crate::transport::drand::IdentityResponse> {
         let request = IdentityRequest {
-            metadata: Some(protobuf::Metadata::golang_node_version(beacon_id, None)),
+            metadata: Some(Metadata::golang_node_version(beacon_id, None)),
         };
         let response = self.client.get_identity(request).await?;
         let inner = response.into_inner().validate()?;
@@ -205,7 +195,7 @@ impl ProtocolClient {
     ) -> anyhow::Result<Streaming<BeaconPacket>> {
         let request = SyncRequest {
             from_round,
-            metadata: Some(protobuf::Metadata::with_id(beacon_id)),
+            metadata: Some(Metadata::with_id(beacon_id)),
         };
         let stream = self.client.sync_chain(request).await?.into_inner();
 

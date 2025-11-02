@@ -1,15 +1,10 @@
 //! This module provides API to setup and report metrics.
-use crate::core::beacon::BeaconID;
-use crate::net::utils::Address;
-
+use crate::{core::beacon::BeaconID, net::utils::Address};
 use anyhow::bail;
 use metrics::{describe_gauge, gauge};
 use metrics_exporter_prometheus::PrometheusBuilder;
 use metrics_util::MetricKindMask;
-
-use std::net::SocketAddr;
-use std::str::FromStr;
-use std::time::Duration;
+use std::{net::SocketAddr, str::FromStr, time::Duration};
 
 pub fn setup_metrics(address: &str) -> anyhow::Result<()> {
     let address = Address::precheck(address)?;
@@ -69,7 +64,7 @@ fn group_size(id: BeaconID, value: f64) {
     gauge!("group_size", "beacon_id" => id.as_str()).set(value);
 }
 
-/// Helper to report metrics once recovered or synced beacon is saved sussecfully to persistent storage.
+/// Helper to report metrics once recovered or synced beacon is saved successfully to persistent storage.
 pub fn report_metrics_on_put(
     id: BeaconID,
     discrepancy: u128,

@@ -1,9 +1,5 @@
-use super::actions_signing::ActionsSigning;
-use super::ActionsError;
-
-use crate::core::beacon::BeaconProcess;
-use crate::key::Scheme;
-use crate::transport::dkg::GossipPacket;
+use super::{actions_signing::ActionsSigning, ActionsError};
+use crate::{core::beacon::BeaconProcess, key::Scheme, transport::dkg::GossipPacket};
 use prost_types::Timestamp;
 use std::future::Future;
 

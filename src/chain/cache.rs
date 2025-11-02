@@ -1,14 +1,8 @@
 use super::epoch::EpochConfig;
-use crate::key::Scheme;
-use crate::net::utils::Address;
-use crate::protobuf::drand::PartialBeaconPacket;
-
+use crate::{key::Scheme, net::utils::Address, protobuf::drand::PartialBeaconPacket};
 use energon::kyber::tbls::SigShare;
 use std::collections::VecDeque;
-use tracing::debug;
-use tracing::error;
-use tracing::warn;
-use tracing::Span;
+use tracing::{debug, error, warn, Span};
 
 /// Partials that are up to this amount of rounds more than the last
 /// beacon we have - it is useful for quick catchup.

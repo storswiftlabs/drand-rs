@@ -4,5 +4,4 @@
 pub mod dkg;
 pub mod drand;
 pub mod utils;
-
 pub use utils::ConvertProto;

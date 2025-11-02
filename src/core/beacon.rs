@@ -1,47 +1,27 @@
 use super::multibeacon::BeaconHandler;
-use crate::chain::init_chain;
-use crate::chain::ChainCmd;
-use crate::chain::ChainError;
-use crate::chain::ChainedBeacon;
-use crate::chain::StoreError;
-use crate::chain::StoreStreamResponse;
-use crate::chain::SyncError;
-use crate::chain::UnChainedBeacon;
-
-use crate::dkg::actions_active::ActionsActive;
-use crate::dkg::actions_passive::ActionsPassive;
-use crate::dkg::execution::ExecuteDkg;
-use crate::dkg::store::DkgStore;
-use crate::dkg::utils::GateKeeper;
-use crate::dkg::ActionsError;
-
-use crate::key::keys::Identity;
-use crate::key::keys::Pair;
-use crate::key::store::FileStore;
-use crate::key::store::FileStoreError;
-use crate::key::toml::PairToml;
-use crate::key::toml::Toml;
-use crate::key::PointSerDeError;
-use crate::key::Scheme;
-
-use crate::net::control::SyncProgressResponse;
-use crate::net::pool::PoolSender;
-use crate::net::protocol::PartialMsg;
-use crate::protobuf::drand::StartSyncRequest;
-use crate::protobuf::drand::StatusResponse;
-
-use crate::protobuf::dkg::DkgPacket;
-use crate::protobuf::dkg::DkgStatusResponse;
-use crate::protobuf::drand::ChainInfoPacket;
-use crate::protobuf::drand::IdentityResponse;
-
-use crate::net::utils::Callback;
-use crate::transport::dkg::Command;
-use crate::transport::dkg::GossipPacket;
-use crate::transport::dkg::Participant;
-
+use crate::{
+    chain::{
+        init_chain, ChainCmd, ChainError, ChainedBeacon, StoreError, StoreStreamResponse,
+        SyncError, UnChainedBeacon,
+    },
+    dkg::{
+        actions_active::ActionsActive, actions_passive::ActionsPassive, execution::ExecuteDkg,
+        store::DkgStore, utils::GateKeeper, ActionsError,
+    },
+    key::{
+        keys::{Identity, Pair},
+        store::{FileStore, FileStoreError},
+        toml::{PairToml, Toml},
+        PointSerDeError, Scheme,
+    },
+    net::{control::SyncProgressResponse, pool::PoolSender, protocol::PartialMsg, utils::Callback},
+    protobuf::{
+        dkg::{DkgPacket, DkgStatusResponse},
+        drand::{ChainInfoPacket, IdentityResponse, StartSyncRequest, StatusResponse},
+    },
+    transport::dkg::{Command, GossipPacket, Participant},
+};
 use energon::drand::traits::BeaconDigest;
-
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::task::TaskTracker;

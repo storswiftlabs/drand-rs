@@ -1,17 +1,17 @@
 use super::handler::ChainError;
-use crate::key::node::Node;
-use crate::key::Scheme;
-use crate::net::metrics::GroupMetrics;
-use crate::net::utils::Address;
-use crate::protobuf::drand::PartialBeaconPacket;
-
-use energon::drand::traits::BeaconDigest;
-use energon::kyber::dkg;
-use energon::kyber::poly::PubPoly;
-use energon::kyber::poly::PubShare;
-use energon::kyber::tbls;
-use energon::kyber::tbls::SigShare;
-use energon::kyber::tbls::TBlsError;
+use crate::{
+    key::{node::Node, Scheme},
+    net::{metrics::GroupMetrics, utils::Address},
+    protobuf::drand::PartialBeaconPacket,
+};
+use energon::{
+    drand::traits::BeaconDigest,
+    kyber::{
+        dkg,
+        poly::{PubPoly, PubShare},
+        tbls::{self, SigShare, TBlsError},
+    },
+};
 
 /// Remote node representation per epoch.
 pub struct EpochNode<S: Scheme> {

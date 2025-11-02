@@ -1,17 +1,12 @@
 //! Types are re-exported directly if their fields DO NOT contain:
 //!  - option<T> instead of T
 //!  - protected new pattern types
-
-use super::utils::from_vec;
-use super::utils::try_from_vec;
-use super::utils::ConvertProto;
-use super::utils::RequireSome;
-use super::utils::TransportError;
-use crate::dkg::status::Status as DkgStatus;
-use crate::net::utils::Address;
-use crate::net::utils::Seconds;
-use crate::protobuf;
-use crate::protobuf::drand::Metadata;
+use super::utils::{from_vec, try_from_vec, ConvertProto, RequireSome, TransportError};
+use crate::{
+    dkg::status::Status as DkgStatus,
+    net::utils::{Address, Seconds},
+    protobuf::{self, drand::Metadata},
+};
 
 impl ConvertProto for protobuf::drand::Address {
     type Inner = Address;

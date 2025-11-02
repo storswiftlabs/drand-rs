@@ -1,14 +1,16 @@
+//! Client implementation for healthcheck service.
 use super::utils::Address;
-use tonic_health::pb::health_client::HealthClient as _HealthClient;
-use tonic_health::pb::HealthCheckRequest;
-use tonic_health::ServingStatus;
+use tonic_health::{
+    pb::{health_client::HealthClient as HealthClientInner, HealthCheckRequest},
+    ServingStatus,
+};
 
 pub struct HealthClient;
 
 impl HealthClient {
     pub async fn check(address: &Address) -> anyhow::Result<()> {
         let channel = super::utils::connect(address).await?;
-        let mut client = _HealthClient::new(channel);
+        let mut client = HealthClientInner::new(channel);
 
         let resp = client
             .check(HealthCheckRequest::default())

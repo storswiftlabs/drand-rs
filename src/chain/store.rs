@@ -1,20 +1,12 @@
-use crate::core::beacon::BeaconID;
-use crate::net::utils::Callback;
-use crate::protobuf::drand::BeaconPacket;
-use crate::protobuf::drand::Metadata;
-
-use rusqlite::params;
-use rusqlite::Connection;
-use rusqlite::Error;
-use rusqlite::OpenFlags;
-
-use std::path::Path;
-use std::path::PathBuf;
-use tokio::sync::mpsc;
-use tokio::task;
-use tracing::error;
-use tracing::warn;
-use tracing::Span;
+use crate::{
+    core::beacon::BeaconID,
+    net::utils::Callback,
+    protobuf::drand::{BeaconPacket, Metadata},
+};
+use rusqlite::{params, Connection, Error, OpenFlags};
+use std::path::{Path, PathBuf};
+use tokio::{sync::mpsc, task};
+use tracing::{error, warn, Span};
 
 /// Number of beacons retrieved in a single query from chain DB.
 const BATCH_SIZE: u64 = 300;

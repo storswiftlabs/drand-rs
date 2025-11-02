@@ -1,18 +1,10 @@
-use super::cache::PartialCache;
-use super::epoch::EpochConfig;
-use super::handler::ChainError;
-use super::info::ChainInfo;
-use super::store::BeaconRepr;
-use super::sync::HandleReSync;
-use super::time;
-use super::SyncError;
-use crate::key::Scheme;
-use crate::net::utils::Seconds;
-use crate::protobuf::drand::BeaconPacket;
-
+use super::{
+    cache::PartialCache, epoch::EpochConfig, handler::ChainError, info::ChainInfo,
+    store::BeaconRepr, sync::HandleReSync, time, SyncError,
+};
+use crate::{key::Scheme, net::utils::Seconds, protobuf::drand::BeaconPacket};
 use std::time::Duration;
-use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
+use tokio::{sync::mpsc, task::JoinHandle};
 use tracing::Span;
 
 /// Registry holds actual data which might be changed per / within a round.

@@ -1,9 +1,5 @@
-use super::keys::DistPublic;
-use super::Hash;
-
-use super::Scheme;
-use crate::key::node::Node;
-use crate::net::utils::Seconds;
+use super::{keys::DistPublic, Hash, Scheme};
+use crate::{key::node::Node, net::utils::Seconds};
 use energon::traits::Affine;
 use sha2::Digest;
 

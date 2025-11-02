@@ -1,35 +1,24 @@
-use super::actions_signing::enc_participant;
-use super::actions_signing::enc_timestamp;
-use super::actions_signing::GossipAuth;
-use super::status::StateError;
-use super::status::Status;
-
-use crate::key::group::minimum_t;
-use crate::key::group::Group;
-use crate::key::toml::Toml;
-use crate::key::PointSerDeError;
-use crate::key::Scheme;
-
-use crate::transport::dkg::GossipData;
-use crate::transport::dkg::GossipMetadata;
-use crate::transport::dkg::GossipPacket;
-use crate::transport::dkg::Participant;
-use crate::transport::dkg::ProposalTerms;
-use crate::transport::dkg::Timestamp;
-
-use crate::net::utils::Address;
-use crate::net::utils::Seconds;
-
+use super::{
+    actions_signing::{enc_participant, enc_timestamp, GossipAuth},
+    status::{StateError, Status},
+};
+use crate::{
+    key::{
+        group::{minimum_t, Group},
+        toml::Toml,
+        PointSerDeError, Scheme,
+    },
+    net::utils::{Address, Seconds},
+    transport::dkg::{
+        GossipData, GossipMetadata, GossipPacket, Participant, ProposalTerms, Timestamp,
+    },
+};
 use energon::kyber::dkg::DistKeyShare;
-use std::str::FromStr;
-use std::time::SystemTime;
-use toml_edit::ArrayOfTables;
-use toml_edit::DocumentMut;
-use toml_edit::Item;
-use toml_edit::Table;
+use std::{str::FromStr, time::SystemTime};
+use toml_edit::{ArrayOfTables, DocumentMut, Item, Table};
 use tracing::error;
 
-#[allow(dead_code, reason = "not fully implemented")]
+#[allow(dead_code, reason = "subset of errors is reserved for Leader logic")]
 #[derive(thiserror::Error, Debug)]
 pub enum DBStateError {
     #[error("proposal terms cannot be empty")]

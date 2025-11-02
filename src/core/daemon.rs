@@ -1,20 +1,15 @@
-use super::beacon::BeaconCmd;
-use super::multibeacon::BeaconHandler;
-use super::multibeacon::BeaconHandlerError;
-use super::multibeacon::MultiBeacon;
-
-use crate::cli::Config;
-use crate::key::store::FileStore;
-use crate::key::store::FileStoreError;
-use crate::net::utils::Callback;
-use crate::net::utils::StartServerError;
-
-use std::path::PathBuf;
-use std::sync::Arc;
-use tokio_util::sync::CancellationToken;
-use tokio_util::task::TaskTracker;
-use tracing::error;
-use tracing::info;
+use super::{
+    beacon::BeaconCmd,
+    multibeacon::{BeaconHandler, BeaconHandlerError, MultiBeacon},
+};
+use crate::{
+    cli::Config,
+    key::store::{FileStore, FileStoreError},
+    net::utils::{Callback, StartServerError},
+};
+use std::{path::PathBuf, sync::Arc};
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
+use tracing::{error, info};
 
 #[derive(thiserror::Error, Debug)]
 pub enum DaemonError {

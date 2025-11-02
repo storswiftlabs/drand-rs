@@ -4,36 +4,31 @@
 //!   download historical beacons up to current height from chain node.
 //! - Resync is triggered automatically by chain nodes once latest stored
 //!   beacon is more than one round late for expected chain height.
-use super::info::ChainInfo;
-use super::store::BeaconRepr;
-use super::store::ChainStore;
-use super::StoreError;
-
-use crate::core::beacon::BeaconID;
-use crate::key::Scheme;
-use crate::net::control::SyncProgressResponse;
-use crate::net::protocol::ProtocolClient;
-use crate::net::public::PublicClient;
-use crate::net::utils::Address;
-use crate::net::utils::Seconds;
-use crate::protobuf::drand::BeaconPacket;
-use crate::protobuf::drand::ChainInfoPacket;
-use crate::protobuf::drand::StartSyncRequest;
-use crate::protobuf::drand::SyncProgress;
-
+use super::{
+    info::ChainInfo,
+    store::{BeaconRepr, ChainStore, StoreError},
+};
+use crate::{
+    core::beacon::BeaconID,
+    key::Scheme,
+    net::{
+        control::SyncProgressResponse,
+        protocol::ProtocolClient,
+        public::PublicClient,
+        utils::{Address, Seconds},
+    },
+    protobuf::drand::{BeaconPacket, ChainInfoPacket, StartSyncRequest, SyncProgress},
+};
 use energon::traits::Affine;
 use rand::seq::SliceRandom;
 use std::time::Duration;
-use tokio::sync::mpsc;
-use tokio::task;
-use tokio::task::JoinHandle;
-use tokio::time::Instant;
+use tokio::{
+    sync::mpsc,
+    task::{self, JoinHandle},
+    time::Instant,
+};
 use tonic::Status;
-use tracing::debug;
-use tracing::error;
-use tracing::info;
-use tracing::warn;
-use tracing::Span;
+use tracing::{debug, error, info, warn, Span};
 
 /// Renew resync if no beacons received for factor*period duration.
 const RESYNC_EXPIRY_FACTOR: u8 = 2;

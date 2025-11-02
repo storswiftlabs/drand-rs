@@ -1,29 +1,23 @@
-use crate::key::Scheme;
-use crate::net::dkg_public::DkgPublicClient;
-use crate::net::utils::Address;
-
-use crate::protobuf::dkg::packet::Bundle as ProtoBundle;
-use crate::protobuf::dkg::DkgPacket;
-use crate::protobuf::drand::Metadata;
-use crate::transport::dkg::Participant;
-
-use energon::kyber::dkg::Bundle;
-use energon::kyber::dkg::BundleReceiver;
-use energon::kyber::dkg::Deal;
-use energon::kyber::dkg::DealBundle;
-use energon::kyber::dkg::Justification;
-use energon::kyber::dkg::JustificationBundle;
-use energon::kyber::dkg::Response;
-use energon::kyber::dkg::ResponseBundle;
-use energon::points::KeyPoint;
-use energon::traits::Affine;
-use energon::traits::ScalarField;
-
+use crate::{
+    key::Scheme,
+    net::{dkg_public::DkgPublicClient, utils::Address},
+    protobuf::{
+        dkg::{packet::Bundle as ProtoBundle, DkgPacket},
+        drand::Metadata,
+    },
+    transport::dkg::Participant,
+};
+use energon::{
+    kyber::dkg::{
+        Bundle, BundleReceiver, Deal, DealBundle, Justification, JustificationBundle, Response,
+        ResponseBundle,
+    },
+    points::KeyPoint,
+    traits::{Affine, ScalarField},
+};
 use tokio::sync::broadcast;
 use tokio_util::task::TaskTracker;
-use tracing::debug;
-use tracing::error;
-use tracing::Span;
+use tracing::{debug, error, Span};
 
 #[derive(Clone)]
 pub(super) enum BroadcastCmd {

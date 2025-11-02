@@ -1,25 +1,16 @@
-use super::group::Group;
-use super::keys::DistPublic;
-use super::keys::Identity;
-use super::keys::Pair;
-use super::keys::Share;
-use super::node::Node;
-use super::Scheme;
-use crate::net::utils::Address;
-use crate::net::utils::Seconds;
-
-use energon::kyber::dkg::DistKeyShare;
-use energon::kyber::poly::PriShare;
-use energon::traits::Affine;
-use energon::traits::ScalarField;
-
+use super::{
+    group::Group,
+    keys::{DistPublic, Identity, Pair, Share},
+    node::Node,
+    Scheme,
+};
+use crate::net::utils::{Address, Seconds};
+use energon::{
+    kyber::{dkg::DistKeyShare, poly::PriShare},
+    traits::{Affine, ScalarField},
+};
 use std::str::FromStr;
-use toml_edit::Array;
-use toml_edit::ArrayOfTables;
-use toml_edit::DocumentMut;
-use toml_edit::Item;
-use toml_edit::Table;
-use toml_edit::Value;
+use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, Value};
 
 pub trait Toml: Sized {
     type Inner;

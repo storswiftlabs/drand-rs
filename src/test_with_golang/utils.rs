@@ -1,22 +1,13 @@
 //! Utilities for testing Drand-rs with Drand-go (v2.1.2-insecure bebad8fc).
-
-use crate::cli::*;
-use crate::dkg::status::Status;
-use crate::key::Scheme;
-use crate::net::dkg_control::DkgControlClient;
-use crate::protobuf::dkg::DkgEntry;
-
+use crate::{
+    cli::*, dkg::status::Status, key::Scheme, net::dkg_control::DkgControlClient,
+    protobuf::dkg::DkgEntry,
+};
 use energon::kyber::dkg::minimum_t;
-use rand::rngs::ThreadRng;
-use rand::seq::SliceRandom;
-use rand::Rng;
-use std::env;
-use std::fmt::Write as _;
-use std::fs::File;
-use std::io::Write;
-use std::path::PathBuf;
-use std::sync::LazyLock;
-use std::time::Duration;
+use rand::{rngs::ThreadRng, seq::SliceRandom, Rng};
+use std::{
+    env, fmt::Write as _, fs::File, io::Write, path::PathBuf, sync::LazyLock, time::Duration,
+};
 use tokio::time::sleep;
 use tracing::*;
 
