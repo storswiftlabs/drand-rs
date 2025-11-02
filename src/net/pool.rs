@@ -40,7 +40,6 @@ impl Pool {
         let (tx_cmd, mut rx_cmd) = mpsc::channel::<PoolCmd>(1);
         let (tx_new_conn, mut rx_new_conn) = mpsc::channel::<(Address, ProtocolClient)>(1);
 
-        debug!(parent: &l, "pool initialized");
         tokio::spawn(async move {
             let mut pool = Self {
                 shutdown: false,
@@ -60,7 +59,7 @@ impl Pool {
 
                     cmd = rx_cmd.recv()=> {
                         if pool.shutdown {
-                            warn!(parent: &pool.l, "PoolCmd::AddID: pool is shutting down, ignoring message");
+                            warn!(parent: &pool.l, "AddID: pool is shutting down, ignoring message");
                             continue;
                         }
 
@@ -116,8 +115,6 @@ impl Pool {
                     beacon_ids: pending_conn.beacon_ids,
                 },
             );
-        } else {
-            error!(parent: &self.l, "add_connection:: this should not be possible");
         }
     }
 
@@ -136,9 +133,9 @@ impl Pool {
         }
         for (id, sender) in &self.enabled_beacons {
             if beacon_id == id.as_str() {
-                if let Err(e) = sender.send(msg.clone()) {
+                if let Err(err) = sender.send(msg.clone()) {
                     error!(parent: &self.l,
-                        "broadcast: {e}, id: {}",
+                        "broadcast: {err}, id: {}",
                         msg.metadata.as_ref().unwrap().beacon_id
                     );
                 }
@@ -162,10 +159,9 @@ impl Pool {
                     let l = &ll;
                     while let Ok(msg) = receiver.recv().await {
                         let round = msg.round;
+                        debug!(parent: l, "sending partial: round: {round}, to: {peer}");
                         if let Err(err) = conn.partial_beacon(msg).await {
-                            error!(parent: l, "sending partial: round {round} to: {peer}, error: {}", err.root_cause());
-                        } else {
-                            debug!(parent: l, "sending partial {{\"round\": {round}, \"to\": \"{peer}\"}}");
+                            error!(parent: l, "sending partial: round: {round}, to: {peer}, error: {}", err.root_cause());
                         }
                     }
                     debug!(parent: l, "disabled subscription: {peer}");

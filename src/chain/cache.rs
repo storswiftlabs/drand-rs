@@ -107,7 +107,7 @@ impl<S: Scheme> PartialCache<S> {
         peer: &Address,
     ) -> Option<&[SigShare<S>]> {
         self.valid_sigs.push(valid_sig);
-        debug!(parent: &self.l, "{{\"store_partial\": \"{peer}\", \"round\": {}, \"len_partials\": \"{}/{}\"}}\"", self.height +1, self.thr, self.valid_sigs.len());
+        debug!(parent: &self.l, "store_partial: {peer}, round: {}, len_partials: {}/{}", self.height +1, self.thr, self.valid_sigs.len());
 
         if self.valid_sigs.len() < self.thr {
             return None;

@@ -333,7 +333,7 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
             .get(..SHORT_SIG_BYTES)
             .unwrap_or_default();
         let short_msg = msg.get(..SHORT_SIG_BYTES).expect("always 32 bytes");
-        debug!(parent: &self.l,"{{\"broadcast_partial\": {round}, \"prev_sig\": \"{}\", \"msg_sign\": \"{}\"}}", hex::encode(short_prev_sig), hex::encode(short_msg));
+        debug!(parent: &self.l,"broadcast_partial: {round}, prev_sig: {}, msg_sign: {}", hex::encode(short_prev_sig), hex::encode(short_msg));
         let packet = PartialBeaconPacket {
             round,
             previous_signature,
@@ -469,7 +469,7 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
             let start = Instant::now();
             self.store.put(valid_beacon.clone()).await?;
             let storage_time = start.elapsed().as_millis();
-            info!(parent: &self.l,"{{\"NEW_BEACON_STORED\": \"{{ round: {r_round}, sig: {}, prevSig: {:?} }}\", \"time_discrepancy_ms\": {discrepancy}, \"storage_time_ms\": {storage_time}", valid_beacon.short_sig(), valid_beacon.short_prev_sig().unwrap_or_default());
+            info!(parent: &self.l, "NEW_BEACON_STORED: round: {r_round}, sig: {}, prevSig: {:?}, time_discrepancy_ms: {discrepancy}, storage_time_ms: {storage_time}", valid_beacon.short_sig(), valid_beacon.short_prev_sig().unwrap_or_default());
 
             metrics::report_metrics_on_put(
                 self.chain_info.beacon_id,
@@ -486,7 +486,7 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
             let ls_round = reg.latest_stored().round();
             let c_round = reg.current_round();
             let catchup_launch = c_round > ls_round;
-            debug!(parent: &self.l, "{{\"beacon_loop\": \"catchupmode\", \"last_is\" {ls_round}, \"current\": {c_round}, \"catchup_launch\": {catchup_launch}}}");
+            debug!(parent: &self.l, "beacon_loop: catchupmode, last_is {ls_round}, current: {c_round}, catchup_launch: {catchup_launch}");
             if catchup_launch {
                 reg.start_catchup(self.catchup_period);
             }
@@ -725,7 +725,7 @@ async fn run_chain<S: Scheme, B: BeaconRepr>(
                 };
                 reg.new_round(round);
 
-                info!(parent: &h.l, "{{\"beacon_loop\": \"new_round\", \"round\": {}, \"lastbeacon\": {}}}", reg.current_round(), reg.latest_stored().round());
+                info!(parent: &h.l, "beacon_loop: new_round, round: {}, lastbeacon: {}", reg.current_round(), reg.latest_stored().round());
                 let partial = h.sign_partial(&mut reg).await?;
                 h.broadcast(partial).await?;
 
