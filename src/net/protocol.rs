@@ -2,9 +2,7 @@
 use super::{
     dkg_public::DkgPublicHandler,
     public::PublicHandler,
-    utils::{
-        Address, Callback, NewTcpListener, StartServerError, ToStatus, ERR_METADATA_IS_MISSING,
-    },
+    utils::{Address, Callback, NewTcpListener, ToStatus, ERR_METADATA_IS_MISSING},
 };
 use crate::{
     chain::ChainError,
@@ -21,6 +19,7 @@ use crate::{
     },
     transport::utils::ConvertProto,
 };
+use anyhow::anyhow;
 use std::{ops::Deref, pin::Pin, sync::Arc};
 use tokio_stream::{
     wrappers::{ReceiverStream, TcpListenerStream},
@@ -30,7 +29,12 @@ use tonic::{
     transport::{Channel, Server},
     Request, Response, Status, Streaming,
 };
-use tracing::error;
+
+/// Alias for partial beacon packet with callback.
+pub type PartialMsg = (PartialPacket, Callback<bool, ChainError>);
+
+/// Implementor for [`Protocol`] trait for use with [`ProtocolServer`].
+pub struct ProtocolHandler(Arc<Daemon>);
 
 /// Contains partial beacon packet and sender IP.
 pub struct PartialPacket {
@@ -38,12 +42,6 @@ pub struct PartialPacket {
     // X-REAL-IP from request metadata.
     pub from: String,
 }
-
-/// Alias for partial beacon packet with callback.
-pub type PartialMsg = (PartialPacket, Callback<(), ChainError>);
-
-/// Implementor for [`Protocol`] trait for use with [`ProtocolServer`].
-pub struct ProtocolHandler(Arc<Daemon>);
 
 #[tonic::async_trait]
 impl Protocol for ProtocolHandler {
@@ -84,7 +82,6 @@ impl Protocol for ProtocolHandler {
             .get("x-real-ip")
             .map_or_else(|| "", |v| v.to_str().unwrap_or_default())
             .to_string();
-
         let partial = PartialPacket {
             packet: request.into_inner(),
             from,
@@ -95,7 +92,8 @@ impl Protocol for ProtocolHandler {
             .send_partial((partial, tx))
             .await
             .map_err(|err| Status::unknown(err.to_string()))?;
-        rx.await
+        let _reserved = rx
+            .await
             .map_err(|err| Status::unknown(err.to_string()))?
             .map_err(|err| Status::unknown(err.to_string()))?;
 
@@ -137,11 +135,10 @@ impl Protocol for ProtocolHandler {
 pub async fn start_node<N: NewTcpListener>(
     daemon: Arc<Daemon>,
     node_listener: N::Config,
-) -> Result<(), StartServerError> {
-    let listener = N::bind(node_listener).await.map_err(|err| {
-        error!("listener: {}, {}", StartServerError::FailedToStartNode, err);
-        StartServerError::FailedToStartNode
-    })?;
+) -> anyhow::Result<()> {
+    let listener = N::bind(node_listener)
+        .await
+        .map_err(|err| anyhow!("failed to start node: {err}"))?;
     let token = daemon.cancellation_token();
 
     let (_health_reporter, health_service) = tonic_health::server::health_reporter();
@@ -153,11 +150,7 @@ pub async fn start_node<N: NewTcpListener>(
         .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async move {
             let () = token.cancelled().await;
         })
-        .await
-        .map_err(|err| {
-            error!("{}, {err}", StartServerError::FailedToStartNode);
-            StartServerError::FailedToStartNode
-        })?;
+        .await?;
 
     Ok(())
 }
@@ -203,7 +196,9 @@ impl ProtocolClient {
     }
 
     pub async fn partial_beacon(&mut self, packet: PartialBeaconPacket) -> anyhow::Result<()> {
-        let _ = self.client.partial_beacon(packet).await?;
+        if let Err(err) = self.client.partial_beacon(packet).await {
+            anyhow::bail!("{}", err.message());
+        };
 
         Ok(())
     }

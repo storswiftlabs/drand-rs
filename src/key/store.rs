@@ -11,7 +11,6 @@ use std::{
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
 };
-use tracing::info;
 
 // Filesystem constants
 const DEFAULT_DIR: &str = ".drand";
@@ -46,9 +45,9 @@ pub enum FileStoreError {
     TomlError,
     #[error("schemes in public and private parts must be equal and non-empty")]
     InvalidPairSchemes,
-    #[error("beacon id is not found in filestore")]
+    #[error("beacon_id is not found in filestore")]
     BeaconNotFound,
-    #[error("beacon id is failed to init, unknown scheme")]
+    #[error("beacon_id is failed to init, unknown scheme")]
     FailedInitID,
     #[error("failed ro read beacon id from path")]
     FailedToReadID,
@@ -135,10 +134,6 @@ impl FileStore {
         if stores.is_empty() {
             return Err(FileStoreError::BeaconNotFound);
         }
-        info!(
-            "Detected stores, folder: {multibeacon:?}, amount: {}",
-            stores.len()
-        );
 
         Ok((multibeacon, stores))
     }

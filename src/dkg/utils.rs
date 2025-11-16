@@ -1,16 +1,18 @@
 use super::{broadcast::Convert, ActionsError};
 use crate::{
     key::{KeyPoint, Scheme, SigPoint},
+    log::Logger,
     protobuf::dkg::{packet::Bundle as ProtoBundle, DkgPacket},
     transport::dkg::{GossipPacket, Participant},
+    {debug, warn},
 };
 use energon::{
     kyber::dkg::{Bundle, BundleSender},
     traits::Affine,
 };
+
 use std::collections::HashSet;
 use tabled::{settings::Style, Table, Tabled};
-use tracing::{debug, trace, Span};
 
 const SHORT_SIG_BYTES: usize = 3;
 
@@ -38,15 +40,15 @@ impl Participant {
 pub struct GateKeeper<S: Scheme> {
     seen_gossip: HashSet<String>,
     bundle_sender: Option<BundleSender<S>>,
-    log: Span,
+    log: Logger,
 }
 
 impl<S: Scheme> GateKeeper<S> {
-    pub fn new(log: &Span) -> Self {
+    pub fn new(log: Logger) -> Self {
         Self {
             seen_gossip: HashSet::new(),
             bundle_sender: None,
-            log: log.to_owned(),
+            log,
         }
     }
 
@@ -74,14 +76,23 @@ impl<S: Scheme> GateKeeper<S> {
         if let Some(short_sig) = p.metadata.signature.get(..SHORT_SIG_BYTES) {
             let sig_hex = hex::encode(short_sig);
             if self.seen_gossip.contains(&sig_hex) {
-                trace!(parent: &self.log, "gatekeeper: ignoring duplicate gossip packet, type: {} sig: {sig_hex}, from: {}", p.data, p.metadata.address);
+                debug!(
+                    &self.log,
+                    "gatekeeper: ignoring duplicate gossip packet: type {}, sig {sig_hex}, from {}",
+                    p.data,
+                    p.metadata.address
+                );
             } else {
-                debug!(parent: &self.log, "gatekeeper: processing DKG gossip packet, type: {}, sig: {sig_hex}, id: {}, allegedly from: {}",
+                debug!(&self.log, "gatekeeper: processing DKG gossip packet: type {}, sig {sig_hex}, id {}, allegedly from {}",
                       p.data, p.metadata.beacon_id, p.metadata.address);
                 is_new = self.seen_gossip.insert(sig_hex);
             }
         } else {
-            tracing::warn!(parent: &self.log, "gatekeeper: ignoring gossip packet with too short signature, allegedly from: {}", p.metadata.address);
+            warn!(
+                &self.log,
+                "gatekeeper: ignoring gossip packet with too short signature, allegedly from {}",
+                p.metadata.address
+            );
         }
 
         is_new

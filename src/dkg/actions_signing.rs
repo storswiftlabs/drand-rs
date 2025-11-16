@@ -1,6 +1,7 @@
 use super::{state::State, ActionsError};
 use crate::{
     core::beacon::BeaconProcess,
+    debug,
     key::Scheme,
     protobuf::dkg::AbortDkg,
     transport::dkg::{
@@ -11,7 +12,6 @@ use crate::{
 use energon::traits::Affine;
 use prost_types::Timestamp;
 use std::future::Future;
-use tracing::debug;
 
 /// Contains logic for signing and validation packets
 pub(super) trait ActionsSigning {
@@ -40,8 +40,12 @@ impl<S: Scheme> ActionsSigning for BeaconProcess<S> {
     type Scheme = S;
 
     async fn verify_msg(&self, gp: &GossipPacket, state: &State<S>) -> Result<(), ActionsError> {
-        debug!(parent: self.log(), "Verifying gossip packet with beaconID: {}, from: {}", 
-               gp.metadata.beacon_id, gp.metadata.address, );
+        debug!(
+            self.log(),
+            "Verifying gossip packet: beacon_id {}, from {}",
+            gp.metadata.beacon_id,
+            gp.metadata.address,
+        );
 
         // Find the participant signature is allegedly from.
         // Return error if participant is not found in `remaining` or `joining`.

@@ -1,11 +1,13 @@
 use crate::{
     key::Scheme,
+    log::Logger,
     net::{dkg_public::DkgPublicClient, utils::Address},
     protobuf::{
         dkg::{packet::Bundle as ProtoBundle, DkgPacket},
         drand::Metadata,
     },
     transport::dkg::Participant,
+    {debug, error},
 };
 use energon::{
     kyber::dkg::{
@@ -17,7 +19,6 @@ use energon::{
 };
 use tokio::sync::broadcast;
 use tokio_util::task::TaskTracker;
-use tracing::{debug, error, Span};
 
 #[derive(Clone)]
 pub(super) enum BroadcastCmd {
@@ -32,17 +33,17 @@ pub(super) enum BroadcastCmd {
 pub(super) struct Broadcast {
     sender: broadcast::Sender<BroadcastCmd>,
     beacon_id: String,
-    log: Span,
+    log: Logger,
 }
 
 impl Broadcast {
-    pub(super) fn init(id: &str, log: &Span) -> Self {
+    pub(super) fn init(id: &str, log: Logger) -> Self {
         let (sender, _) = broadcast::channel::<BroadcastCmd>(1);
 
         Self {
             sender,
             beacon_id: id.to_owned(),
-            log: log.to_owned(),
+            log,
         }
     }
 
@@ -59,8 +60,9 @@ impl Broadcast {
             }
 
             let mut rx = self.sender.subscribe();
-            debug!(parent: &self.log, "dkg broadcast: added new address [{}]", p.address);
+            debug!(&self.log, "added new address {}", p.address);
             let peer = p.address.clone();
+            let log = self.log.clone();
             t.spawn(async move {
                 let mut conn_result = DkgPublicClient::new(&peer).await;
 
@@ -75,11 +77,14 @@ impl Broadcast {
                             match conn_result {
                                 Ok(ref mut client) => {
                                     if let Err(err) = client.broadcast_dkg(packet).await {
-                                        error!("dkg broadcast: send packet to {peer}: {err}");
+                                        error!(
+                                            &log,
+                                            "failed to broadcast packet: peer {peer}, {err}"
+                                        );
                                     }
                                 }
                                 Err(ref err) => {
-                                    error!("dkg broadcast: connect to {peer}: {err}");
+                                    error!(&log, "faled to connect {peer}: {err}");
                                 }
                             };
                         }
@@ -87,15 +92,14 @@ impl Broadcast {
                 }
             });
         }
-
         t.spawn(async move {
             while let Some(bundle) = rx.recv().await {
                 let Ok(proto) = into_proto(bundle, &self.beacon_id) else {
-                    error!(parent: &self.log, "dkg broadcast: failed to convert bundle to proto");
+                    error!(&self.log, "failed to convert bundle to proto");
                     return;
                 };
                 if self.sender.send(BroadcastCmd::Packet(proto)).is_err() {
-                    error!(parent: &self.log, "dkg broadcast: channel is closed");
+                    error!(&self.log, "channel is closed");
                 }
             }
         });

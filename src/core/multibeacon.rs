@@ -1,14 +1,13 @@
 use super::beacon::{BeaconCmd, BeaconID, BeaconProcess};
 use crate::{
     cli::Config,
+    info,
     key::{
         store::{FileStore, FileStoreError},
         Scheme,
     },
-    net::{
-        pool::{Pool, PoolSender},
-        protocol::PartialMsg,
-    },
+    log::Logger,
+    net::{pool::PoolSender, protocol::PartialMsg},
 };
 use arc_swap::{ArcSwap, ArcSwapAny, Guard};
 use energon::drand::schemes::{
@@ -22,15 +21,15 @@ type Snapshot = Guard<Arc<Vec<BeaconHandler>>>;
 
 #[derive(thiserror::Error, Debug)]
 pub enum BeaconHandlerError {
-    #[error("beacon id is not found")]
+    #[error("beacon_id is not found")]
     UnknownID,
-    #[error("beacon id is already loaded")]
+    #[error("beacon_id is already loaded")]
     AlreadyLoaded,
     #[error("packet metadata is missing")]
     MetadataRequired,
     #[error("receiver for beacon process has been closed unexpectedly")]
     ClosedBpRx,
-    #[error("failed to receive stop id response - callback is dropped")]
+    #[error("failed to receive stop_id response - callback is dropped")]
     DroppedCallback,
     #[error(transparent)]
     ShutdownError(#[from] super::beacon::ShutdownError),
@@ -91,14 +90,18 @@ pub struct MultiBeacon {
 impl MultiBeacon {
     /// This call is success only if *all* detected storages has minimal valid structure.
     /// Succesfull value contains a turple with valid absolute path to multibeacon folder.
-    pub fn new(config: Config) -> Result<(PathBuf, Self), FileStoreError> {
-        let private_listen = config.private_listen.clone();
-
-        // Connection pool for partial beacon packets is shared across beacon ids.
-        let pool_span = tracing::info_span!("", partials_pool = &private_listen);
-        let pool = Pool::start(pool_span);
-
+    pub fn new(
+        config: Config,
+        tx_pool: PoolSender,
+        log: &Logger,
+    ) -> Result<(PathBuf, Self), FileStoreError> {
         let (multibeacon_path, fstores) = FileStore::read_multibeacon_folder(&config.folder)?;
+        info!(
+            log,
+            "Detected stores: folder {}, amount {}",
+            multibeacon_path.display(),
+            fstores.len()
+        );
         let beacons: Vec<BeaconHandler> = match &config.id {
             // Load single id
             Some(id) => {
@@ -106,17 +109,21 @@ impl MultiBeacon {
                     .into_iter()
                     .find(|fs| fs.get_beacon_id() == Some(id))
                     .ok_or(FileStoreError::BeaconNotFound)?;
-                vec![BeaconHandler::new(fs, pool.clone(), config.private_listen)?]
+                vec![BeaconHandler::new(
+                    fs,
+                    tx_pool.clone(),
+                    config.private_listen,
+                )?]
             }
             // Load all ids
             None => fstores
                 .into_iter()
-                .map(|fs| BeaconHandler::new(fs, pool.clone(), config.private_listen.clone()))
+                .map(|fs| BeaconHandler::new(fs, tx_pool.clone(), config.private_listen.clone()))
                 .collect::<Result<_, _>>()?,
         };
         let multibeacon = Self {
             beacons: ArcSwap::from(Arc::new(beacons)),
-            tx_pool: pool,
+            tx_pool,
         };
 
         Ok((multibeacon_path, multibeacon))

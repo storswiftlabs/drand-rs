@@ -6,7 +6,6 @@ use std::{
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
 };
-use tracing::error;
 
 /// Directory located at `base_folder/multibeacon/beacon_id/`.
 const DKG_STORE_DIR: &str = "dkg";
@@ -18,6 +17,28 @@ const FINISHED_FILE: &str = "finished.toml";
 /// Permissions
 const DIR_PERM: u32 = 0o755;
 const FILE_PERM: u32 = 0o660;
+
+#[derive(thiserror::Error, Debug)]
+pub enum DkgStoreError {
+    #[error("failed to load dkg.toml: {0}")]
+    FailedToLoad(String),
+    #[error("failed to create directory: {0}")]
+    CreateDir(std::io::Error),
+    #[error("failed to write into a file: {0}")]
+    Write(std::io::Error),
+    #[error("failed to create file: {0}")]
+    CreateFile(std::io::Error),
+    #[error("invalid permission: {0}")]
+    Permission(std::io::Error),
+    #[error("dkg folder is not found")]
+    NotFound,
+    #[error("failed to read file: {0}")]
+    Read(std::io::Error),
+    #[error("parse string error")]
+    ParseStringError,
+    #[error("toml error")]
+    TomlError,
+}
 
 /// Store for current and finished DKGs, contains absolute path to [`DKG_STORE_DIR`]
 pub struct DkgStore {
@@ -43,8 +64,9 @@ impl DkgStore {
             }
             // Brocken configuration
             (false, false) => {
-                error!("{} at {}", DkgStoreError::NotFound, store.path.display());
-                return Err(DkgStoreError::FailedToLoad);
+                return Err(DkgStoreError::FailedToLoad(
+                    store.path.display().to_string(),
+                ));
             }
             _ => (),
         }
@@ -158,28 +180,6 @@ impl DkgStore {
 
         Ok(())
     }
-}
-
-#[derive(thiserror::Error, Debug)]
-pub enum DkgStoreError {
-    #[error("failed to load a dkg history")]
-    FailedToLoad,
-    #[error("failed to create directory: {0}")]
-    CreateDir(std::io::Error),
-    #[error("failed to write into a file: {0}")]
-    Write(std::io::Error),
-    #[error("failed to create file: {0}")]
-    CreateFile(std::io::Error),
-    #[error("invalid permission: {0}")]
-    Permission(std::io::Error),
-    #[error("dkg folder is not found")]
-    NotFound,
-    #[error("failed to read file: {0}")]
-    Read(std::io::Error),
-    #[error("parse string error")]
-    ParseStringError,
-    #[error("toml error")]
-    TomlError,
 }
 
 impl PartialEq for DkgStoreError {

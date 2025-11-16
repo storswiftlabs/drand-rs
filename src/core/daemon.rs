@@ -5,11 +5,12 @@ use super::{
 use crate::{
     cli::Config,
     key::store::{FileStore, FileStoreError},
-    net::utils::{Callback, StartServerError},
+    log::Logger,
+    net::{pool::Pool, utils::Callback},
+    {error, info},
 };
 use std::{path::PathBuf, sync::Arc};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
-use tracing::{error, info};
 
 #[derive(thiserror::Error, Debug)]
 pub enum DaemonError {
@@ -17,8 +18,6 @@ pub enum DaemonError {
     FileStore(#[from] FileStoreError),
     #[error(transparent)]
     BeaconHandler(#[from] BeaconHandlerError),
-    #[error(transparent)]
-    ServerError(#[from] StartServerError),
 }
 
 pub struct Daemon {
@@ -27,26 +26,33 @@ pub struct Daemon {
     token: CancellationToken,
     beacons: MultiBeacon,
     multibeacon_path: PathBuf,
+    log: Logger,
 }
 
 impl Daemon {
-    pub fn new(config: Config) -> Result<Arc<Self>, DaemonError> {
+    pub fn new(config: Config, log: Logger) -> Result<Arc<Self>, DaemonError> {
         let tracker: TaskTracker = TaskTracker::new();
         let token: CancellationToken = CancellationToken::new();
         let private_listen = config.private_listen.clone();
 
         info!(
+            &log,
             "Drand daemon initializing: private_listen: {}, control_port: {}, folder: {}",
-            config.private_listen, config.control, config.folder,
+            config.private_listen,
+            config.control,
+            config.folder,
         );
 
-        let (multibeacon_path, beacons) = MultiBeacon::new(config)?;
+        // Sender for connection pool for partial beacon packets is shared across beacon ids.
+        let pool_tx = Pool::start(log.clone());
+        let (multibeacon_path, beacons) = MultiBeacon::new(config, pool_tx, &log)?;
         let daemon = Arc::new(Self {
             private_listen,
             tracker,
             token,
             beacons,
             multibeacon_path,
+            log,
         });
 
         Ok(daemon)
@@ -64,7 +70,7 @@ impl Daemon {
             .find(|h| h.id().is_eq(id))
             .ok_or(BeaconHandlerError::UnknownID)?;
 
-        info!("processing stop_id request for [{id}] ...");
+        info!(&self.log, "processing stop_id request for {id} ...");
         let new_store = snapshot
             .iter()
             .filter(|x| x.id() != handler.id())
@@ -87,7 +93,7 @@ impl Daemon {
     }
 
     pub async fn stop_daemon(&self) -> Result<(), BeaconHandlerError> {
-        info!("processing stop request for daemon ...");
+        info!(&self.log, "processing stop request for daemon ...");
         let snapshot = self.beacons().snapshot();
         self.beacons().replace_store(Arc::new(vec![]));
 
@@ -118,14 +124,17 @@ impl Daemon {
             beacon_path: self.multibeacon_path.join(id),
         };
         if let Err(err) = store.validate() {
-            error!("failed to validate store: {err}, beacon id: {id}");
+            error!(&self.log, "failed to validate store: {err}, beacon_id {id}");
             return Err(BeaconHandlerError::UnknownID);
         };
 
         let new_handler =
             BeaconHandler::new(store, self.beacons.get_pool(), self.private_listen.clone())
                 .map_err(|err| {
-                    error!("failed to initialize BeaconHandler: {err}, beacon id: {id}");
+                    error!(
+                        &self.log,
+                        "failed to initialize beacon handler: {err}, beacon_id {id}"
+                    );
                     BeaconHandlerError::UnknownID
                 })?;
 

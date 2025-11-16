@@ -1,15 +1,17 @@
 use crate::{
     core::beacon::BeaconID,
+    log::Logger,
     net::utils::Callback,
     protobuf::drand::{BeaconPacket, Metadata},
+    {error, warn},
 };
 use rusqlite::{params, Connection, Error, OpenFlags};
 use std::path::{Path, PathBuf};
 use tokio::{sync::mpsc, task};
-use tracing::{error, warn, Span};
 
 /// Number of beacons retrieved in a single query from chain DB.
 const BATCH_SIZE: u64 = 300;
+/// File is stored under `<base_folder>/multibeacon/<beacon_id>/db/DB_NAME`
 const DB_NAME: &str = "rusqlite.db";
 
 pub type StoreStreamResponse = Result<BeaconPacket, tonic::Status>;
@@ -344,7 +346,7 @@ enum Cmd<B: BeaconRepr> {
 /// Error details are traced within chain store actor (see: [`ChainStore::start`]).
 #[derive(thiserror::Error, Debug)]
 pub enum StoreError {
-    #[error("DB request is failed")]
+    #[error("internal error")]
     Internal,
     #[error("beacon not found in chain store")]
     NotFound,
@@ -360,12 +362,11 @@ impl<B: BeaconRepr> ChainStore<B> {
     /// Starts chain store actor and returns its handle.
     ///
     /// Current implementation is [rusqlite] specific for connection management and execution.
-    pub async fn start(path: PathBuf, beacon_id: BeaconID) -> Result<Self, StoreError> {
+    pub async fn start(path: PathBuf, id: BeaconID, log: Logger) -> Result<Self, StoreError> {
         // Callback for the current request.
         let (cb_tx, cb_rx) = Callback::new();
         // Channel for communicating with storage actor.
         let (cmd_tx, mut cmd_rx) = mpsc::channel::<Cmd<B>>(1);
-        let l = tracing::info_span!("", chain_store = beacon_id.as_str());
 
         task::spawn_blocking(move || {
             // Open a single RW connection to be reused for all actor requests except for [sync].
@@ -375,7 +376,7 @@ impl<B: BeaconRepr> ChainStore<B> {
                     conn
                 }
                 Err(err) => {
-                    error!(parent: &l, "failed to open RW connection: {err}");
+                    error!(&log, "failed to open RW connection: {err}");
                     cb_tx.reply(Err(StoreError::Internal));
                     return;
                 }
@@ -385,7 +386,7 @@ impl<B: BeaconRepr> ChainStore<B> {
                     Cmd::Put { beacon, cb } => match beacon.put(&mut rw_conn) {
                         Ok(()) => cb.reply(Ok(())),
                         Err(err) => {
-                            error!(parent: &l, "failed to put beacon: {err}");
+                            error!(&log, "failed to put beacon: {err}");
                             cb.reply(Err(StoreError::Internal));
                             return;
                         }
@@ -394,7 +395,7 @@ impl<B: BeaconRepr> ChainStore<B> {
                         Ok(beacon) => cb.reply(Ok(beacon)),
                         Err(Error::QueryReturnedNoRows) => cb.reply(Err(StoreError::NotFound)),
                         Err(err) => {
-                            error!(parent: &l, "failed to get last beacon: {err}");
+                            error!(&log, "failed to get last beacon: {err}");
                             cb.reply(Err(StoreError::Internal));
                             return;
                         }
@@ -403,19 +404,21 @@ impl<B: BeaconRepr> ChainStore<B> {
                         Ok(beacon) => cb.reply(Ok(beacon)),
                         Err(Error::QueryReturnedNoRows) => cb.reply(Err(StoreError::NotFound)),
                         Err(err) => {
-                            error!(parent: &l, "failed to get beacon of round {round}: {err}");
+                            error!(&log, "failed to get beacon of round {round}: {err}");
                             cb.reply(Err(StoreError::Internal));
                             return;
                         }
                     },
-                    Cmd::Sync { from_round, cb } => match sync::<B>(&path, from_round, beacon_id) {
-                        Ok(client_rx) => cb.reply(Ok(client_rx)),
-                        Err(err) => {
-                            error!(parent: &l, "sync: failed to open RO connection: {err}");
-                            cb.reply(Err(StoreError::Internal));
-                            return;
+                    Cmd::Sync { from_round, cb } => {
+                        match sync::<B>(&path, from_round, id, log.clone()) {
+                            Ok(client_rx) => cb.reply(Ok(client_rx)),
+                            Err(err) => {
+                                error!(&log, "sync: failed to open RO connection: {err}");
+                                cb.reply(Err(StoreError::Internal));
+                                return;
+                            }
                         }
-                    },
+                    }
                 }
             }
         });
@@ -469,21 +472,28 @@ impl<B: BeaconRepr> ChainStore<B> {
     }
 
     /// Inserts genesis beacon if chain store is empty or asserts that `genesis_seed` is equal to already stored.
-    pub async fn check_genesis(&self, genesis_seed: &[u8], l: &Span) -> Result<(), StoreError> {
+    pub async fn check_genesis(&self, genesis_seed: &[u8], log: &Logger) -> Result<(), StoreError> {
         match self.get(0).await {
             Ok(beacon) => {
                 if beacon.signature() == genesis_seed {
                     Ok(())
                 } else {
-                    error!(parent: l, "genesis mismatch: already stored: {} != {}",
+                    error!(
+                        log,
+                        "genesis mismatch: already stored {} != {}",
                         hex::encode(beacon.signature()),
-                        hex::encode(genesis_seed));
+                        hex::encode(genesis_seed)
+                    );
 
                     Err(StoreError::GenesisMismatch)
                 }
             }
             Err(StoreError::NotFound) => {
-                warn!(parent: l, "chain store is empty, adding genesis {}", hex::encode(genesis_seed));
+                warn!(
+                    log,
+                    "chain store is empty, adding genesis {}",
+                    hex::encode(genesis_seed)
+                );
                 self.put(B::from_seed(genesis_seed.to_vec())).await?;
                 Ok(())
             }
@@ -498,18 +508,18 @@ fn sync<B: BeaconRepr>(
     path: &Path,
     start_from: u64,
     id: BeaconID,
+    log: Logger,
 ) -> Result<mpsc::Receiver<StoreStreamResponse>, Error> {
     let ro_conn =
         Connection::open_with_flags(path.join(DB_NAME), OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let batch_size = usize::try_from(BATCH_SIZE).unwrap();
     let (tx, rx) = mpsc::channel::<StoreStreamResponse>(batch_size);
-    let id = id.to_string();
 
     let mut from = start_from;
     let mut sent_total = 0;
     let mut received_len = 0;
     tokio::task::spawn_blocking(move || loop {
-        match B::get_batch_proto(&ro_conn, from, &id) {
+        match B::get_batch_proto(&ro_conn, from, id.as_str()) {
             Ok(beacons) => {
                 received_len = beacons.len();
                 sent_total += received_len;
@@ -529,7 +539,7 @@ fn sync<B: BeaconRepr>(
                 from += BATCH_SIZE;
             }
             Err(err) => {
-                error!("failed to get batch proto for [{id}]: get_batch_proto: {err}");
+                error!(log, "failed to get_batch_proto: {err}");
                 break;
             }
         };
@@ -576,10 +586,10 @@ mod test {
         let temp_dir = tempfile::TempDir::new().unwrap();
         let db_path = temp_dir.path();
         let id = BeaconID::from_static("some_id");
-
+        let log = crate::log::set_id("", id.as_str());
         let total_beacons = 555;
         let beacons = generate_unchained(total_beacons);
-        let store = ChainStore::<UnChainedBeacon>::start(db_path.to_path_buf(), id)
+        let store = ChainStore::<UnChainedBeacon>::start(db_path.to_path_buf(), id, log.clone())
             .await
             .unwrap();
 
@@ -596,7 +606,7 @@ mod test {
 
         // Sync from this store; get all beacons as protobuf packets.
         let from_round = 1;
-        let mut stream_rx = sync::<UnChainedBeacon>(db_path, from_round, id).unwrap();
+        let mut stream_rx = sync::<UnChainedBeacon>(db_path, from_round, id, log).unwrap();
 
         // Streamed data should match internal repr.
         let expected_prev_sig: Vec<u8> = vec![];
@@ -625,10 +635,10 @@ mod test {
         let temp_dir = tempfile::TempDir::new().unwrap();
         let db_path = temp_dir.path();
         let id = BeaconID::from_static("some_id");
-
+        let log = crate::log::set_id("", id.as_str());
         let total_beacons = 555;
         let beacons = generate_chained(total_beacons);
-        let store = ChainStore::<ChainedBeacon>::start(db_path.to_path_buf(), id)
+        let store = ChainStore::<ChainedBeacon>::start(db_path.to_path_buf(), id, log.clone())
             .await
             .unwrap();
 
@@ -645,7 +655,7 @@ mod test {
 
         // Sync from this store; get all beacons as protobuf packets.
         let from_round = 1;
-        let mut stream_rx = sync::<ChainedBeacon>(db_path, from_round, id).unwrap();
+        let mut stream_rx = sync::<ChainedBeacon>(db_path, from_round, id, log).unwrap();
 
         // Streamed data should match internal repr.
         for i in 1..=total_beacons {

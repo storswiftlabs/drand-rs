@@ -201,7 +201,7 @@ pub enum Cmd {
 
 impl Cli {
     pub async fn run(self) -> Result<()> {
-        crate::log::setup_tracing(self.verbose)?;
+        crate::log::set_verbose(self.verbose);
 
         match self.commands {
             Cmd::GenerateKeypair(config) => generate_keypair(config).await?,
@@ -222,7 +222,9 @@ impl Cli {
                 Show::Status { control, id } => status(&control, id).await?,
             },
             Cmd::Util(util) => match util {
-                Util::Check { id, addresses } => util_check(id.as_deref(), addresses).await?,
+                Util::Check { id, addresses } => {
+                    util_check(id.as_deref(), addresses, self.verbose).await?;
+                }
             },
         }
 
@@ -263,18 +265,19 @@ fn keygen<S: Scheme>(config: &KeyGenConfig) -> Result<()> {
 async fn start(config: Config) -> Result<()> {
     let private_listen = Address::precheck(&config.private_listen)?;
     let control_port = config.control.clone();
-
     if let Some(ref address) = config.metrics {
         crate::net::metrics::setup_metrics(address)?;
     }
-    let daemon = Daemon::new(config)?;
+    let log = crate::log::set_node(private_listen.as_str());
+    let daemon = Daemon::new(config, log)?;
     let t = daemon.tracker();
+
     let (fut_control, fut_node) = tokio::try_join!(
         t.spawn(control::start::<ControlListener>(
             daemon.clone(),
             control_port,
         )),
-        t.spawn(protocol::start_node::<NodeListener>(daemon, private_listen,))
+        t.spawn(protocol::start_node::<NodeListener>(daemon, private_listen))
     )?;
     fut_control.and(fut_node)?;
 
@@ -364,7 +367,7 @@ async fn status(control_port: &str, beacon_id: String) -> Result<()> {
     Ok(())
 }
 
-async fn util_check(beacon_id: Option<&str>, addresses: Vec<String>) -> Result<()> {
+async fn util_check(beacon_id: Option<&str>, addresses: Vec<String>, verbose: bool) -> Result<()> {
     let peers = addresses
         .iter()
         .map(|addr| Address::precheck(addr.as_str()))
@@ -378,7 +381,7 @@ async fn util_check(beacon_id: Option<&str>, addresses: Vec<String>) -> Result<(
                 None => HealthClient::check(peer).await,
             }
         } {
-            if tracing::enabled!(tracing::Level::DEBUG) {
+            if verbose {
                 println!("drand: error checking id {peer}: {}", err.root_cause());
             } else {
                 println!("drand: error checking id {peer}");

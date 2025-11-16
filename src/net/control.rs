@@ -1,7 +1,7 @@
 //! Client and server implementations for RPC [`Control`] service.
 use super::{
     dkg_control::DkgControlHandler,
-    utils::{Callback, NewTcpListener, StartServerError, ToStatus, ERR_METADATA_IS_MISSING},
+    utils::{Callback, NewTcpListener, ToStatus, ERR_METADATA_IS_MISSING},
 };
 use crate::{
     cli::SyncConfig,
@@ -19,6 +19,7 @@ use crate::{
         },
     },
 };
+use anyhow::anyhow;
 use std::{ops::Deref, pin::Pin, sync::Arc};
 use tokio_stream::{
     wrappers::{ReceiverStream, TcpListenerStream},
@@ -28,7 +29,6 @@ use tonic::{
     transport::{Channel, Server},
     Request, Response, Status,
 };
-use tracing::{debug, error};
 
 pub const DEFAULT_CONTROL_PORT: &str = "8888";
 pub const CONTROL_HOST: &str = "127.0.0.1";
@@ -53,7 +53,6 @@ impl Control for ControlHandler {
     /// PingPong simply responds with an empty packet,
     /// proving that this drand node is up and alive.
     async fn ping_pong(&self, _request: Request<Ping>) -> Result<Response<Pong>, Status> {
-        debug!("control listener: received ping_pong request");
         let metadata = Some(Metadata::with_default());
 
         Ok(Response::new(Pong { metadata }))
@@ -225,14 +224,10 @@ impl Control for ControlHandler {
 pub async fn start<N: NewTcpListener>(
     daemon: Arc<Daemon>,
     control: N::Config,
-) -> Result<(), StartServerError> {
-    let listener = N::bind(control).await.map_err(|err| {
-        error!(
-            "listener: {}, {err}",
-            StartServerError::FailedToStartControl,
-        );
-        StartServerError::FailedToStartControl
-    })?;
+) -> anyhow::Result<()> {
+    let listener = N::bind(control)
+        .await
+        .map_err(|err| anyhow!("failed to start control server: {err}"))?;
     let token = daemon.cancellation_token();
 
     Server::builder()
@@ -244,12 +239,7 @@ pub async fn start<N: NewTcpListener>(
             let () = token.cancelled().await;
         })
         .await
-        .map_err(|err| {
-            error!("{}, {err}", StartServerError::FailedToStartControl);
-            StartServerError::FailedToStartControl
-        })?;
-
-    debug!("control server is shutting down");
+        .map_err(|err| anyhow!("control server: {err}"))?;
 
     Ok(())
 }
@@ -316,12 +306,9 @@ impl ControlClient {
             metadata: Some(metadata),
         };
 
-        tracing::info!(
+        println!(
             "Launching a follow request: nodes: {:?}, upTo: {}, hash {}, beaconID: {}",
-            request.nodes,
-            request.up_to,
-            c.chain_hash,
-            c.id
+            request.nodes, request.up_to, c.chain_hash, c.id
         );
 
         let mut responce = self.client.start_follow_chain(request).await?.into_inner();

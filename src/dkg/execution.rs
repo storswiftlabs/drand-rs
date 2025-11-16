@@ -8,12 +8,14 @@ use crate::{
         ChainCmd,
     },
     core::beacon::BeaconProcess,
+    error, info,
     key::{
         group::Group,
         keys::{DistPublic, Identity},
         node::Node,
         Hash, Scheme,
     },
+    log::{set_dkg, Logger},
     transport::dkg::Participant,
 };
 use energon::{
@@ -26,7 +28,6 @@ use std::{
     future::Future,
     time::{Duration, SystemTime},
 };
-use tracing::{error, info, Span};
 
 /// Default time of each DKG period by default.
 ///
@@ -103,7 +104,7 @@ impl<S: Scheme> ExecuteDkg for BeaconProcess<S> {
         gk.open_gate(bundles_tx)?;
 
         // Broadcast holds bundles receiver during execution.
-        let broadcast = Broadcast::init(self.id(), &dkg_log);
+        let broadcast = Broadcast::init(self.id(), self.log().clone());
         broadcast.register_nodes(
             self.tracker(),
             &sorted_participants,
@@ -113,19 +114,26 @@ impl<S: Scheme> ExecuteDkg for BeaconProcess<S> {
 
         // # Run DKG #
         let bp = self.clone();
-        self.tracker().spawn({ async move {
-            info!(parent: &dkg_log, "waiting for execution time: {} seconds", time_until_execution.as_secs());
-            tokio::time::sleep(time_until_execution).await;
+        let log = self.log().clone();
+        self.tracker().spawn({
+            async move {
+                info!(
+                    &log,
+                    "waiting for execution time: {} seconds",
+                    time_until_execution.as_secs()
+                );
+                tokio::time::sleep(time_until_execution).await;
 
-            let dkg_output=protocol.run().await;
-            bp.dkg_finished_notification().await;
+                let dkg_output = protocol.run().await;
+                if bp.dkg_finished_notification().await.is_err() {};
 
-            match dkg_output{
-                Ok(Some(output)) => process_dkg_output(&bp, output, current, &dkg_log).await,
-                Ok(None) => info!(parent: &dkg_log, "DKG[Leaving] finished succesfully"),
-                Err(err) => error!(parent: &dkg_log, "DKG finished with error: {err}"),
+                match dkg_output {
+                    Ok(Some(output)) => process_dkg_output(&bp, output, current, &dkg_log).await,
+                    Ok(None) => info!(&log, "DKG[Leaving] finished succesfully"),
+                    Err(err) => error!(&log, "DKG finished with error: {err}"),
+                }
             }
-        }});
+        });
 
         Ok(())
     }
@@ -172,11 +180,7 @@ impl<S: Scheme> ExecuteDkg for BeaconProcess<S> {
             .map(|n| n.index)
             .expect("our node is always present in sorted nodes");
 
-        // host.id.dkg_index
-        let log = tracing::info_span!(
-            "",
-            dkg = format!("{}.{}.{dkg_index}", self.identity().address(), self.id())
-        );
+        let log = set_dkg(self.identity().address(), self.id(), dkg_index);
         let config = Config {
             long_term: self.private_key().to_owned(),
             old_nodes,
@@ -208,16 +212,13 @@ impl<S: Scheme> ExecuteDkg for BeaconProcess<S> {
             .collect::<Option<Vec<DkgNode<S>>>>()
             .ok_or(ActionsError::ParticipantsToNewNodes)?;
 
+        // Set index to "Leaving" if node piblic key is missing in `new_nodes`.
         let dkg_index = new_nodes
             .iter()
-            // Set index to "Leaving" if node piblic key is missing in `new_nodes`.
             .find(|n| n.public() == self.identity().key())
             .map_or_else(|| "Leaving".into(), |n| n.index.to_string());
 
-        let log = tracing::info_span!(
-            "",
-            dkg = format!("{}.{}.{dkg_index}", self.identity().address(), self.id())
-        );
+        let log = set_dkg(self.identity().address(), self.id(), dkg_index);
         let prev_final_group = previous
             .final_group
             .as_ref()
@@ -259,16 +260,16 @@ async fn process_dkg_output<S: Scheme>(
     bp: &BeaconProcess<S>,
     output: DkgOutput<S>,
     mut current: State<S>,
-    l: &Span,
+    log: &Logger,
 ) {
     let is_first_epoch = current.epoch() == 1;
 
     let transition_time = if is_first_epoch {
-        info!(parent: l, "DKG [Initial] finished succesfully");
+        info!(log, "DKG [Initial] finished succesfully");
         u64::try_from(current.genesis_time.seconds).unwrap()
     } else {
         let now = time_now().as_secs();
-        info!(parent: l, "DKG [Reshape] finished succesfully");
+        info!(log, "DKG [Reshape] finished succesfully");
 
         let beacon_period = current.beacon_period.get_value();
         let current_genesis = u64::try_from(current.genesis_time.seconds).unwrap();
@@ -280,13 +281,17 @@ async fn process_dkg_output<S: Scheme>(
     let (final_group, share) = as_group(output, &current, transition_time);
 
     if let Err(err) = bp.fs().save_share(&share) {
-        error!(parent: l, "failed to store private share: {err}");
+        error!(log, "failed to store private share: {err}");
         return;
     }
-    info!(parent: l, "private share is stored at {}", bp.fs().private_share_file().display());
+    info!(
+        log,
+        "private share is stored at {}",
+        bp.fs().private_share_file().display()
+    );
 
     if let Err(err) = bp.fs().save_group(&final_group) {
-        error!(parent: l, "failed to store groupfile: {err}");
+        error!(log, "failed to store groupfile: {err}");
         return;
     }
 
@@ -295,22 +300,25 @@ async fn process_dkg_output<S: Scheme>(
 
     // Completed state is a new current and new finished state.
     if let Err(err) = current.complete(final_group, share) {
-        error!(parent: l, "failed to move into compeleted state: {err}");
+        error!(log, "failed to move into compeleted state: {err}");
         return;
     };
 
     if let Err(err) = bp.dkg_store().save_finished(&current) {
-        error!(parent: l, "failed to store the completed state: {err}");
+        error!(log, "failed to store the completed state: {err}");
         return;
     }
 
     let t_round = current_round(transition_time, period, genesis_time);
     let t_time = time_of_round(period, genesis_time, t_round);
     if t_time != transition_time {
-        error!(parent: l, "transition_time: invalid_offset: expected {t_time} got_time {transition_time}");
+        error!(
+            log,
+            "transition_time: invalid_offset: expected {t_time} got_time {transition_time}"
+        );
         return;
     }
-    info!(parent: l,"preparing transition to new group at_round: {t_round}");
+    info!(log, "preparing transition to new group at round: {t_round}");
 
     // Sleep until last round of current epoch.
     let now = time_now().as_secs();
@@ -318,7 +326,7 @@ async fn process_dkg_output<S: Scheme>(
     let delta = last_round.saturating_sub(now);
 
     if delta != 0 {
-        info!(parent: l, "sleeping until last round before transition: {delta}s");
+        info!(log, "sleeping until last round before transition: {delta}s");
         tokio::time::sleep(Duration::from_secs(delta)).await;
     }
 
@@ -330,7 +338,7 @@ async fn process_dkg_output<S: Scheme>(
         .await
         .is_err()
     {
-        error!(parent: l, "failed to send new_epoch cmd to chain handler");
+        error!(log, "failed to send new_epoch cmd to chain handler");
     }
 }
 

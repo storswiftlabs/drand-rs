@@ -101,7 +101,7 @@ impl PublicClient {
             .context("received chain_info response without metadata")?;
         if metadata.beacon_id != beacon_id {
             bail!(
-                "received chain_info response with invalid beacon id, expected: {beacon_id}, received: {}",
+                "received chain_info response with invalid beacon_id: expected {beacon_id}, received {}",
                 metadata.beacon_id
             )
         }

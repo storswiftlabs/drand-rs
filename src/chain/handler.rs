@@ -8,13 +8,14 @@ use super::{
     ticker, time,
 };
 use crate::{
-    core::beacon::BeaconID,
+    core::beacon::{BeaconID, BeaconProcessError},
     key::{
         group::Group,
         keys::DistPublic,
         store::{FileStore, FileStoreError},
         Scheme,
     },
+    log::Logger,
     net::{
         metrics::{self, GroupMetrics},
         pool::PoolSender,
@@ -25,6 +26,7 @@ use crate::{
         BeaconPacket, ChainInfoPacket, PartialBeaconPacket, StartSyncRequest, StatusResponse,
         SyncProgress,
     },
+    {debug, error, info, warn},
 };
 use energon::{drand::traits::BeaconDigest, kyber::tbls, points::SigPoint, traits::Affine};
 use rand::seq::SliceRandom;
@@ -36,7 +38,6 @@ use tokio::{
 };
 use tokio_util::task::TaskTracker;
 use tonic::Status;
-use tracing::{debug, error, info, warn, Span};
 
 const SHORT_SIG_BYTES: usize = 3;
 
@@ -58,7 +59,7 @@ pub enum ChainError {
     UnknownIndex(u32),
     #[error("received partial with invalid signature")]
     InvalidPartialSignature,
-    #[error("internal: failed to proceed chain_info request")]
+    #[error("failed to proceed chain_info request")]
     FailedToGetInfo,
     #[error("invalid round: {invalid}, instead of {current}")]
     InvalidRound { invalid: u64, current: u64 },
@@ -72,10 +73,12 @@ pub enum ChainError {
     TBlsError(#[from] tbls::TBlsError),
     #[error("fs: {0}")]
     FileStoreError(#[from] FileStoreError),
-    #[error("no dkg group setup yet")]
-    DkgSetupRequired,
+    #[error("recover_unchecked: scalar is non-invertable")]
+    NonInvertableScalar,
     #[error("internal error")]
     Internal,
+    #[error("no dkg group setup yet")]
+    DkgSetupRequired,
 }
 
 /// Handler to initiate and react to the tBLS protocol.
@@ -92,12 +95,11 @@ struct ChainHandler<S: Scheme, B: BeaconRepr> {
     fs: FileStore,
     /// Epoch config is representation of DKG output.
     ec: EpochConfig<S>,
-    /// Binding address of the private API used as base for every new span.
-    /// *Single* span metadata follows Drand Golang notation:
-    /// `{private_listen}.{beacon_id}.{dkg_index}`.
+    /// Private binding address.
     private_listen: String,
+    /// Public URI Authority.
     our_addres: Address,
-    l: Span,
+    log: Logger,
 }
 
 pub enum ChainCmd {
@@ -110,7 +112,7 @@ pub enum ChainCmd {
     /// Partial reload of the chain module during transition to update [`EpochConfig`] and logger.
     Reload,
     /// Request for chain public information.
-    ChainInfo(Callback<ChainInfoPacket, ChainError>),
+    ChainInfo(Callback<ChainInfoPacket, BeaconProcessError>),
     /// Resync request from chain node.
     ReSync {
         from_round: u64,
@@ -122,7 +124,7 @@ pub enum ChainCmd {
         cb: Callback<mpsc::Receiver<Result<SyncProgress, Status>>, SyncError>,
     },
     /// Status request for latest stored round.
-    LatestStored(Callback<StatusResponse, StoreError>),
+    LatestStored(Callback<StatusResponse, BeaconProcessError>),
 }
 
 /// Holder to simplify channels management, see [`init_chain`] for detailed channels description.
@@ -136,7 +138,8 @@ struct Channels {
     rx_catchup: mpsc::Receiver<()>,
 }
 
-/// Permanent chain configuration, used during transitions (see [`run_chain`] and [`run_chain_default`]).  
+/// Configuration used during transitions (see [`run_chain`] and [`run_chain_default`]).  
+/// This config is same for all epoches.
 pub struct ChainConfig<B: BeaconRepr> {
     chan: Channels,
     pool: PoolSender,
@@ -148,12 +151,12 @@ pub struct ChainConfig<B: BeaconRepr> {
 }
 
 impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
-    /// This function updates the epoch configuration and span for the chain handler
-    /// after each DKG for mutex-free implementation.
+    /// This function updates the epoch configuration and logger for chain handler
+    /// after each DKG.
     ///
     /// Returns top-level components of chain module with their channels:
-    /// - Immutable chain configuration: [`ChainHandler`].
-    /// - Mutable operational state: [`Registry`].
+    /// - Chain configuration: [`ChainHandler`].
+    /// - Operational state: [`Registry`]. (mut)
     pub async fn from_config(
         c: ChainConfig<B>,
     ) -> Result<(Self, Registry<S, B>, Channels), FileStoreError> {
@@ -169,15 +172,6 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
 
         // Load group and share from filestore.
         let group = fs.load_group::<S>()?;
-
-        // This is only possible if the groupfile has been changed manually.
-        if group.beacon_id != id.as_str() {
-            error!(
-                "load_group: ID [{}] != chain handler ID [{id}]",
-                group.beacon_id
-            );
-            return Err(FileStoreError::InvalidData);
-        }
 
         // Map group and share into epoch config.
         let Group {
@@ -199,18 +193,14 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
         let group_size = nodes.len();
         let metrics = GroupMetrics::new(group_size, threshold);
         let ec = EpochConfig::new(nodes, share, metrics);
-
-        // Create spans for handler and partial cache.
-        let span_meta = format!("{private_listen}.{}.{}", beacon_id, ec.our_index());
-        let l_handler = tracing::info_span!("", chain = span_meta);
-        let l_partial = tracing::info_span!("", cache = span_meta);
+        let log = crate::log::set_chain(&private_listen, beacon_id.as_str(), ec.our_index());
 
         // Check corner case for transition.
-        check_transition(period, transition_time, &l_handler).await;
+        check_transition(period, transition_time, &log).await;
 
         // Genesis beacon should always match the group.genesis_seed.
         store
-            .check_genesis(&genesis_seed, &l_handler)
+            .check_genesis(&genesis_seed, &log)
             .await
             .map_err(|_| FileStoreError::InvalidData)?;
 
@@ -232,7 +222,7 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
             ec,
             private_listen,
             our_addres,
-            l: l_handler,
+            log,
         };
 
         let latest_stored = chain_handler.store.last().await?;
@@ -243,7 +233,6 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
             channels.tx_catchup.clone(),
             channels.tx_resync.clone(),
             threshold as usize,
-            l_partial,
         );
 
         Ok((chain_handler, registry, channels))
@@ -272,17 +261,24 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
         &self,
         reg: &mut Registry<S, B>,
     ) -> Result<PartialBeaconPacket, ChainError> {
-        reg.align_cache(&self.ec, &self.l)?;
+        reg.align_cache(&self.ec, &self.log)?;
         let c_round = reg.current_round();
         let ls_round = reg.latest_stored().round();
 
         let (previous_signature, round) = if c_round == ls_round {
-            debug!(parent: &self.l, "re-broadcasting already stored beacon, round {c_round}");
+            debug!(
+                &self.log,
+                "re-broadcasting already stored beacon, round {c_round}"
+            );
             let prev_sig = match reg.latest_stored().prev_signature() {
                 Some(s) => s.to_vec(),
                 None => {
                     if S::Beacon::is_chained() {
-                        error!(parent: &self.l, "prev_sig is empty for chained beacon, round {c_round}, scheme {}", S::ID);
+                        error!(
+                            &self.log,
+                            "prev_sig is empty for chained beacon, round {c_round}, scheme {}, please report this",
+                            S::ID
+                        );
                         panic!()
                     } else {
                         // Valid case for unchained schemes.
@@ -299,7 +295,7 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
         let sigshare = match self.ec.sign_partial(&msg) {
             Ok(s) => s,
             Err(err) => {
-                error!(parent: &self.l, "sign partial: round: {round}, error: {err}");
+                error!(&self.log, "sign partial: round {round} {err}");
                 return Err(ChainError::TBlsError(err));
             }
         };
@@ -307,7 +303,7 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
         let partial_sig = match sigshare.serialize() {
             Ok(s) => s,
             Err(err) => {
-                error!(parent: &self.l, "serialize sigshare: round {round}, error: {err}");
+                error!(&self.log, "serialize sigshare: round {round} {err}");
                 return Err(ChainError::TBlsError(err));
             }
         };
@@ -317,15 +313,14 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
             && round <= c_round
             && !reg.cache().is_share_present(self.ec.our_index())
         {
-            if let Some(thr_sigs) = reg.cache_mut().add_prechecked(sigshare, &self.our_addres) {
+            if let Some(thr_sigs) =
+                reg.cache_mut()
+                    .add_prechecked(sigshare, &self.our_addres, &self.log)
+            {
                 let Ok(recovered) = tbls::recover_unchecked(thr_sigs) else {
-                    error!(parent: &self.l, "recover_unchecked: scalar is non-invertable");
-                    panic!()
+                    return Err(ChainError::NonInvertableScalar);
                 };
-                if let Err(err) = self.save_recovered(round, &recovered, reg).await {
-                    error!(parent: &self.l, "failed to save recovered beacon for round {round}: {err}");
-                    panic!()
-                };
+                self.save_recovered(round, &recovered, reg).await?;
             }
         }
 
@@ -333,7 +328,12 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
             .get(..SHORT_SIG_BYTES)
             .unwrap_or_default();
         let short_msg = msg.get(..SHORT_SIG_BYTES).expect("always 32 bytes");
-        debug!(parent: &self.l,"broadcast_partial: {round}, prev_sig: {}, msg_sign: {}", hex::encode(short_prev_sig), hex::encode(short_msg));
+        debug!(
+            &self.log,
+            "broadcast_partial: {round}, prev_sig {}, msg_sign {}",
+            hex::encode(short_prev_sig),
+            hex::encode(short_msg)
+        );
         let packet = PartialBeaconPacket {
             round,
             previous_signature,
@@ -352,30 +352,45 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
     async fn broadcast(&self, packet: PartialBeaconPacket) -> Result<(), ChainError> {
         let round = packet.round;
         if self.pool.broadcast_partial(packet).await.is_err() {
-            error!(parent: &self.l, "failed to broadcast partial, round {round}, error: {}", ChainError::PoolClosedRx);
+            error!(
+                &self.log,
+                "failed to broadcast partial: round {round} {}",
+                ChainError::PoolClosedRx
+            );
             return Err(ChainError::PoolClosedRx);
         }
 
         Ok(())
     }
 
+    // Returns `true` if full signature has been recovered.
+    // This will be used to track app layer latency for the event.
     async fn process_partial(
         &self,
         reg: &mut Registry<S, B>,
         partial: PartialPacket,
-    ) -> Result<(), ChainError> {
+    ) -> Result<bool, ChainError> {
         let p_round = partial.packet.round;
         let c_round = reg.current_round();
         let ls_round = reg.latest_stored().round();
-        debug!(parent: &self.l, "processing partial: from {}, round {p_round}", partial.from);
+        debug!(
+            &self.log,
+            "processing partial: round {p_round}, from {}", partial.from
+        );
 
         if p_round <= ls_round {
-            debug!(parent: &self.l, "ignoring partial for round: {p_round}, current {c_round}, latest_stored {ls_round}");
-            return Ok(());
+            debug!(
+                &self.log,
+                "ignoring partial: round {p_round}, current {c_round}, latest_stored {ls_round}"
+            );
+            return Ok(false);
         }
         // Allowed one round off in the future because of small clock drifts possible.
         if p_round > c_round + 1 {
-            error!(parent: &self.l, "ignoring future partial for round {p_round}, current {c_round}");
+            debug!(
+                &self.log,
+                "ignoring future partial: round {p_round}, current {c_round}",
+            );
             return Err(ChainError::InvalidRound {
                 invalid: p_round,
                 current: c_round,
@@ -383,24 +398,27 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
         }
 
         // Cache updates once per stored beacon, between updates this call is cheap.
-        reg.align_cache(&self.ec, &self.l)?;
+        reg.align_cache(&self.ec, &self.log)?;
 
         // Add packet to cache if p_round hits the allowed range and signature is not duplicated.
         if p_round > ls_round + 1 && p_round <= ls_round + 1 + cache::CACHE_LIMIT_ROUNDS {
             let Some(is_added) = reg.cache_mut().add_packet(partial.packet) else {
-                // Logical error.
-                error!(parent: &self.l, "cache_height {}: attempt to add non-allowed round {p_round}, current {c_round}, please report this.", reg.cache().height());
+                error!(&self.log, "cache_height {}: attempt to add non-allowed round {p_round}, current {c_round}, please report this.", reg.cache().height());
                 return Err(ChainError::InvalidRound {
                     invalid: p_round,
                     current: c_round,
                 });
             };
             if is_added {
-                debug!(parent: &self.l, "cache: added partial for round {p_round}, latest stored {ls_round}, current {c_round}");
+                debug!(&self.log, "cache: added partial for round {p_round}, latest stored {ls_round}, current {c_round}");
             } else {
-                debug!(parent: &self.l, "cache: ignoring already added partial for round {p_round}");
+                debug!(
+                    &self.log,
+                    "cache: ignoring already added partial for round {p_round} from {}",
+                    partial.from
+                );
             }
-            return Ok(());
+            return Ok(false);
 
         // Process packet as sigshare.
         } else if p_round == ls_round + 1 {
@@ -413,26 +431,35 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
 
             // Ignore already present sigshare.
             if reg.cache().is_share_present(idx) {
-                debug!(parent: &self.l, "ignoring already cached sigshare for round {p_round}");
-                return Ok(());
+                debug!(
+                    &self.log,
+                    "ignoring already cached sigshare for round {p_round}",
+                );
+                return Ok(false);
             }
             let (valid_sigshare, node_addr) = self.ec.verify_partial(&partial.packet)?;
 
             // Recover and save beacon.
             // Note: Sigshares are prechecked and sorted by their index.
-            if let Some(thr_sigs) = reg.cache_mut().add_prechecked(valid_sigshare, node_addr) {
+            if let Some(thr_sigs) =
+                reg.cache_mut()
+                    .add_prechecked(valid_sigshare, node_addr, &self.log)
+            {
                 let Ok(recovered) = tbls::recover_unchecked(thr_sigs) else {
-                    error!(parent: &self.l, "fatal: recover_unchecked: scalar is non-invertable");
-                    panic!()
+                    return Err(ChainError::NonInvertableScalar);
                 };
                 if let Err(err) = self.save_recovered(p_round, &recovered, reg).await {
-                    error!(parent: &self.l, "fatal: failed to save recovered beacon for round {p_round}: {err}");
-                    panic!()
-                };
+                    error!(
+                        &self.log,
+                        "failed to save recovered beacon for round {p_round}, {err}",
+                    );
+                    return Err(ChainError::Internal);
+                }
+                return Ok(true);
             }
         }
 
-        Ok(())
+        Ok(false)
     }
 
     async fn save_recovered(
@@ -451,12 +478,20 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
                 r_sig,
             ) {
                 let Ok(r_sig) = Affine::serialize(r_sig) else {
-                    error!(parent: &self.l, "round {r_round}: error: {}", ChainError::SerializeRecovered);
+                    error!(
+                        &self.log,
+                        "round {r_round} {}",
+                        ChainError::SerializeRecovered
+                    );
                     return Err(ChainError::SerializeRecovered);
                 };
                 B::new(reg.latest_stored(), r_sig.into())
             } else {
-                error!(parent: &self.l, "round {r_round}: error: {}", ChainError::InvalidRecovered);
+                error!(
+                    &self.log,
+                    "round {r_round} {}",
+                    ChainError::InvalidRecovered
+                );
                 return Err(ChainError::InvalidRecovered);
             };
             let discrepancy = time::round_discrepancy_ms(
@@ -469,7 +504,7 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
             let start = Instant::now();
             self.store.put(valid_beacon.clone()).await?;
             let storage_time = start.elapsed().as_millis();
-            info!(parent: &self.l, "NEW_BEACON_STORED: round: {r_round}, sig: {}, prevSig: {:?}, time_discrepancy_ms: {discrepancy}, storage_time_ms: {storage_time}", valid_beacon.short_sig(), valid_beacon.short_prev_sig().unwrap_or_default());
+            info!(&self.log, "NEW_BEACON_STORED: round {r_round}, sig {}, prev_sig {:?}, time_discrepancy_ms {discrepancy}, storage_time_ms {storage_time}", valid_beacon.short_sig(), valid_beacon.short_prev_sig().unwrap_or_default());
 
             metrics::report_metrics_on_put(
                 self.chain_info.beacon_id,
@@ -480,13 +515,13 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
 
             // Update registry.
             reg.update_latest_stored(valid_beacon);
-            reg.align_cache(&self.ec, &self.l)?;
+            reg.align_cache(&self.ec, &self.log)?;
 
             // Check if catchup required.
             let ls_round = reg.latest_stored().round();
             let c_round = reg.current_round();
             let catchup_launch = c_round > ls_round;
-            debug!(parent: &self.l, "beacon_loop: catchupmode, last_is {ls_round}, current: {c_round}, catchup_launch: {catchup_launch}");
+            debug!(&self.log, "beacon_loop: catchupmode, last_is {ls_round}, current: {c_round}, catchup_launch {catchup_launch}");
             if catchup_launch {
                 reg.start_catchup(self.catchup_period);
             }
@@ -496,7 +531,11 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
             // - We are at same height with other nodes (at least with thr nodes).
             // - If chain is late - we are on catchup mode (still no reason to resync unless network in ~strange state).
             // - Resync may be triggered again on next round tick.
-            warn!(parent: &self.l, "ignoring recovered beacon for round {r_round}, current {}, latest_stored {ls_round}", reg.current_round());
+            warn!(
+                &self.log,
+                "ignoring recovered beacon: round {r_round}, current {}, latest_stored {ls_round}",
+                reg.current_round()
+            );
             reg.stop_resync();
         };
 
@@ -508,11 +547,10 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
         p: BeaconPacket,
         reg: &mut Registry<S, B>,
     ) -> Result<(), ChainError> {
-        let l = &self.l;
         // Check if we still need beacon for this round (it might have already recovered on cathup mode).
         if p.round == reg.latest_stored().round() + 1 {
             let Ok(p_signature) = Affine::deserialize(&p.signature) else {
-                error!(parent: l, "save_resynced: failed to deserialize signature for round {}, aborting resync task..", p.round);
+                error!(&self.log, "save_resynced: failed to deserialize signature for round {}, aborting resync task..", p.round);
                 reg.stop_resync();
                 return Ok(());
             };
@@ -537,7 +575,7 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
 
                 // Skip logs if round is too far from current round.
                 if reg.current_round() - p.round < LOGS_TO_SKIP || p.round % 300 == 0 {
-                    info!(parent: l,"NEW_BEACON_STORED: round {}, time_discrepancy_ms: {discrepancy}, storage_time_ms: {storage_time}", p.round);
+                    info!(&self.log, "NEW_BEACON_STORED: round {}, time_discrepancy_ms {discrepancy}, storage_time_ms {storage_time}", p.round);
                 }
 
                 metrics::report_metrics_on_put(
@@ -551,11 +589,15 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
                 reg.update_latest_stored(valid_beacon);
                 reg.extend_resync_expiry_time();
             } else {
-                error!(parent: l, "save_resynced: invalid signature for round {}, aborting resync task..", p.round);
+                error!(
+                    &self.log,
+                    "save_resynced: invalid signature for round {}, aborting resync task..",
+                    p.round
+                );
                 reg.stop_resync();
             }
         } else {
-            debug!(parent: l, "save_resynced: ignoring beacon for round {}, latest_stored {}, aborting sync task..", p.round, reg.latest_stored().round());
+            debug!(&self.log, "save_resynced: ignoring beacon for round {}, latest_stored {}, aborting sync task..", p.round, reg.latest_stored().round());
             reg.stop_resync();
         }
 
@@ -583,16 +625,8 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
                 let id = self.chain_info.beacon_id;
                 let start_from = ls_round + 1;
                 let up_to = c_round;
-                let l = tracing::info_span!(
-                    "",
-                    resync = format!(
-                        "{}.{id}.{} from {start_from} to {up_to}",
-                        self.private_listen,
-                        self.ec.our_index()
-                    )
-                );
-
-                let handle = super::sync::resync(start_from, up_to, peers, id, tx_resync, l);
+                let handle =
+                    super::sync::resync(start_from, up_to, peers, id, tx_resync, self.log.clone());
                 reg.new_resync_handle(self.chain_info.period, handle);
             }
         }
@@ -602,9 +636,9 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
 /// Default chain used for fresh nodes without DKG setup.
 async fn run_chain_default<S: Scheme, B: BeaconRepr>(
     mut cc: ChainConfig<B>,
+    log: Logger,
 ) -> Result<Option<ChainConfig<B>>, ChainError> {
-    let l = tracing::info_span!("", chain = format!("{}.{}", cc.private_listen, cc.id));
-    info!(parent: &l, "will run as fresh install -> expect to run DKG.");
+    info!(&log, "will run as fresh install -> expect to run DKG.");
     let mut chain_info = ChainInfo::<S>::default();
 
     // Handle for sync task.
@@ -631,22 +665,22 @@ async fn run_chain_default<S: Scheme, B: BeaconRepr>(
                     },
                     Some(ChainCmd::Follow{req, cb})=>{
                         cb.reply(
-                            follow_chain::<S, B>(&cc, &req, &mut chain_info, &mut sync_handle).await
+                            follow_chain::<S, B>(&cc, &req, &mut chain_info, &mut sync_handle, log.clone()).await
                         );
                     },
                     Some(ChainCmd::LatestStored(cb))=>{
-                        cb.reply(
-                            match cc.store.last().await{
-                                Ok(last) => Ok(StatusResponse{latest_stored_round: last.round()}),
-                                Err(err) => Err(err),
-                            }
-                        );
+                        match cc.store.last().await{
+                            Ok(last) => cb.reply(Ok(StatusResponse{latest_stored_round: last.round()})),
+                            Err(err) => {
+                                error!(&log, "latest_stored request failed: {err}");
+                                cb.reply(Err(BeaconProcessError::NotAvailable));
+                            },
+                        }
                     }
                     Some(ChainCmd::Reload)=> unreachable!("reload is never called on default chain"),
-                    // Following the node without DKG setup is forbidden.
+                    // Syncing from node without DKG setup is forbidden.
                     Some(ChainCmd::ReSync {from_round: _, cb})=> cb.reply(Err(StoreError::Internal)),
-                    // Same for ChainInfo.
-                    Some(ChainCmd::ChainInfo(cb))=>cb.reply(Err(ChainError::DkgSetupRequired)),
+                    Some(ChainCmd::ChainInfo(cb))=> cb.reply(Err(BeaconProcessError::NotAvailable)),
                     None => return Err(ChainError::CmdClosedTx),
                 }
             }
@@ -659,6 +693,7 @@ async fn follow_chain<S: Scheme, B: BeaconRepr>(
     req: &StartSyncRequest,
     chain_info: &mut ChainInfo<S>,
     handle: &mut Option<JoinHandle<Result<(), SyncError>>>,
+    log: Logger,
 ) -> Result<mpsc::Receiver<Result<SyncProgress, Status>>, SyncError> {
     let should_proceed = match handle {
         Some(ref h) => h.is_finished(),
@@ -666,12 +701,12 @@ async fn follow_chain<S: Scheme, B: BeaconRepr>(
     };
 
     if should_proceed {
-        let l = tracing::info_span!(
-            "",
-            follow_chain = format!("{}.{}", cc.private_listen, cc.id)
-        );
-        let new_config = sync::start_follow_chain(req, cc.id, &cc.store, l).await?;
-        let new_ci = new_config.chain_info_from_packet()?;
+        let new_config = sync::start_follow_chain(req, cc.id, &cc.store, &log).await?;
+        let new_ci = ChainInfo::<S>::from_packet(&new_config.packet, new_config.beacon_id)
+            .map_err(|err| {
+                error!(&log, "{err}");
+                SyncError::InvalidInfoPacket
+            })?;
 
         if chain_info.genesis_seed.is_empty() {
             *chain_info = new_ci;
@@ -691,11 +726,11 @@ async fn follow_chain<S: Scheme, B: BeaconRepr>(
             current_round
         };
 
-        let syncer = DefaultSyncer::<S, B>::from_config(new_config)?;
+        let syncer = DefaultSyncer::<S, B>::from_config(new_config, &log)?;
         // Channel to display (and keep-alive) sync progress on client side.
         let (tx, rx) = mpsc::channel(128);
 
-        *handle = Some(syncer.process_follow_request(target, tx));
+        *handle = Some(syncer.process_follow_request(target, tx, log));
 
         Ok(rx)
     } else {
@@ -714,7 +749,12 @@ async fn run_chain<S: Scheme, B: BeaconRepr>(
 
     // Start round ticker.
     let mut rx_round = ticker::start_ticker(h.chain_info.genesis_time, h.chain_info.period);
-    info!(parent: &h.l, "run_chain: latest stored {}, current {}",  reg.latest_stored().round(), reg.current_round());
+    info!(
+        &h.log,
+        "chain is initialized: latest stored {}, current {}",
+        reg.latest_stored().round(),
+        reg.current_round()
+    );
 
     loop {
         tokio::select! {
@@ -725,7 +765,7 @@ async fn run_chain<S: Scheme, B: BeaconRepr>(
                 };
                 reg.new_round(round);
 
-                info!(parent: &h.l, "beacon_loop: new_round, round: {}, lastbeacon: {}", reg.current_round(), reg.latest_stored().round());
+                debug!(&h.log, "beacon_loop: new_round: {}, last_beacon: {}", reg.current_round(), reg.latest_stored().round());
                 let partial = h.sign_partial(&mut reg).await?;
                 h.broadcast(partial).await?;
 
@@ -762,11 +802,11 @@ async fn run_chain<S: Scheme, B: BeaconRepr>(
                     Some(ChainCmd::NewEpoch{first_round})=>{
                         // We need to store last round before transition.
                         let want_round = first_round - 1;
-                        warn!(parent: &h.l, "new epoch will start at round {first_round}");
-                        wait_last_round(want_round, h.store.clone(), channels.tx_cmd.clone(), h.l.clone());
+                        warn!(&h.log, "new epoch will start at round {first_round}");
+                        wait_last_round(want_round, h.store.clone(), channels.tx_cmd.clone(), h.log.clone());
                     },
                     Some(ChainCmd::Reload)=> {
-                        info!(parent: &h.l, "stop_chain: reconfiguration: moving to new epoch!");
+                        info!(&h.log, "stop_chain: reconfiguration: moving to new epoch!");
                         break
                     },
                     Some(ChainCmd::ReSync{from_round,cb})=>h.store.sync(from_round,cb).await,
@@ -774,24 +814,26 @@ async fn run_chain<S: Scheme, B: BeaconRepr>(
                     Some(ChainCmd::Shutdown(cb))=>{
                         h.pool.remove_id(h.chain_info.beacon_id).await.map_err(|_|ChainError::PoolClosedRx)?;
                         cb.reply(Ok(()));
+
                         return Ok(None);
                     },
                     Some(ChainCmd::ChainInfo(cb))=>{
                         let Some(packet)=h.chain_info.as_packet() else{
-                            error!(parent: &h.l, "failed to map chain_info to packet");
-                            cb.reply(Err(ChainError::FailedToGetInfo));
+                            cb.reply(Err(BeaconProcessError::Internal));
                             return Err(ChainError::FailedToGetInfo)
                         };
                         cb.reply(Ok(packet));
                     }
                     None => return Err(ChainError::CmdClosedTx),
                     Some(ChainCmd::LatestStored(cb))=>{
-                        cb.reply(
-                            match h.store.last().await{
-                                Ok(last) => Ok(StatusResponse{latest_stored_round: last.round()}),
-                                Err(err) => Err(err),
-                            }
-                        );
+                        match h.store.last().await{
+                            Ok(last) => cb.reply(Ok(StatusResponse{latest_stored_round: last.round()})),
+                            Err(err) => {
+                                cb.reply(Err(BeaconProcessError::Internal));
+                                error!(&h.log, "latest_stored request failed: {err}");
+                                return Err(ChainError::Internal);
+                            },
+                        }
                     }
                 }
             }
@@ -822,6 +864,10 @@ async fn run_chain<S: Scheme, B: BeaconRepr>(
 ///
 /// Node can be started as fresh [`run_chain_default`] or with DKG setup [`run_chain`].
 /// Outputs with `Ok(None)` indicate graceful shutdown.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "1: data is already is scope. 2: global config eats the stack"
+)]
 pub fn init_chain<S: Scheme, B: BeaconRepr>(
     is_fresh_run: bool,
     fs: FileStore,
@@ -829,6 +875,7 @@ pub fn init_chain<S: Scheme, B: BeaconRepr>(
     pool: PoolSender,
     id: BeaconID,
     our_addres: Address,
+    log: Logger,
     t: &TaskTracker,
 ) -> (mpsc::Sender<PartialMsg>, mpsc::Sender<ChainCmd>) {
     // #[hot]
@@ -855,10 +902,11 @@ pub fn init_chain<S: Scheme, B: BeaconRepr>(
     };
 
     t.spawn(async move {
-        let store = match ChainStore::start(fs.chain_store_path(), id).await {
+        let store = match ChainStore::start(fs.chain_store_path(), id, log.clone()).await {
             Ok(store) => store,
             Err(err) => {
                 error!(
+                    &log,
                     "init_chain: failed to start actor for chain store, beacon id [{id}]: {err}"
                 );
                 return;
@@ -877,7 +925,7 @@ pub fn init_chain<S: Scheme, B: BeaconRepr>(
 
         // Loaded fresh node.
         if let Err(err) = if is_fresh_run {
-            match run_chain_default::<S, B>(inner).await {
+            match run_chain_default::<S, B>(inner, log.clone()).await {
                 // First DKG is completed succesfully.
                 Ok(Some(inner)) => {
                     let mut config = inner;
@@ -903,7 +951,7 @@ pub fn init_chain<S: Scheme, B: BeaconRepr>(
                 }
             }
         } {
-            error!("chain layer returned with error: {err}");
+            error!(&log, "chain layer: {err}");
         }
     });
 
@@ -920,7 +968,7 @@ fn wait_last_round<B: BeaconRepr>(
     want_round: u64,
     store: ChainStore<B>,
     tx: mpsc::Sender<ChainCmd>,
-    l: Span,
+    log: Logger,
 ) {
     tokio::task::spawn({
         async move {
@@ -929,18 +977,24 @@ fn wait_last_round<B: BeaconRepr>(
                 match store.last().await {
                     Ok(last_stored) => {
                         if last_stored.round() >= want_round {
-                            warn!(parent: &l, "transition: epoch last round {want_round} has been stored. Start updating chain module...");
+                            warn!(&log, "transition: epoch last round {want_round} has been stored. Start updating chain module...");
                             if tx.send(ChainCmd::Reload).await.is_err() {
-                                error!(parent: &l, "transition: {}", ChainError::CmdClosedRx);
+                                error!(&log, "transition: {}", ChainError::CmdClosedRx);
                             }
                             return;
                         }
-                        warn!(parent: &l, "transition: waiting for {want_round} round, latest_stored {}, attempts {attempt}", last_stored.round());
+                        warn!(&log, "transition: waiting for {want_round} round, latest_stored {}, attempts {attempt}", last_stored.round());
                         sleep(TRANSITION_DELAY).await;
                         attempt += 1;
+                        if attempt > 30 {
+                            warn!(
+                                &log,
+                                "please check if transition time is same for all nodes"
+                            );
+                        }
                     }
                     Err(err) => {
-                        error!(parent: &l, "transition: {err}");
+                        error!(&log, "transition: {err}");
                         return;
                     }
                 }
@@ -949,15 +1003,15 @@ fn wait_last_round<B: BeaconRepr>(
     });
 }
 
-/// Mitigates non-graceful transition corner case, where DKG output is already received
-/// but node reloaded before transition time.
-async fn check_transition(period: Seconds, transition_time: u64, l: &Span) {
+/// Mitigates transition corner case, where DKG output is already received
+/// but node manually reloaded before transition time.
+async fn check_transition(period: Seconds, transition_time: u64, log: &Logger) {
     let epoch_last_round = transition_time - u64::from(period.get_value());
     let time_now = time::time_now().as_secs();
     if time_now < epoch_last_round {
         // Adding 1 second to skip last round tick of finished epoch.
         let delta = epoch_last_round - time_now + 1;
-        warn!(parent: l, "non-graceful transition? time_now: {time_now}, transition_time: {transition_time}, sleeping {delta}s");
+        warn!(log, "transition is not graceful, time_now {time_now}, transition_time {transition_time}, sleeping {delta}s");
         sleep(Duration::from_secs(delta)).await;
     }
 }

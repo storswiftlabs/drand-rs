@@ -1,6 +1,11 @@
 //! Utilities for testing Drand-rs with Drand-go (v2.1.2-insecure bebad8fc).
 use crate::{
-    cli::*, dkg::status::Status, key::Scheme, net::dkg_control::DkgControlClient,
+    cli::*,
+    dkg::status::Status,
+    info,
+    key::Scheme,
+    log::{set_id, Logger},
+    net::dkg_control::DkgControlClient,
     protobuf::dkg::DkgEntry,
 };
 use energon::kyber::dkg::minimum_t;
@@ -9,7 +14,6 @@ use std::{
     env, fmt::Write as _, fs::File, io::Write, path::PathBuf, sync::LazyLock, time::Duration,
 };
 use tokio::time::sleep;
-use tracing::*;
 
 /// Absolute path for Drand-go v2.1.2-insecure bebad8fc
 static DRAND_BIN_PATH: LazyLock<String> = LazyLock::new(|| {
@@ -253,18 +257,21 @@ pub struct GroupConfig {
     pub genesis_delay: String,
     /// Beacon ID.
     pub id: String,
+    pub log: Option<Logger>,
 }
 
 impl Default for GroupConfig {
     /// Beacon generation is "disabled" by default via `genesis_delay`.
     fn default() -> Self {
+        let id = "AAA".to_string();
         Self {
             scheme: energon::drand::schemes::SigsOnG1Scheme::ID.to_string(),
             period: 10,
             timeout: 50,
             catchup_period: 1,
             genesis_delay: "24h".into(),
-            id: "AAA".into(),
+            log: Some(set_id("TEST", id.as_str())),
+            id,
         }
     }
 }
@@ -476,10 +483,12 @@ impl NodesGroup {
                 && self.sn.leavers.is_empty()),
             "received empty scenario"
         );
-        info!(
-            "Leader: generating proposal for new scenario: {}\n",
-            self.sn
-        );
+        if let Some(ref log) = self.config.log {
+            info!(
+                log,
+                "leager generating proposal for new scenario: {}", self.sn
+            );
+        }
 
         let joiners = map_node_addresses(&self.nodes, &self.sn.joiners);
         let remainers = map_node_addresses(&self.nodes, &self.sn.remainers);
@@ -510,16 +519,21 @@ impl NodesGroup {
     pub async fn leader_initiate_proposal(&mut self) {
         let remainers_len = self.sn.remainers.len();
         let group_size = self.sn.joiners.len() + remainers_len;
-        debug!("leader_initiate_proposal: group_size {group_size},thr: {}, joiners: {:?}, remainers: {:?}, leavers: {:?}",self.sn.thr, self.sn.joiners, self.sn.remainers, self.sn.leavers);
-        let threshold = self.sn.thr;
+        if let Some(ref log) = self.config.log {
+            info!(log, "leader_initiate_proposal: group_size {group_size},thr: {}, joiners: {:?}, remainers: {:?}, leavers: {:?}",self.sn.thr, self.sn.joiners, self.sn.remainers, self.sn.leavers);
+        }
 
-        let c = &self.config;
-        let period = c.period;
-        let timeout = c.timeout;
-        let catchup_period = c.catchup_period;
-        let genesis_delay = &c.genesis_delay;
-        let scheme = &c.scheme;
-        let id = &c.id;
+        let GroupConfig {
+            scheme,
+            period,
+            timeout,
+            catchup_period,
+            genesis_delay,
+            id,
+            log: _,
+        } = &self.config;
+
+        let threshold = self.sn.thr;
         let args = if self.sn.remainers.is_empty() {
             format!("dkg init --id {id} --period {period}s --timeout {timeout}s --catchup-period {catchup_period}s --genesis-delay {genesis_delay} --threshold {threshold} --scheme {scheme} --proposal {}/proposal.toml --control {}", self.nodes[0].folder_path, self.nodes[0].control)
         } else {
@@ -556,20 +570,28 @@ impl NodesGroup {
         for j in &self.sn.joiners {
             assert_eq!(
                 leader_groupfile,
-                std::fs::read(&self.nodes[*j].groupfile_path).unwrap()
+                async_std::fs::read(&self.nodes[*j].groupfile_path)
+                    .await
+                    .unwrap()
             );
         }
         // Remainers
         for r in &self.sn.remainers {
             assert_eq!(
                 leader_groupfile,
-                std::fs::read(&self.nodes[*r].groupfile_path).unwrap()
+                async_std::fs::read(&self.nodes[*r].groupfile_path)
+                    .await
+                    .unwrap()
             );
         }
-        info!(
-            "test[assert_groupfiles]: joiners {:?} and remainers {:?} are in right state",
-            self.sn.joiners, &self.sn.remainers
-        );
+        if let Some(ref log) = self.config.log {
+            info!(
+                log,
+                "assert_groupfiles: joiners {:?} and remainers {:?} are in rignt state",
+                self.sn.joiners,
+                self.sn.remainers
+            );
+        }
     }
 
     pub async fn stop_all(self) {
@@ -775,12 +797,10 @@ impl NodeConfig {
                 let control = self.control.to_string();
                 let id = id.to_string();
                 tokio::task::spawn(async move {
-                    if let Err(err) = Cli::follow(control, id, hash, sync_nodes, up_to, follow)
+                    Cli::follow(control, id, hash, sync_nodes, up_to, follow)
                         .run()
                         .await
-                    {
-                        error!("test: [CLI::follow]: {err}");
-                    };
+                        .unwrap();
                 });
             }
             Lang::GO => panic!("test target is out of scope"),

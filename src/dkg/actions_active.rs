@@ -1,12 +1,12 @@
 use super::{state::State, store::DkgStoreError, ActionsError};
 use crate::{
     core::beacon::BeaconProcess,
+    info,
     key::{group::Group, toml::Toml, Scheme},
     protobuf::dkg::{DkgStatusResponse, JoinOptions},
     transport::dkg::Command,
 };
 use std::future::Future;
-use tracing::info;
 
 /// Contains all the DKG actions that require user interaction: creating a network,
 /// accepting or rejecting a DKG, getting the status, etc. Both leader and follower interactions are contained herein.
@@ -56,13 +56,13 @@ impl<S: Scheme> ActionsActive for BeaconProcess<S> {
         // Apply the proposal to the last succesful state
         let mut state = self.dkg_store().get_last_succesful::<S>(self.id())?;
 
-        info!(parent: self.log(), "running DKG command: {cmd}");
+        info!(self.log(), "running DKG command: {cmd}");
         match cmd {
             Command::Join(join_options) => self.start_join(&mut state, join_options).await?,
             Command::Accept(_) => self.start_accept(state).await?,
             Command::Reject(_) => self.start_reject(state).await?,
             // Other commands are reserved for leader role.
-            _ => crate::core::beacon::todo_request(&cmd)?,
+            _ => return Err(ActionsError::NotSupported),
         }
 
         Ok(())

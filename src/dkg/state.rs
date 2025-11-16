@@ -16,7 +16,6 @@ use crate::{
 use energon::kyber::dkg::DistKeyShare;
 use std::{str::FromStr, time::SystemTime};
 use toml_edit::{ArrayOfTables, DocumentMut, Item, Table};
-use tracing::error;
 
 #[allow(dead_code, reason = "subset of errors is reserved for Leader logic")]
 #[derive(thiserror::Error, Debug)]

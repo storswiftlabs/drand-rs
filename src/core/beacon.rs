@@ -1,8 +1,8 @@
 use super::multibeacon::BeaconHandler;
 use crate::{
     chain::{
-        init_chain, ChainCmd, ChainError, ChainedBeacon, StoreError, StoreStreamResponse,
-        SyncError, UnChainedBeacon,
+        init_chain, ChainCmd, ChainedBeacon, StoreError, StoreStreamResponse, SyncError,
+        UnChainedBeacon,
     },
     dkg::{
         actions_active::ActionsActive, actions_passive::ActionsPassive, execution::ExecuteDkg,
@@ -12,20 +12,31 @@ use crate::{
         keys::{Identity, Pair},
         store::{FileStore, FileStoreError},
         toml::{PairToml, Toml},
-        PointSerDeError, Scheme,
+        Scheme,
     },
+    log::Logger,
     net::{control::SyncProgressResponse, pool::PoolSender, protocol::PartialMsg, utils::Callback},
     protobuf::{
         dkg::{DkgPacket, DkgStatusResponse},
         drand::{ChainInfoPacket, IdentityResponse, StartSyncRequest, StatusResponse},
     },
     transport::dkg::{Command, GossipPacket, Participant},
+    {error, info},
 };
 use energon::drand::traits::BeaconDigest;
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use tokio::sync::mpsc::{self, error::SendError};
 use tokio_util::task::TaskTracker;
-use tracing::{error, info_span, Span};
+
+#[derive(thiserror::Error, Debug)]
+pub enum BeaconProcessError {
+    /// Critical error, the process will log details and terminate.
+    #[error("beacon process internal failure")]
+    Internal,
+    /// Some operations may fail if node is not in right state e.g. DKG setup required.
+    #[error("not available")]
+    NotAvailable,
+}
 
 /// This value should not be changed for backward-compatibility reasons (Drand-go).
 pub const DEFAULT_BEACON_ID: &str = "default";
@@ -54,6 +65,7 @@ impl BeaconID {
     pub fn as_str(&self) -> &'static str {
         self.0
     }
+
     #[inline(always)]
     pub fn is_eq(&self, other_id: &str) -> bool {
         self.0 == other_id
@@ -77,7 +89,7 @@ impl std::fmt::Display for BeaconID {
 
 pub enum BeaconCmd {
     Shutdown(Callback<(), ShutdownError>),
-    IdentityRequest(Callback<IdentityResponse, PointSerDeError>),
+    IdentityRequest(Callback<IdentityResponse, BeaconProcessError>),
     Sync(
         u64,
         Callback<mpsc::Receiver<StoreStreamResponse>, StoreError>,
@@ -86,8 +98,8 @@ pub enum BeaconCmd {
         StartSyncRequest,
         Callback<mpsc::Receiver<SyncProgressResponse>, SyncError>,
     ),
-    ChainInfo(Callback<ChainInfoPacket, ChainError>),
-    Status(Callback<StatusResponse, StoreError>),
+    ChainInfo(Callback<ChainInfoPacket, BeaconProcessError>),
+    Status(Callback<StatusResponse, BeaconProcessError>),
     DkgActions(Actions),
     FinishedDkg,
 }
@@ -115,7 +127,7 @@ pub struct InnerProcess<S: Scheme> {
     dkg_store: DkgStore,
     process_cmd_tx: mpsc::Sender<BeaconCmd>,
     pub chain_cmd_tx: mpsc::Sender<ChainCmd>,
-    l: Span,
+    log: Logger,
 }
 
 impl<S: Scheme> BeaconProcess<S> {
@@ -133,9 +145,11 @@ impl<S: Scheme> BeaconProcess<S> {
             .ok_or(FileStoreError::FailedToReadID)?
             .to_string();
         let id = BeaconID::leak_once(id);
+
+        // Fresh run means no DKG setup yet.
         let is_fresh = fs.is_fresh_run()?;
         let dkg_store = DkgStore::init::<S>(fs.beacon_path.as_path(), is_fresh, id.as_str())?;
-        let log = info_span!("", id = format!("{private_listen}.{id}"));
+        let log = crate::log::set_id(&private_listen, id.as_str());
         let t = TaskTracker::new();
 
         let (partial_tx, chain_cmd_tx) = if S::Beacon::is_chained() {
@@ -146,6 +160,7 @@ impl<S: Scheme> BeaconProcess<S> {
                 pool,
                 id,
                 our_addr,
+                log.clone(),
                 &t,
             )
         } else {
@@ -156,6 +171,7 @@ impl<S: Scheme> BeaconProcess<S> {
                 pool,
                 id,
                 our_addr,
+                log.clone(),
                 &t,
             )
         };
@@ -169,7 +185,7 @@ impl<S: Scheme> BeaconProcess<S> {
                 dkg_store,
                 process_cmd_tx,
                 chain_cmd_tx,
-                l: log,
+                log,
             }),
         };
 
@@ -182,56 +198,77 @@ impl<S: Scheme> BeaconProcess<S> {
         pool: PoolSender,
         private_listen: String,
     ) -> Result<BeaconHandler, FileStoreError> {
-        // Create cmd channel for beacon process
+        // BeaconHandler -> BeaconProcess.
         let (bp_tx, mut bp_rx) = mpsc::channel::<BeaconCmd>(1);
-        // Initialize beacon process.
         let (bp, partial_tx) = Self::new(fs, pair, bp_tx.clone(), pool, private_listen)?;
         let bp_id = bp.beacon_id;
         let tracker = bp.tracker().clone();
 
         tracker.spawn(async move {
-            let mut gk = GateKeeper::new(bp.log());
+            let mut gk = GateKeeper::new(bp.log.clone());
             while let Some(cmd) = bp_rx.recv().await {
                 match cmd {
-                    BeaconCmd::Status(cb) =>bp.status(cb).await,
-                    BeaconCmd::IdentityRequest(cb) => cb.reply(bp.identity().try_into()),
+                    BeaconCmd::Status(cb) => {
+                        if let Err(SendError(ChainCmd::LatestStored(cb))) =
+                            bp.chain_cmd_tx.send(ChainCmd::LatestStored(cb)).await
+                        {
+                            error!(&bp.log, "latest_stored request failed");
+                            cb.reply(Err(BeaconProcessError::Internal));
+                            break;
+                        }
+                    }
+                    BeaconCmd::IdentityRequest(cb) => match bp.identity().try_into() {
+                        Ok(identity) => cb.reply(Ok(identity)),
+                        Err(err) => {
+                            error!(&bp.log, "identity request failed: {err}");
+                            cb.reply(Err(BeaconProcessError::Internal));
+                            break;
+                        }
+                    },
                     BeaconCmd::Sync(from_round, cb) => {
-                        if let Err(err)=bp
+                        if let Err(SendError(ChainCmd::ReSync { from_round, cb })) = bp
                             .chain_cmd_tx
                             .send(ChainCmd::ReSync { from_round, cb })
                             .await
                         {
-                            // Catch the callback and track fatal state details.
-                            if let ChainCmd::ReSync {from_round, cb } = err.0 {
-                                error!(parent: &bp.l,"fatal: chainstore: sync request from round {from_round} has not been processed");
-                                cb.reply(Err(StoreError::Internal));
-                                break
-                            }
+                            error!(&bp.log, "sync request from round {from_round} failed");
+                            cb.reply(Err(StoreError::Internal));
+                            break;
                         }
                     }
-                    BeaconCmd::ChainInfo(cb) => bp.chain_info(cb).await,
+                    BeaconCmd::ChainInfo(cb) => {
+                        if let Err(SendError(ChainCmd::ChainInfo(cb))) =
+                            bp.chain_cmd_tx.send(ChainCmd::ChainInfo(cb)).await
+                        {
+                            error!(&bp.log, "chain_info request failed");
+                            cb.reply(Err(BeaconProcessError::Internal));
+                            break;
+                        }
+                    }
                     BeaconCmd::DkgActions(action) => bp.dkg_actions(action, &mut gk).await,
-                    BeaconCmd::FinishedDkg => gk.set_empty(),
+                    BeaconCmd::FinishedDkg => {
+                        gk.set_empty();
+                        info!(bp.log(), "DKG gate is closed, protocol terminated normally");
+                    }
                     BeaconCmd::Shutdown(cb) => {
                         cb.reply(bp.shutdown().await);
                         break;
                     }
                     BeaconCmd::Follow(req, cb) => {
-                        if let Err(err)= bp
-                            .chain_cmd_tx
-                            .send(ChainCmd::Follow{req, cb})
-                            .await
+                        if let Err(SendError(ChainCmd::Follow { req, cb })) =
+                            bp.chain_cmd_tx.send(ChainCmd::Follow { req, cb }).await
                         {
-                            // Catch the callback and track fatal state details.
-                            if let ChainCmd::Follow { req, cb } = err.0 {
-                                error!(parent: &bp.l,"fatal: chain: follow request up_to {} has not been processed", req.up_to);
-                                cb.reply(Err(SyncError::Internal));
-                                break
-                            }
+                            error!(
+                                &bp.log,
+                                "follow request up_to {} has not been processed", req.up_to
+                            );
+                            cb.reply(Err(SyncError::Internal));
+                            break;
                         }
                     }
                 }
             }
+            info!(bp.log(), "shutting down");
         });
 
         Ok(BeaconHandler {
@@ -243,21 +280,22 @@ impl<S: Scheme> BeaconProcess<S> {
 
     async fn dkg_actions(&self, request: Actions, gk: &mut GateKeeper<S>) {
         match request {
-            Actions::Status(cb) => cb.reply(self.dkg_status()),
-            Actions::Command(cmd, cb) => cb.reply(self.command(cmd).await),
-            Actions::Broadcast(packet, cb) => cb.reply(gk.broadcast(packet).await),
-            Actions::Gossip(packet, cb) => cb.reply(self.gossip(gk, packet).await),
-        }
-    }
-
-    async fn status(&self, cb: Callback<StatusResponse, StoreError>) {
-        if self
-            .chain_cmd_tx
-            .send(ChainCmd::LatestStored(cb))
-            .await
-            .is_err()
-        {
-            error!(parent: &self.l, "fatal: chain module in failed state");
+            Actions::Status(cb) => cb.reply(self.dkg_status().inspect_err(|err| {
+                error!(self.log(), "dkg_status: {err}");
+            })),
+            Actions::Command(cmd, cb) => cb.reply(self.command(cmd).await.inspect_err(|err| {
+                error!(self.log(), "dkg_command: {err}");
+            })),
+            Actions::Broadcast(packet, cb) => {
+                cb.reply(gk.broadcast(packet).await.inspect_err(|err| {
+                    error!(self.log(), "dkg_broadcast: {err}");
+                }));
+            }
+            Actions::Gossip(packet, cb) => {
+                cb.reply(self.gossip(gk, packet).await.inspect_err(|err| {
+                    error!(self.log(), "dkg_gossip: {err}");
+                }));
+            }
         }
     }
 
@@ -291,13 +329,6 @@ impl<S: Scheme> BeaconProcess<S> {
         Ok(())
     }
 
-    async fn chain_info(&self, cb: Callback<ChainInfoPacket, ChainError>) {
-        self.chain_cmd_tx
-            .send(ChainCmd::ChainInfo(cb))
-            .await
-            .unwrap();
-    }
-
     /// Returns [`Participant`] which is dkg representation of [`Identity`].
     pub fn as_participant(&self) -> Result<Participant, ActionsError> {
         self.identity()
@@ -305,15 +336,8 @@ impl<S: Scheme> BeaconProcess<S> {
             .map_err(|_| ActionsError::IntoParticipant)
     }
 
-    pub async fn dkg_finished_notification(&self) {
-        if self
-            .process_cmd_tx
-            .send(BeaconCmd::FinishedDkg)
-            .await
-            .is_err()
-        {
-            error!(parent: self.log(), "BeaconProcess receiver closed unexpectedly");
-        }
+    pub async fn dkg_finished_notification(&self) -> Result<(), SendError<BeaconCmd>> {
+        self.process_cmd_tx.send(BeaconCmd::FinishedDkg).await
     }
 
     pub fn tracker(&self) -> &TaskTracker {
@@ -324,8 +348,9 @@ impl<S: Scheme> BeaconProcess<S> {
         self.beacon_id.as_str()
     }
 
-    pub fn log(&self) -> &Span {
-        &self.l
+    #[inline(always)]
+    pub fn log(&self) -> &Logger {
+        &self.log
     }
 
     pub fn fs(&self) -> &FileStore {
@@ -349,13 +374,6 @@ impl<S: Scheme> BeaconProcess<S> {
 #[derive(thiserror::Error, Debug)]
 #[error("failed to shutdown gracefully")]
 pub struct ShutdownError;
-
-/// Temporary tracker for unfinished logic
-pub fn todo_request<D: std::fmt::Display + ?Sized>(kind: &D) -> Result<(), ActionsError> {
-    tracing::warn!("received TODO request: {kind}");
-
-    Err(ActionsError::Todo)
-}
 
 impl<S: Scheme> std::ops::Deref for BeaconProcess<S> {
     type Target = InnerProcess<S>;

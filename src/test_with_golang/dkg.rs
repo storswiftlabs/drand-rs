@@ -117,15 +117,16 @@ async fn all_roles_dkg() {
     remove_nodes_fs();
 }
 
-#[ignore = "example for release build"]
+#[ignore = "manual"]
 #[tokio::test]
 async fn random_scenarios() {
+    // 55 epochs = ~20 minutes to run
+    let epochs = 55;
     let write_statistic = true;
     // Max group size and number of epochs are arbitrary values.
     // Note: for dynamic scenarios at least 3 nodes required.
     let max_group_size = 20;
-    // 55 epochs = ~20 minutes to run
-    let epochs = 55;
+
     let mut group = NodesGroup::generate_nodes(max_group_size, GroupConfig::default(), None).await;
 
     if write_statistic {

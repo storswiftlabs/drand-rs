@@ -1,8 +1,7 @@
 use crate::{
     chain::{ChainError, StoreError},
-    core::multibeacon::BeaconHandlerError,
+    core::{beacon::BeaconProcessError, multibeacon::BeaconHandlerError},
     dkg::ActionsError,
-    key::PointSerDeError,
     net::control::CONTROL_HOST,
     protobuf::drand::{Metadata, NodeVersion},
 };
@@ -261,14 +260,6 @@ impl NewTcpListener for TestListener {
     }
 }
 
-#[derive(thiserror::Error, Debug)]
-pub enum StartServerError {
-    #[error("failed to start control server")]
-    FailedToStartControl,
-    #[error("failed to start node server")]
-    FailedToStartNode,
-}
-
 /// Converts the underlying error into a [`Status`], including the provided beacon id.
 pub trait ToStatus {
     fn to_status(&self, id: &str) -> Status;
@@ -277,44 +268,44 @@ pub trait ToStatus {
 impl ToStatus for tokio::sync::oneshot::error::RecvError {
     /// This error should not be possible. Means that callback sender is dropped without sending.
     fn to_status(&self, id: &str) -> Status {
-        Status::internal(format!("beacon id '{id}' internal RecvError"))
+        Status::internal(format!("{id}: internal error*"))
     }
 }
 
 impl ToStatus for ChainError {
     fn to_status(&self, id: &str) -> Status {
-        Status::aborted(format!("beacon id '{id}', {self}"))
+        Status::aborted(format!("{id}: {self}"))
     }
 }
 
 impl ToStatus for StoreError {
     fn to_status(&self, id: &str) -> Status {
-        Status::aborted(format!("beacon id '{id}', {self}"))
+        Status::aborted(format!("{id}: {self}"))
     }
 }
 
 impl ToStatus for BeaconHandlerError {
     fn to_status(&self, id: &str) -> Status {
-        Status::unknown(format!("beacon id '{id}', {self}"))
+        Status::unknown(format!("{id}: {self}"))
     }
 }
 
-impl ToStatus for PointSerDeError {
+impl ToStatus for BeaconProcessError {
     /// TODO: well-define error values, see [`ConversionError`]
     fn to_status(&self, id: &str) -> Status {
-        Status::invalid_argument(format!("beacon id '{id}', conversion error: {self}"))
+        Status::unknown(format!("{id}: {self}"))
     }
 }
 
 impl ToStatus for InvalidAddress {
     fn to_status(&self, id: &str) -> Status {
-        Status::invalid_argument(format!("beacon id '{id}', {}", self.0))
+        Status::invalid_argument(format!("{id}: {}", self.0))
     }
 }
 
 impl ToStatus for ActionsError {
     fn to_status(&self, id: &str) -> Status {
-        Status::aborted(format!("beacon id '{id}', {self}",))
+        Status::aborted(format!("{id}: {self}",))
     }
 }
 
@@ -328,24 +319,15 @@ pub struct Callback<T, E: Error> {
     inner: oneshot::Sender<Result<T, E>>,
 }
 
-pub const ERR_SEND: &str = "callback receiver is dropped";
-
 impl<T, E: Error> Callback<T, E> {
     pub fn new() -> (Self, oneshot::Receiver<Result<T, E>>) {
         let (tx, rx) = oneshot::channel();
         (Self { inner: tx }, rx)
     }
 
-    /// Sends a response back and tracks all outcoming errors if verbose flag is set.
+    #[inline]
     pub fn reply(self, result: Result<T, E>) {
-        if tracing::enabled!(tracing::Level::DEBUG) {
-            if let Err(err) = &result {
-                tracing::error!("callback returns with the error: {err}");
-            }
-        }
-
-        if self.inner.send(result).is_err() {
-            tracing::error!("{ERR_SEND}");
-        };
+        // TODO: monitoring on server side.
+        let _ = self.inner.send(result);
     }
 }

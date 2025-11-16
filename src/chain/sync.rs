@@ -11,6 +11,7 @@ use super::{
 use crate::{
     core::beacon::BeaconID,
     key::Scheme,
+    log::Logger,
     net::{
         control::SyncProgressResponse,
         protocol::ProtocolClient,
@@ -18,6 +19,7 @@ use crate::{
         utils::{Address, Seconds},
     },
     protobuf::drand::{BeaconPacket, ChainInfoPacket, StartSyncRequest, SyncProgress},
+    {debug, error, info, warn},
 };
 use energon::traits::Affine;
 use rand::seq::SliceRandom;
@@ -28,13 +30,12 @@ use tokio::{
     time::Instant,
 };
 use tonic::Status;
-use tracing::{debug, error, info, warn, Span};
 
 /// Renew resync if no beacons received for factor*period duration.
 const RESYNC_EXPIRY_FACTOR: u8 = 2;
 
 /// Used to reduce log verbosity when doing bulk processes.
-pub const LOGS_TO_SKIP: u64 = 300;
+pub const LOGS_TO_SKIP: u64 = 50;
 
 #[derive(thiserror::Error, Debug)]
 pub enum SyncError {
@@ -110,17 +111,9 @@ impl HandleReSync {
 /// Initial config for `follow` request. Used to start [`DefaultSyncer`].
 pub struct DefaultSyncerConfig<B: BeaconRepr> {
     store: ChainStore<B>,
-    packet: ChainInfoPacket,
-    beacon_id: BeaconID,
+    pub packet: ChainInfoPacket,
+    pub beacon_id: BeaconID,
     peers: Vec<Address>,
-    l: Span,
-}
-
-impl<B: BeaconRepr> DefaultSyncerConfig<B> {
-    pub fn chain_info_from_packet<S: Scheme>(&self) -> Result<ChainInfo<S>, SyncError> {
-        ChainInfo::<S>::from_packet(&self.packet, self.beacon_id)
-            .ok_or(SyncError::InvalidInfoPacket)
-    }
 }
 
 /// Default syncer used for nodes without DKG setup.
@@ -128,57 +121,48 @@ pub struct DefaultSyncer<S: Scheme, B: BeaconRepr> {
     store: ChainStore<B>,
     info: ChainInfo<S>,
     peers: Vec<Address>,
-    l: Span,
 }
 
 impl<S: Scheme, B: BeaconRepr> DefaultSyncer<S, B> {
-    pub fn from_config(c: DefaultSyncerConfig<B>) -> Result<Self, SyncError> {
+    pub fn from_config(c: DefaultSyncerConfig<B>, log: &Logger) -> Result<Self, SyncError> {
         let DefaultSyncerConfig {
             store,
             packet,
             beacon_id,
             peers,
-            l,
         } = c;
 
-        if packet.scheme_id != S::ID {
-            error!(parent: &l, "received info packet scheme {} != bp scheme {}", packet.scheme_id, S::ID);
-            return Err(SyncError::InvalidInfoPacket);
-        }
-
-        let Some(info) = ChainInfo::from_packet(&packet, beacon_id) else {
-            error!(parent: &l, "{}", SyncError::InvalidInfoPacket);
-            return Err(SyncError::InvalidInfoPacket);
+        let info = match ChainInfo::from_packet(&packet, beacon_id) {
+            Ok(info) => info,
+            Err(err) => {
+                error!(log, "{err}");
+                return Err(SyncError::InvalidInfoPacket);
+            }
         };
 
-        let syncer = Self {
-            store,
-            info,
-            peers,
-            l,
-        };
+        let syncer = Self { store, info, peers };
 
         Ok(syncer)
     }
 
-    #[allow(clippy::too_many_lines, reason = "101/100")]
+    #[rustfmt::skip] // readability
     pub fn process_follow_request(
         self,
         target: u64,
         tx: mpsc::Sender<SyncProgressResponse>,
+        log: Logger,
     ) -> JoinHandle<Result<(), SyncError>> {
         task::spawn(async move {
-            let l = &self.l;
             let mut last_stored = self.store.last().await?;
             if last_stored.round() >= target {
-                warn!(parent: l, "request rejected: target {target}, latest_stored {}", last_stored.round());
+                warn!(&log, "sync request rejected: target {target}, latest_stored {}", last_stored.round());
                 return Ok(());
             }
-            info!(parent: l, "processing request, target: {target}, latest_stored {}", last_stored.round());
-            let started_from = last_stored.round();
+            info!(&log, "processing sync request: target {target}, latest_stored {}", last_stored.round());
 
+            let started_from = last_stored.round();
             if target - started_from > LOGS_TO_SKIP {
-                debug!(parent: l, "logging will use rate limiting, skipping logs: {LOGS_TO_SKIP}");
+                debug!(&log, "logging will use rate limiting {LOGS_TO_SKIP}");
             }
 
             // Peers are randomly sorted on configuration step (see [start_follow_chain]).
@@ -186,86 +170,70 @@ impl<S: Scheme, B: BeaconRepr> DefaultSyncer<S, B> {
                 let from = last_stored.round() + 1;
                 if target < from {
                     let err = SyncError::InvalidTarget { from, target };
-                    error!(parent: l, "latest stored round {}, {err}", last_stored.round());
+                    error!(&log, "latest stored round {}, {err}", last_stored.round());
                     return Err(err);
                 }
 
                 let mut stream = match ProtocolClient::new(peer).await {
                     Ok(mut client) => {
-                        match client
-                            .sync_chain(from, self.info.beacon_id.to_string())
-                            .await
-                        {
+                        match client.sync_chain(from, self.info.beacon_id.to_string()).await {
                             Ok(stream) => stream,
                             Err(err) => {
-                                error!(parent: l, "skipping {peer}: failed to get stream: {err}");
+                                error!(&log, "skipping {peer}, failed to get stream: {err}");
                                 continue;
                             }
                         }
                     }
                     Err(err) => {
-                        error!(parent: l, "skipping {peer}: unable to create client: {err}");
+                        error!(&log, "skipping {peer}, unable to create client: {err}",);
                         continue;
                     }
                 };
 
                 while let Ok(Some(p)) = stream.message().await {
                     let Some(ref meta) = p.metadata else {
-                        error!(parent: l, "stream: skipping {peer}: no metadata for round {}", p.round);
+                        error!(&log, "stream: skipping {peer}, no metadata for round {}", p.round);
                         continue 'peers;
                     };
 
                     if self.info.beacon_id.as_str() != meta.beacon_id {
-                        error!(parent: l, "stream: skipping {peer}: invalid beacon_id {} for round {}", meta.beacon_id, p.round);
+                        error!(&log, "stream: skipping {peer}, invalid beacon_id {} for round {}", meta.beacon_id, p.round);
                         continue 'peers;
                     }
                     if p.round != last_stored.round() + 1 {
-                        error!(parent: l, "stream: skipping {peer}: round expected {}, received {}", last_stored.round()+1, p.round);
+                        error!(&log, "stream: skipping {peer}, round expected {}, received {}", last_stored.round() + 1, p.round);
                         continue 'peers;
                     }
                     if target - p.round < LOGS_TO_SKIP || p.round % LOGS_TO_SKIP == 0 {
-                        debug!(parent: l, "new_beacon_fetched, peer {peer}, from_round {from}, got_round {}", p.round);
+                        debug!(&log, "new_beacon_fetched: peer {peer}, from_round {from}, got_round {}", p.round);
                     }
 
                     // Verify beacon before moving data from packet.
                     let Ok(new_sig) = Affine::deserialize(&p.signature) else {
-                        error!(parent: l, "stream: skipping peer {peer}: failed to deserialize signature for round {}", p.round);
+                        error!(&log, "stream: skipping peer {peer}: failed to deserialize signature for round {}", p.round);
                         continue 'peers;
                     };
 
-                    if super::is_valid_signature::<S>(
-                        &self.info.public_key,
-                        last_stored.signature(),
-                        p.round,
-                        &new_sig,
-                    ) {
+                    if super::is_valid_signature::<S>(&self.info.public_key, last_stored.signature(), p.round, &new_sig) {
                         // Signature and round has been checked - beacon is valid.
                         let valid_beacon = B::from_packet(p);
                         if let Err(err) = self.store.put(valid_beacon.clone()).await {
-                            error!(parent: l, "failed to store beacon for round {}: {err}", valid_beacon.round());
+                            error!(&log, "failed to store beacon for round {}: {err}", valid_beacon.round());
                             return Err(SyncError::ChainStore(err));
                         }
                         last_stored = valid_beacon;
 
                         // Report sync progress to control client side.
-                        if tx
-                            .send(Ok(SyncProgress {
-                                current: last_stored.round(),
-                                target,
-                                metadata: None,
-                            }))
-                            .await
-                            .is_err()
-                        {
-                            debug!(parent: l, "aborted from client side, synced {}, latest_stored {}", last_stored.round() - started_from, last_stored.round());
+                        if tx.send(Ok(SyncProgress { current: last_stored.round(), target, metadata: None })).await.is_err() {
+                            debug!(&log, "sync request cancelled: synced {}, latest_stored {}", last_stored.round() - started_from, last_stored.round());
                             return Ok(());
                         }
                         if last_stored.round() == target {
-                            debug!(parent: l, "finished syncing up_to {target} round");
+                            debug!(&log, "finished syncing up_to {target} round");
                             return Ok(());
                         }
                     } else {
-                        error!(parent: l, "skipping peer {peer}: invalid beacon signature, round {}", p.round);
+                        error!(&log, "skipping peer {peer}: invalid beacon signature, round {}", p.round);
                         continue 'peers;
                     }
                 }
@@ -277,7 +245,7 @@ impl<S: Scheme, B: BeaconRepr> DefaultSyncer<S, B> {
                 };
 
                 let _ = tx.send(Err(Status::cancelled(err.to_string()))).await;
-                error!(parent: l, "finished with error: {err}");
+                error!(&log, "sync request finished: {err}");
                 return Err(err);
             }
 
@@ -290,16 +258,16 @@ pub async fn start_follow_chain<B: BeaconRepr>(
     req: &StartSyncRequest,
     id: BeaconID,
     store: &ChainStore<B>,
-    l: Span,
+    log: &Logger,
 ) -> Result<DefaultSyncerConfig<B>, SyncError> {
-    info!(parent:&l, "start_follow_chain: up_to {}", req.up_to);
+    info!(log, "starting follow_chain: up_to {}", req.up_to);
 
     let mut peers = Vec::with_capacity(req.nodes.len());
     for node in &req.nodes {
         match Address::precheck(node.as_str()) {
             Ok(peer) => peers.push(peer),
             Err(err) => {
-                error!(parent: &l, "invalid peer address: {err}");
+                error!(log, "invalid peer address: {err}");
                 continue;
             }
         }
@@ -312,8 +280,8 @@ pub async fn start_follow_chain<B: BeaconRepr>(
     peers.shuffle(&mut rand::rng());
 
     // Packet beacon ID from metadata should match the chain config ID.
-    let packet = chain_info_from_peers(&peers, id, &l).await?;
-    debug!(parent: &l, "received chain info from peers:\n{packet}");
+    let packet = chain_info_from_peers(&peers, id, log).await?;
+    debug!(log, "received chain info from peers:\n{packet}");
 
     // Packet hash should match the chain hash of beacon process recorded in packet metadata.
     let hash = super::info::hash_packet(&packet, id);
@@ -332,15 +300,18 @@ pub async fn start_follow_chain<B: BeaconRepr>(
         );
         return Err(SyncError::ChainHashMismatch(err_details));
     }
-    store.check_genesis(&packet.group_hash, &l).await?;
-    info!(parent: &l, "start_follow_chain: fetched chain info, hash {}", hex::encode(hash));
+    store.check_genesis(&packet.group_hash, log).await?;
+    info!(
+        log,
+        "follow_chain: fetched chain info, hash {}",
+        hex::encode(hash)
+    );
 
     let config = DefaultSyncerConfig {
         store: store.clone(),
         packet,
         beacon_id: id,
         peers,
-        l,
     };
 
     Ok(config)
@@ -353,10 +324,9 @@ pub fn resync(
     peers: Vec<Address>,
     id: BeaconID,
     tx_synced: mpsc::Sender<BeaconPacket>,
-    l: Span,
+    log: Logger,
 ) -> JoinHandle<Result<(), SyncError>> {
     task::spawn(async move {
-        let l = &l;
         let mut last_sent = start_from - 1;
 
         'peers: for peer in peers {
@@ -370,28 +340,42 @@ pub fn resync(
                 Ok(mut conn) => match conn.sync_chain(last_sent + 1, id.to_string()).await {
                     Ok(stream) => stream,
                     Err(err) => {
-                        error!(parent: l, "failed to get stream from {peer}: {err}");
+                        error!(&log, "failed to get stream: peer {peer} {err}");
                         continue;
                     }
                 },
                 Err(err) => {
-                    error!(parent: l, "unable to create client for {peer}: {err}");
+                    error!(&log, "failed to create client: peer {peer} {err}");
                     continue;
                 }
             };
 
-            debug!(parent: l, "start_resync with peer {peer}, from_round {}, up_to {up_to}", last_sent + 1);
+            debug!(
+                &log,
+                "start resyns: peer {peer}, from_round {}, up_to {up_to}",
+                last_sent + 1
+            );
             while let Ok(Some(p)) = stream.message().await {
-                let Some(ref meta) = p.metadata else {
-                    error!(parent: l, "skipping {peer}: no metadata for round {}", p.round);
+                let Some(ref p_meta) = p.metadata else {
+                    error!(&log, "skipping {peer}, no metadata for round {}", p.round);
                     continue 'peers;
                 };
-                if id.as_str() != meta.beacon_id {
-                    error!(parent: l, "skipping {peer}: invalid beacon id [{}] for round {}", meta.beacon_id, p.round);
+                if id.as_str() != p_meta.beacon_id {
+                    error!(
+                        &log,
+                        "skipping {peer}, invalid beacon_id {} for round {}",
+                        p_meta.beacon_id,
+                        p.round
+                    );
                     continue 'peers;
                 }
                 if p.round != last_sent + 1 {
-                    error!(parent: l, "skipping {peer}: round expected {}, received {}", last_sent+1, p.round);
+                    error!(
+                        &log,
+                        "skipping {peer}: round expected {}, received {}",
+                        last_sent + 1,
+                        p.round
+                    );
                     continue 'peers;
                 }
                 if tx_synced.send(p).await.is_err() {
@@ -401,13 +385,16 @@ pub fn resync(
 
                 // Stop if target is reached
                 if last_sent == up_to {
-                    debug!(parent: l, "stop_resync: with peer {peer}, reached target {up_to}");
+                    debug!(
+                        &log,
+                        "resync finished successfully: peer {peer}, target {up_to}"
+                    );
                     return Ok(());
                 }
             }
         }
         let err = SyncError::TriedAllPers { last: last_sent };
-        error!(parent: l, "stop_resync: {err}");
+        error!(&log, "resync: {err}");
 
         Err(err)
     })
@@ -418,30 +405,34 @@ pub fn resync(
 async fn chain_info_from_peers(
     peers: &[Address],
     id: BeaconID,
-    l: &Span,
+    log: &Logger,
 ) -> Result<ChainInfoPacket, SyncError> {
     for peer in peers {
         match PublicClient::new(peer).await {
             Ok(mut client) => {
-                debug!(parent: l, "connected to {peer}, sending chain info request..");
+                debug!(log, "connected to {peer}, sending chain info request..",);
                 match client.chain_info(id.to_string()).await {
                     Ok(packet) => {
                         if let Some(ref m) = packet.metadata {
                             if m.beacon_id == id.as_str() {
                                 return Ok(packet);
                             }
-                            warn!(parent: l, "info_from_peers: skipping {peer}: invalid beacon id: {}", m.beacon_id);
+                            warn!(
+                                log,
+                                "chain_info: skipping {peer} with invalid beacon_id {}",
+                                m.beacon_id
+                            );
                         } else {
-                            warn!(parent: l, "info_from_peers: skipping {peer}: no metadata received");
+                            warn!(log, "chain_info: skipping {peer} without metadata");
                         }
                     }
                     Err(err) => {
-                        warn!(parent: l, "info_from_peers: skipping {peer}: {err}");
+                        warn!(log, "chain_info: skipping {peer}: {err}");
                     }
                 }
             }
             Err(err) => {
-                warn!(parent: l, "info_from_peers: unable to create client: {err}");
+                warn!(log, "chain_info: unable to create client: {err}");
             }
         };
     }

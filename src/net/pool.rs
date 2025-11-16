@@ -2,14 +2,14 @@
 //! FIXME: pool logic could be simplified.
 use super::utils::Address;
 use crate::{
-    core::beacon::BeaconID, net::protocol::ProtocolClient, protobuf::drand::PartialBeaconPacket,
+    core::beacon::BeaconID, debug, error, log::Logger, net::protocol::ProtocolClient,
+    protobuf::drand::PartialBeaconPacket, warn,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
     time::Duration,
 };
 use tokio::sync::{broadcast, mpsc, oneshot};
-use tracing::{debug, error, trace, warn, Span};
 
 pub enum PoolCmd {
     Partial(PartialBeaconPacket),
@@ -32,11 +32,11 @@ pub struct Pool {
     active: BTreeMap<Address, Connection>,
     pending: BTreeMap<Address, PendingConnection>,
     enabled_beacons: BTreeMap<BeaconID, broadcast::Sender<PartialBeaconPacket>>,
-    l: Span,
+    l: Logger,
 }
 
 impl Pool {
-    pub fn start(l: Span) -> PoolSender {
+    pub fn start(l: Logger) -> PoolSender {
         let (tx_cmd, mut rx_cmd) = mpsc::channel::<PoolCmd>(1);
         let (tx_new_conn, mut rx_new_conn) = mpsc::channel::<(Address, ProtocolClient)>(1);
 
@@ -59,7 +59,7 @@ impl Pool {
 
                     cmd = rx_cmd.recv()=> {
                         if pool.shutdown {
-                            warn!(parent: &pool.l, "AddID: pool is shutting down, ignoring message");
+                            warn!(&pool.l, "AddID: pool is shutting down, ignoring message");
                             continue;
                         }
 
@@ -72,7 +72,7 @@ impl Pool {
                                 PoolCmd::AddID(id, peers) => {
                                     let (tx_broadcast, _) = tokio::sync::broadcast::channel::<PartialBeaconPacket>(1);
                                     if pool.enabled_beacons.insert(id, tx_broadcast).is_some() {
-                                        error!(parent: &pool.l, "beacon ID [{id}] is already active");
+                                        error!(&pool.l, "beacon ID [{id}] is already active");
                                         continue;
                                     }
                                     for peer in peers {
@@ -86,7 +86,7 @@ impl Pool {
                                 }
                                 PoolCmd::RemoveID(id) => {
                                     pool.remove_beacon_id(&id);
-                                    debug!(parent: &pool.l,"beacon ID [{id}] is removed from pool");
+                                    debug!(&pool.l,"beacon ID [{id}] is removed from pool");
                                 }
                             }
                         }
@@ -107,7 +107,7 @@ impl Pool {
                 .iter()
                 .for_each(|beacon_id| self.subscribe_client(*beacon_id, &uri, conn.clone()));
 
-            debug!(parent: &self.l, "established connection: {uri}");
+            debug!(&self.l, "established connection: {uri}");
             self.active.insert(
                 uri,
                 Connection {
@@ -129,12 +129,13 @@ impl Pool {
         };
 
         if self.enabled_beacons.is_empty() {
-            error!(parent: &self.l, "failed to broadcast: no any ID enabled");
+            error!(&self.l, "failed to broadcast: no any ID enabled");
         }
         for (id, sender) in &self.enabled_beacons {
             if beacon_id == id.as_str() {
                 if let Err(err) = sender.send(msg.clone()) {
-                    error!(parent: &self.l,
+                    error!(
+                        &self.l,
                         "broadcast: {err}, id: {}",
                         msg.metadata.as_ref().unwrap().beacon_id
                     );
@@ -151,7 +152,7 @@ impl Pool {
         }
         if let Some(sender) = self.enabled_beacons.get(&id) {
             let mut receiver = sender.subscribe();
-            debug!(parent: &self.l, "connection {uri:?} is subscribed for [{id}]");
+            debug!(&self.l, "connection {uri:?} is subscribed for [{id}]");
             tokio::spawn({
                 let peer = uri.as_str().to_owned();
                 let ll = self.l.clone();
@@ -159,16 +160,23 @@ impl Pool {
                     let l = &ll;
                     while let Ok(msg) = receiver.recv().await {
                         let round = msg.round;
-                        debug!(parent: l, "sending partial: round: {round}, to: {peer}");
+                        debug!(l, "sending partial: round: {round}, to: {peer}");
                         if let Err(err) = conn.partial_beacon(msg).await {
-                            error!(parent: l, "sending partial: round: {round}, to: {peer}, error: {}", err.root_cause());
+                            error!(
+                                l,
+                                "sending partial: round: {round}, to: {peer}, error: {}",
+                                err.root_cause()
+                            );
                         }
                     }
-                    debug!(parent: l, "disabled subscription: {peer}");
+                    debug!(l, "disabled subscription: {peer}");
                 }
             });
         } else {
-            error!(parent: &self.l, "unable to subscribe connection {uri:?}, beacon_id {id} is disabled");
+            error!(
+                &self.l,
+                "unable to subscribe connection {uri:?}, beacon_id {id} is disabled"
+            );
         }
     }
 
@@ -178,7 +186,7 @@ impl Pool {
         peer: Address,
         sender: mpsc::Sender<(Address, ProtocolClient)>,
     ) {
-        trace!(parent: &self.l,"pending: add_connection {peer}");
+        warn!(&self.l, "pending: add_connection {peer}");
         // update pending list
         // todo: add check that map not contains this kv
         let mut beacons = BTreeSet::new();
@@ -197,20 +205,20 @@ impl Pool {
             let client = loop {
                 match ProtocolClient::new(&peer).await {
                     Ok(client) => {
-                        debug!(parent: &l, "connected to {peer}");
+                        debug!(&l, "connected to {peer}");
                         if let Ok(()) = rx.try_recv() {
-                            debug!(parent: &l,"pending connection {peer} canceled");
+                            debug!(&l, "pending connection {peer} canceled");
                             break None;
                         }
                         break Some(client);
                     }
                     Err(err) => {
-                        error!(parent: &l,"connecting to {peer}: {err}");
+                        error!(&l, "connecting to {peer}: {err}");
                     }
                 };
 
                 if let Ok(()) = rx.try_recv() {
-                    debug!(parent: &l,"pending connection {peer} canceled");
+                    debug!(&l, "pending connection {peer} canceled");
                     break None;
                 }
 
@@ -218,7 +226,7 @@ impl Pool {
             };
 
             if client.is_some() && sender.send((peer.clone(), client.unwrap())).await.is_err() {
-                error!(parent: &l, "pending: pool receiver is dropped");
+                error!(&l, "pending: pool receiver is dropped");
             }
         });
     }

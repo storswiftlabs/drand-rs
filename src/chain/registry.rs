@@ -2,10 +2,9 @@ use super::{
     cache::PartialCache, epoch::EpochConfig, handler::ChainError, info::ChainInfo,
     store::BeaconRepr, sync::HandleReSync, time, SyncError,
 };
-use crate::{key::Scheme, net::utils::Seconds, protobuf::drand::BeaconPacket};
+use crate::{error, key::Scheme, log::Logger, net::utils::Seconds, protobuf::drand::BeaconPacket};
 use std::time::Duration;
 use tokio::{sync::mpsc, task::JoinHandle};
-use tracing::Span;
 
 /// Registry holds actual data which might be changed per / within a round.
 pub struct Registry<S: Scheme, B: BeaconRepr> {
@@ -34,14 +33,13 @@ impl<S: Scheme, B: BeaconRepr> Registry<S, B> {
         tx_catchup: mpsc::Sender<()>,
         tx_resync: mpsc::Sender<BeaconPacket>,
         thr: usize,
-        l_partial: Span,
     ) -> Self {
         let current_round = time::current_round(
             time::time_now().as_secs(),
             info.period.get_value(),
             info.genesis_time,
         );
-        let p_cache = PartialCache::new(latest_stored.round(), thr, l_partial);
+        let p_cache = PartialCache::new(latest_stored.round(), thr);
 
         Self {
             latest_stored,
@@ -112,13 +110,12 @@ impl<S: Scheme, B: BeaconRepr> Registry<S, B> {
     /// Updates the cache if the latest stored round differs
     /// from the cache internals (see: [`PartialCache::align`]).
     ///
-    /// WARNING: To prevent burning of the partial cache,
-    /// this method should NEVER be called within the logic for resync.
-    pub fn align_cache(&mut self, ec: &EpochConfig<S>, l: &Span) -> Result<(), ChainError> {
+    /// WARNING: To prevent unnecessary allocations this method should not be called within the logic for resync.
+    pub fn align_cache(&mut self, ec: &EpochConfig<S>, log: &Logger) -> Result<(), ChainError> {
         self.p_cache
-            .align(ec, self.latest_stored.round(), l)
+            .align(ec, self.latest_stored.round(), log)
             .map_err(|err| {
-                tracing::error!(parent: l, "partial_cache: {err}, please report this");
+                error!(log, "partial_cache: {err}, please report this",);
                 ChainError::Internal
             })
     }

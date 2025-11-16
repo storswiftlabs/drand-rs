@@ -6,7 +6,6 @@ use crate::{
 };
 use energon::{points::KeyPoint, traits::Affine};
 use sha2::Digest;
-use tracing::error;
 
 /// Public information that is necessary for a client to verify any beacon present in a randomness chain.
 #[derive(Default, Clone, PartialEq)]
@@ -18,20 +17,25 @@ pub struct ChainInfo<S: Scheme> {
     pub genesis_seed: Vec<u8>,
 }
 
+#[derive(thiserror::Error, Debug)]
+#[error("chain_info: {}")]
+pub enum ChainInfoError {
+    #[error("received scheme should match the scheme of beacon process")]
+    Scheme,
+    #[error("failed to deserialize group key")]
+    PublicKey,
+    #[error("genesis time can not be zero")]
+    GenesisTime,
+}
+
 impl<S: Scheme> ChainInfo<S> {
-    pub fn from_packet(packet: &ChainInfoPacket, id: BeaconID) -> Option<Self> {
+    pub fn from_packet(packet: &ChainInfoPacket, id: BeaconID) -> Result<Self, ChainInfoError> {
         if S::ID != packet.scheme_id {
-            error!(
-                "ChainInfo<S>::from_packet: [{id}]: scheme expected {}, received {}",
-                S::ID,
-                packet.scheme_id
-            );
-            return None;
+            return Err(ChainInfoError::Scheme);
         }
 
         let Ok(public_key) = Affine::deserialize(&packet.public_key) else {
-            error!("ChainInfo::from_packet: [{id}]: failed to deserialize group key\nkey_hex: {}\nscheme: {}", hex::encode(&packet.public_key), S::ID);
-            return None;
+            return Err(ChainInfoError::PublicKey);
         };
 
         let genesis_time = check_genesis_time(packet.genesis_time)?;
@@ -43,7 +47,7 @@ impl<S: Scheme> ChainInfo<S> {
             genesis_seed: packet.group_hash.clone(),
         };
 
-        Some(info)
+        Ok(info)
     }
 
     pub fn as_packet(&self) -> Option<ChainInfoPacket> {
@@ -99,12 +103,11 @@ pub fn hash_packet(proto: &ChainInfoPacket, id: BeaconID) -> [u8; 32] {
 }
 
 /// Returns `None` if genesis time is equal or less then zero.
-fn check_genesis_time(genesis_time: i64) -> Option<u64> {
+fn check_genesis_time(genesis_time: i64) -> Result<u64, ChainInfoError> {
     if genesis_time > 0 {
         #[allow(clippy::cast_sign_loss, reason = "checked")]
-        Some(genesis_time as u64)
+        Ok(genesis_time as u64)
     } else {
-        error!("chain_info: invalid genesis time: {genesis_time}");
-        None
+        Err(ChainInfoError::GenesisTime)
     }
 }

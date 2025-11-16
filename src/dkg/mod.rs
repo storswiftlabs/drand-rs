@@ -44,6 +44,6 @@ pub enum ActionsError {
     ResharePrevGroupRequired,
     #[error("reshare: previous share can not be empty")]
     ResharePrevShareRequired,
-    #[error("TODO: this dkg action is not implemented yet")]
-    Todo,
+    #[error("leader action is not supported")]
+    NotSupported,
 }
