@@ -168,6 +168,14 @@ impl ProtocolClient {
         Ok(Self { client })
     }
 
+    /// Does not attempt to connect to the endpoint until first use. Should be used only in pool for partial packets.
+    pub fn new_lazy(address: &Address) -> anyhow::Result<Self> {
+        let channel = super::utils::connect_lazy(address)?;
+        let client = ProtocolClientInner::new(channel);
+
+        Ok(Self { client })
+    }
+
     pub async fn get_identity(
         &mut self,
         beacon_id: String,

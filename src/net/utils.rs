@@ -43,6 +43,31 @@ pub async fn connect(peer: &Address) -> anyhow::Result<Channel> {
     Ok(channel)
 }
 
+#[cfg(not(any(test, feature = "insecure")))]
+/// Returns a channel for a generic Tonic client with TLS configuration.
+/// Does not attempt to connect to the endpoint until first use.
+pub fn connect_lazy(peer: &Address) -> anyhow::Result<Channel> {
+    let channel = Channel::from_shared(format!("https://{peer}"))?
+        .tls_config(tonic::transport::ClientTlsConfig::new().with_native_roots())?
+        .connect_timeout(CONNECT_TIMEOUT)
+        .keep_alive_while_idle(true)
+        .keep_alive_timeout(Duration::from_secs(60))
+        .connect_lazy();
+    Ok(channel)
+}
+
+#[cfg(any(test, feature = "insecure"))]
+/// Returns a channel for a generic Tonic client without TLS configuration.
+/// Does not attempt to connect to the endpoint until first use.
+pub fn connect_lazy(peer: &Address) -> anyhow::Result<Channel> {
+    let channel = Channel::from_shared(format!("http://{peer}"))?
+        .connect_timeout(CONNECT_TIMEOUT)
+        .keep_alive_while_idle(true)
+        .keep_alive_timeout(Duration::from_secs(60))
+        .connect_lazy();
+    Ok(channel)
+}
+
 /// Address is protected type of URI Authority which always contains host:port (see [`Address::precheck`]).
 #[derive(Eq, PartialEq, Clone)]
 pub struct Address(Authority);
