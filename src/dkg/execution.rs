@@ -49,14 +49,14 @@ pub trait ExecuteDkg {
         &self,
         current: &State<Self::Scheme>,
         sorted_participants: &[&Participant],
-    ) -> Result<Config<Self::Scheme>, ActionsError>;
+    ) -> Result<(Config<Self::Scheme>, Logger), ActionsError>;
 
     fn reshare_config(
         &self,
         current: &State<Self::Scheme>,
         previous: State<Self::Scheme>,
         sorted_participants: &[&Participant],
-    ) -> Result<Config<Self::Scheme>, ActionsError>;
+    ) -> Result<(Config<Self::Scheme>, Logger), ActionsError>;
 }
 
 impl<S: Scheme> ExecuteDkg for BeaconProcess<S> {
@@ -89,12 +89,11 @@ impl<S: Scheme> ExecuteDkg for BeaconProcess<S> {
             .duration_since(SystemTime::now())
             .map_err(|_| ActionsError::StartExecutionTimeIsPassed)?;
 
-        // Setup config for DKG protocol.
-        let config = match last_completed {
+        // Setup config and logger for DKG protocol.
+        let (config, dkg_log) = match last_completed {
             Some(previous) => self.reshare_config(&current, previous, &sorted_participants)?,
             None => self.initial_config(&current, &sorted_participants)?,
         };
-        let dkg_log = config.log.clone();
 
         // Initialize DKG protocol instance with channels for input and output.
         let (protocol, bundles_rx, bundles_tx) =
@@ -138,11 +137,12 @@ impl<S: Scheme> ExecuteDkg for BeaconProcess<S> {
         Ok(())
     }
 
+    /// Returns initial DKG config and logger with corresponding DKG index.
     fn initial_config(
         &self,
         current: &State<S>,
         sorted: &[&Participant],
-    ) -> Result<Config<S>, ActionsError> {
+    ) -> Result<(Config<S>, Logger), ActionsError> {
         let new_nodes = sorted
             .iter()
             .enumerate()
@@ -170,7 +170,7 @@ impl<S: Scheme> ExecuteDkg for BeaconProcess<S> {
                 })
                 .collect();
         };
-
+        let long_term = self.private_key().to_owned();
         let share = None;
         let threshold = current.threshold;
         let nonce = nonce_for_epoch(current.epoch());
@@ -180,28 +180,30 @@ impl<S: Scheme> ExecuteDkg for BeaconProcess<S> {
             .map(|n| n.index)
             .expect("our node is always present in sorted nodes");
 
-        let log = set_dkg(self.identity().address(), self.id(), dkg_index);
-        let config = Config {
-            long_term: self.private_key().to_owned(),
+        let dkg_log = set_dkg(self.identity().address(), self.id(), dkg_index);
+
+        let config = Config::new(
+            long_term,
             old_nodes,
-            new_nodes,
             public_coeffs,
+            new_nodes,
             share,
             threshold,
             old_threshold,
             nonce,
-            log,
-        };
+            Some(dkg_log.clone()),
+        );
 
-        Ok(config)
+        Ok((config, dkg_log))
     }
 
+    /// Returns DKG config and logger with corresponding DKG index for reshare.
     fn reshare_config(
         &self,
         current: &State<Self::Scheme>,
         previous: State<Self::Scheme>,
         sorted_participants: &[&Participant],
-    ) -> Result<Config<Self::Scheme>, ActionsError> {
+    ) -> Result<(Config<Self::Scheme>, Logger), ActionsError> {
         let new_nodes = sorted_participants
             .iter()
             .enumerate()
@@ -217,8 +219,8 @@ impl<S: Scheme> ExecuteDkg for BeaconProcess<S> {
             .iter()
             .find(|n| n.public() == self.identity().key())
             .map_or_else(|| "Leaving".into(), |n| n.index.to_string());
+        let dkg_log = set_dkg(self.identity().address(), self.id(), dkg_index);
 
-        let log = set_dkg(self.identity().address(), self.id(), dkg_index);
         let prev_final_group = previous
             .final_group
             .as_ref()
@@ -238,20 +240,26 @@ impl<S: Scheme> ExecuteDkg for BeaconProcess<S> {
                 public: n.public().key().to_owned(),
             })
             .collect();
+        let long_term = self.private_key().to_owned();
+        let public_coeffs = prev_final_group.dist_key.commits().to_vec();
+        let share = prev_keyshare;
+        let threshold = current.threshold;
+        let old_threshold = previous.threshold;
+        let nonce = nonce_for_epoch(current.epoch());
 
-        let config = Config {
-            long_term: self.private_key().to_owned(),
+        let config = Config::new(
+            long_term,
             old_nodes,
+            public_coeffs,
             new_nodes,
-            public_coeffs: prev_final_group.dist_key.commits().to_vec(),
-            share: prev_keyshare,
-            threshold: current.threshold,
-            old_threshold: previous.threshold,
-            nonce: nonce_for_epoch(current.epoch()),
-            log,
-        };
+            share,
+            threshold,
+            old_threshold,
+            nonce,
+            Some(dkg_log.clone()),
+        );
 
-        Ok(config)
+        Ok((config, dkg_log))
     }
 }
 
