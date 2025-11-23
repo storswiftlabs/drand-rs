@@ -726,6 +726,7 @@ impl NodeConfig {
                     // Load all ids.
                     id: None,
                     metrics: None,
+                    monitored_ids: vec![],
                 };
                 tokio::task::spawn(async move { Cli::start(config).run().await.unwrap() });
             }

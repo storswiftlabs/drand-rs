@@ -6,7 +6,7 @@ use crate::{
     cli::Config,
     key::store::{FileStore, FileStoreError},
     log::Logger,
-    net::{pool::Pool, utils::Callback},
+    net::{latency::AppResponseTimeReporter, pool::Pool, utils::Callback},
     {error, info},
 };
 use std::{path::PathBuf, sync::Arc};
@@ -26,6 +26,7 @@ pub struct Daemon {
     token: CancellationToken,
     beacons: MultiBeacon,
     multibeacon_path: PathBuf,
+    latency_tx: AppResponseTimeReporter,
     log: Logger,
 }
 
@@ -42,6 +43,8 @@ impl Daemon {
             config.control,
             config.folder,
         );
+        let latency_tx =
+            AppResponseTimeReporter::initialize(config.monitored_ids.clone(), log.clone());
 
         // Sender for connection pool for partial beacon packets is shared across beacon ids.
         let pool_tx = Pool::start(log.clone());
@@ -52,6 +55,7 @@ impl Daemon {
             token,
             beacons,
             multibeacon_path,
+            latency_tx,
             log,
         });
 
@@ -161,5 +165,13 @@ impl Daemon {
 
     pub fn cancellation_token(&self) -> CancellationToken {
         self.token.clone()
+    }
+
+    pub fn log(&self) -> &Logger {
+        &self.log
+    }
+
+    pub fn latency_tx(&self) -> &AppResponseTimeReporter {
+        &self.latency_tx
     }
 }

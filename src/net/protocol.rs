@@ -7,6 +7,7 @@ use super::{
 use crate::{
     chain::ChainError,
     core::{beacon::BeaconCmd, daemon::Daemon},
+    debug,
     protobuf::{
         dkg::dkg_public_server::DkgPublicServer,
         drand::{
@@ -82,20 +83,34 @@ impl Protocol for ProtocolHandler {
             .get("x-real-ip")
             .map_or_else(|| "", |v| v.to_str().unwrap_or_default())
             .to_string();
-        let partial = PartialPacket {
-            packet: request.into_inner(),
-            from,
-        };
+        let packet = request.into_inner();
+        let round = packet.round;
+        let id = packet.metadata.as_ref().map_or_else(
+            || Err(Status::data_loss(ERR_METADATA_IS_MISSING)),
+            |meta| Ok(meta.beacon_id.as_str()),
+        )?;
+        debug!(
+            self.log(),
+            "received partial: id {id}, round {round}, from {from}"
+        );
+        let request_latency_metadata: Option<_> = self.latency_tx().check_id(id);
         let (tx, rx) = Callback::new();
 
         self.beacons()
-            .send_partial((partial, tx))
+            .send_partial((PartialPacket { packet, from }, tx))
             .await
             .map_err(|err| Status::unknown(err.to_string()))?;
-        let _reserved = rx
+        let is_aggregated = rx
             .await
             .map_err(|err| Status::unknown(err.to_string()))?
             .map_err(|err| Status::unknown(err.to_string()))?;
+
+        if is_aggregated {
+            if let Some(tracked_id) = request_latency_metadata {
+                let delay = tracked_id.elapsed_ms();
+                self.latency_tx().send(tracked_id, delay, round).await;
+            }
+        }
 
         Ok(Response::new(Empty { metadata: None }))
     }

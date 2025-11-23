@@ -69,6 +69,8 @@ pub struct Config {
     /// Indicates the id for the randomness generation process which will be started
     #[arg(long, default_value = None)]
     pub id: Option<String>,
+    /// `BEACON_ID` (you can put multiple ones) for which to enable application-layer response time measurement.
+    pub monitored_ids: Vec<String>,
 }
 
 /// Sync your local randomness chain with other nodes and validate your local beacon chain. To follow a remote node, it requires the use of the 'follow' flag.
