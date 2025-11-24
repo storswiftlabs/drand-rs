@@ -573,8 +573,9 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
                 self.store.put(valid_beacon.clone()).await?;
                 let storage_time = start.elapsed().as_millis();
 
-                // Skip logs if round is too far from current round.
-                if reg.current_round() - p.round < LOGS_TO_SKIP || p.round % 300 == 0 {
+                // Skip logs if round is too far from current round [`LOGS_TO_SKIP`].
+                // Display logs for packets within 50 rounds before the current round.
+                if reg.current_round() - p.round < 50 || p.round % LOGS_TO_SKIP == 0 {
                     info!(&self.log, "NEW_BEACON_STORED: round {}, time_discrepancy_ms {discrepancy}, storage_time_ms {storage_time}", p.round);
                 }
 

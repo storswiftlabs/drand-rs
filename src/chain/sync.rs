@@ -35,7 +35,7 @@ use tonic::Status;
 const RESYNC_EXPIRY_FACTOR: u8 = 2;
 
 /// Used to reduce log verbosity when doing bulk processes.
-pub const LOGS_TO_SKIP: u64 = 50;
+pub const LOGS_TO_SKIP: u64 = 300;
 
 #[derive(thiserror::Error, Debug)]
 pub enum SyncError {
