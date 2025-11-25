@@ -1,4 +1,4 @@
-//! Utilities for testing Drand-rs with Drand-go (v2.1.2-insecure bebad8fc).
+//! Utilities for testing Drand-rs with Drand-go v2.1.3-insecure 8228476b.
 use crate::{
     cli::*,
     dkg::status::Status,
@@ -15,7 +15,7 @@ use std::{
 };
 use tokio::time::sleep;
 
-/// Absolute path for Drand-go v2.1.2-insecure bebad8fc
+/// Absolute path for Drand-go.
 static DRAND_BIN_PATH: LazyLock<String> = LazyLock::new(|| {
     format!(
         "{}/{INNER_PATH}drand_go",
