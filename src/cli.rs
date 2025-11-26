@@ -32,7 +32,7 @@ pub struct Cli {
     pub commands: Cmd,
 }
 
-/// Generate the long-term keypair (drand.private, drand.public) for this node, and load it on the drand daemon if it is up and running
+/// Generate the long-term keypair (drand.private, drand.public) for this node, and load it on the drand daemon if it is up and running.
 #[derive(Debug, Parser, Clone)]
 pub struct KeyGenConfig {
     /// Set the port you want to listen to for control port commands. If not specified, we will use the default value.
@@ -44,10 +44,10 @@ pub struct KeyGenConfig {
     /// Indicates the id for the randomness generation process which the command applies to.
     #[arg(long, default_value = beacon::DEFAULT_BEACON_ID)]
     pub id: String,
-    /// Indicates a set of values drand will use to configure the randomness generation process
+    /// Indicates a set of values drand will use to configure the randomness generation process.
     #[arg(long, default_value = DefaultScheme::ID)]
     pub scheme: String,
-    /// The address other nodes will be able to contact this node on (specified as 'private-listen' to the daemon)
+    /// The address other nodes will be able to contact this node on (specified as 'private-listen' to the daemon).
     pub address: String,
 }
 
@@ -66,7 +66,7 @@ pub struct Config {
     /// Launch a metrics server at the specified host:port.
     #[arg(long, default_value = None)]
     pub metrics: Option<String>,
-    /// Indicates the id for the randomness generation process which will be started
+    /// Indicates the id for the randomness generation process which will be started.
     #[arg(long, default_value = None)]
     pub id: Option<String>,
     /// `BEACON_ID` (you can put multiple ones) for which to enable application-layer response time measurement.
@@ -89,7 +89,7 @@ pub struct SyncConfig {
     /// Note: The `up_to` value is ignored when the '--follow' flag is used.
     #[arg(long, default_value = "0")]
     pub up_to: u64,
-    /// Indicates the id for the randomness generation process which will be started
+    /// Indicates the id for the randomness generation process which will be started.
     #[arg(long)]
     pub id: String,
     /// Indicates whether we want to follow another daemon up to latest chain height.
@@ -97,17 +97,17 @@ pub struct SyncConfig {
     pub follow: bool,
 }
 
-/// Commands for interacting with the DKG
+/// Commands for interacting with the DKG.
 #[derive(Subcommand, Clone, Debug)]
 pub enum Dkg {
     Join {
         /// Set the port you want to listen to for control port commands. If not specified, we will use the default value.
         #[arg(long, default_value = control::DEFAULT_CONTROL_PORT)]
         control: String,
-        /// Indicates the id for the randomness generation process which will be started
+        /// Indicates the id for the randomness generation process which will be started.
         #[arg(long)]
         id: String,
-        /// Absolute path to the group file of previous epoch
+        /// Absolute path to the group file of previous epoch.
         #[arg(long, default_value = None)]
         group: Option<String>,
     },
@@ -115,7 +115,7 @@ pub enum Dkg {
         /// Set the port you want to listen to for control port commands. If not specified, we will use the default value.
         #[arg(long, default_value = control::DEFAULT_CONTROL_PORT)]
         control: String,
-        /// Indicates the id for the randomness generation process which will be started
+        /// Indicates the id for the randomness generation process which will be started.
         #[arg(long)]
         id: String,
     },
@@ -123,7 +123,7 @@ pub enum Dkg {
         /// Set the port you want to listen to for control port commands. If not specified, we will use the default value.
         #[arg(long, default_value = control::DEFAULT_CONTROL_PORT)]
         control: String,
-        /// Indicates the id for the randomness generation process which will be started
+        /// Indicates the id for the randomness generation process which will be started.
         #[arg(long)]
         id: String,
     },
@@ -131,7 +131,7 @@ pub enum Dkg {
         /// Set the port you want to listen to for control port commands. If not specified, we will use the default value.
         #[arg(long, default_value = control::DEFAULT_CONTROL_PORT)]
         control: String,
-        /// Indicates the id for the randomness generation process which will be started
+        /// Indicates the id for the randomness generation process which will be started.
         #[arg(long, default_value = beacon::DEFAULT_BEACON_ID)]
         id: String,
     },
@@ -144,7 +144,7 @@ pub enum Show {
         /// Set the port you want to listen to for control port commands. If not specified, we will use the default value.
         #[arg(long, default_value = control::DEFAULT_CONTROL_PORT)]
         control: String,
-        /// Indicates the id for the randomness generation process which will be started
+        /// Indicates the id for the randomness generation process which will be started.
         #[arg(long)]
         id: String,
     },
@@ -152,7 +152,7 @@ pub enum Show {
         /// Set the port you want to listen to for control port commands. If not specified, we will use the default value.
         #[arg(long, default_value = control::DEFAULT_CONTROL_PORT)]
         control: String,
-        /// Indicates the id for the randomness generation process which will be started
+        /// Indicates the id for the randomness generation process which will be started.
         #[arg(long)]
         id: String,
     },
@@ -176,10 +176,10 @@ pub enum Cmd {
     Start(Config),
     /// Stop the drand daemon.
     Stop {
-        /// Set the port you want to listen to for control port commands. If not specified, we will use the default value
+        /// Set the port you want to listen to for control port commands. If not specified, we will use the default value.
         #[arg(long, default_value = control::DEFAULT_CONTROL_PORT)]
         control: String,
-        /// Indicates the id to be stopped, if not provided - stops all processes and shutdowns the daemon
+        /// Indicates the id to be stopped, if not provided - stops all processes and shutdowns the daemon.
         #[arg(long, default_value = None)]
         id: Option<String>,
     },
@@ -188,7 +188,7 @@ pub enum Cmd {
         /// Set the port you want to listen to for control port commands. If not specified, we will use the default value.
         #[arg(long, default_value = control::DEFAULT_CONTROL_PORT)]
         control: String,
-        /// Indicates the id for the randomness generation process which will be started
+        /// Indicates the id for the randomness generation process which will be started.
         #[arg(long)]
         id: String,
     },

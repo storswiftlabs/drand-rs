@@ -1,3 +1,5 @@
+//! Chain logic implementation.
+//! Price for some abstraction boundaries is traded for speed.
 use super::{
     cache,
     epoch::{EpochConfig, EpochNode},
@@ -39,6 +41,7 @@ use tokio::{
 use tokio_util::task::TaskTracker;
 use tonic::Status;
 
+/// Truncated signature bytes for compact log output.
 const SHORT_SIG_BYTES: usize = 3;
 
 #[derive(thiserror::Error, Debug)]
@@ -53,8 +56,8 @@ pub enum ChainError {
     TickerClosedTx,
     #[error("pool receiver has been closed unexpectedly")]
     PoolClosedRx,
-    #[error("invalid lengh of partial: expected {expected} received {received}")]
-    InvalidShareLenght { expected: usize, received: usize },
+    #[error("invalid length of partial: expected {expected} received {received}")]
+    InvalidShareLength { expected: usize, received: usize },
     #[error("attempt to process beacon from node of index {0}, but it was not in the group file")]
     UnknownIndex(u32),
     #[error("received partial with invalid signature")]
@@ -68,11 +71,11 @@ pub enum ChainError {
     #[error("recovered signature is invalid")]
     InvalidRecovered,
     #[error("chain store: {0}")]
-    ChainStoreError(#[from] StoreError),
+    ChainStore(#[from] StoreError),
     #[error("t_bls: {0}")]
     TBlsError(#[from] tbls::TBlsError),
     #[error("fs: {0}")]
-    FileStoreError(#[from] FileStoreError),
+    FileStore(#[from] FileStoreError),
     #[error("recover_unchecked: scalar is non-invertable")]
     NonInvertableScalar,
     #[error("internal error")]
@@ -85,7 +88,7 @@ pub enum ChainError {
 struct ChainHandler<S: Scheme, B: BeaconRepr> {
     /// Public information of chain.
     chain_info: ChainInfo<S>,
-    /// Minimum period allowed between and subsequent partial generation.
+    /// Minimum period allowed between subsequent partial generation.
     catchup_period: Duration,
     /// Actor handle for beacon persistent database.
     store: ChainStore<B>,
@@ -97,19 +100,20 @@ struct ChainHandler<S: Scheme, B: BeaconRepr> {
     ec: EpochConfig<S>,
     /// Private binding address.
     private_listen: String,
-    /// Public URI Authority.
-    our_addres: Address,
+    /// Public URI authority.
+    our_address: Address,
     log: Logger,
 }
 
 pub enum ChainCmd {
     Shutdown(Callback<(), ChainError>),
-    /// Chain is notified once DKG output is received, triggering preparation
+    /// Notification once DKG output is received, triggers preparation
     /// for transition into the next epoch (see: [`wait_last_round`]).
     NewEpoch {
         first_round: u64,
     },
-    /// Partial reload of the chain module during transition to update [`EpochConfig`] and logger.
+    /// Partially reloads the chain module during transitions to update
+    /// the [`EpochConfig`] and metadata for logger.
     Reload,
     /// Request for chain public information.
     ChainInfo(Callback<ChainInfoPacket, BeaconProcessError>),
@@ -151,8 +155,8 @@ pub struct ChainConfig<B: BeaconRepr> {
 }
 
 impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
-    /// This function updates the epoch configuration and logger for chain handler
-    /// after each DKG.
+    /// This function updates the epoch configuration and logger metadata
+    /// for chain handler after each DKG.
     ///
     /// Returns top-level components of chain module with their channels:
     /// - Chain configuration: [`ChainHandler`].
@@ -211,8 +215,8 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
             genesis_time,
             genesis_seed,
         };
-        let catchup_period = Duration::from_secs(catchup_period.get_value().into());
 
+        let catchup_period = Duration::from_secs(catchup_period.get_value().into());
         let chain_handler = Self {
             chain_info,
             catchup_period,
@@ -221,12 +225,11 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
             fs,
             ec,
             private_listen,
-            our_addres,
+            our_address: our_addres,
             log,
         };
 
         let latest_stored = chain_handler.store.last().await?;
-
         let registry = Registry::new(
             &chain_handler.chain_info,
             latest_stored,
@@ -239,9 +242,6 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
     }
 
     /// Adds remote nodes to connection pool for given beacon ID.
-    ///
-    /// If some nodes are already in pool (registered for other ID),
-    /// their connections will be reused.
     async fn register_in_pool(&self) -> Result<(), ChainError> {
         let peers = self
             .ec
@@ -315,7 +315,7 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
         {
             if let Some(thr_sigs) =
                 reg.cache_mut()
-                    .add_prechecked(sigshare, &self.our_addres, &self.log)
+                    .add_prechecked(sigshare, &self.our_address, &self.log)
             {
                 let Ok(recovered) = tbls::recover_unchecked(thr_sigs) else {
                     return Err(ChainError::NonInvertableScalar);
@@ -403,7 +403,7 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
         // Add packet to cache if p_round hits the allowed range and signature is not duplicated.
         if p_round > ls_round + 1 && p_round <= ls_round + 1 + cache::CACHE_LIMIT_ROUNDS {
             let Some(is_added) = reg.cache_mut().add_packet(partial.packet) else {
-                error!(&self.log, "cache_height {}: attempt to add non-allowed round {p_round}, current {c_round}, please report this.", reg.cache().height());
+                error!(&self.log, "cache_height {}: attempt to add non-allowed round {p_round}, current {c_round}, please report this", reg.cache().height());
                 return Err(ChainError::InvalidRound {
                     invalid: p_round,
                     current: c_round,
@@ -423,7 +423,7 @@ impl<S: Scheme, B: BeaconRepr> ChainHandler<S, B> {
         // Process packet as sigshare.
         } else if p_round == ls_round + 1 {
             let Some(idx) = cache::get_partial_index::<S>(&partial.packet.partial_sig) else {
-                return Err(ChainError::InvalidShareLenght {
+                return Err(ChainError::InvalidShareLength {
                     expected: <S::Sig as energon::traits::Group>::POINT_SIZE + 2,
                     received: partial.packet.partial_sig.len(),
                 });
@@ -855,7 +855,7 @@ async fn run_chain<S: Scheme, B: BeaconRepr>(
         private_listen: h.private_listen,
         id: h.chain_info.beacon_id,
         fs: h.fs,
-        our_addres: h.our_addres,
+        our_addres: h.our_address,
     };
 
     Ok(Some(config_for_next_epoch))

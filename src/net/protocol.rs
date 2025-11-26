@@ -15,7 +15,7 @@ use crate::{
             protocol_server::{Protocol, ProtocolServer},
             public_server::PublicServer,
             BeaconPacket, Empty, IdentityRequest, IdentityResponse, Metadata, PartialBeaconPacket,
-            StatusRequest, StatusResponse, SyncRequest,
+            SyncRequest,
         },
     },
     transport::utils::ConvertProto,
@@ -46,7 +46,7 @@ pub struct PartialPacket {
 
 #[tonic::async_trait]
 impl Protocol for ProtocolHandler {
-    /// Server streaming response type for the `sync_chain` method
+    /// Server streaming response type for the `sync_chain` method.
     type SyncChainStream = Pin<Box<dyn Stream<Item = Result<BeaconPacket, Status>> + Send>>;
 
     /// Returns the identity of beacon id.
@@ -138,13 +138,6 @@ impl Protocol for ProtocolHandler {
 
         Ok(Response::new(Box::pin(ReceiverStream::new(stream_rx))))
     }
-
-    async fn status(
-        &self,
-        _request: Request<StatusRequest>,
-    ) -> Result<Response<StatusResponse>, Status> {
-        Err(Status::unimplemented("status: StatusRequest"))
-    }
 }
 
 pub async fn start_node<N: NewTcpListener>(
@@ -183,7 +176,8 @@ impl ProtocolClient {
         Ok(Self { client })
     }
 
-    /// Does not attempt to connect to the endpoint until first use. Should be used only in pool for partial packets.
+    /// Does not attempt to connect to the endpoint until first use.
+    /// Should be used only in pool for partial packets.
     pub fn new_lazy(address: &Address) -> anyhow::Result<Self> {
         let channel = super::utils::connect_lazy(address)?;
         let client = ProtocolClientInner::new(channel);

@@ -11,10 +11,8 @@ use crate::{
         drand::{
             control_client::ControlClient as ControlClientInner,
             control_server::{Control, ControlServer},
-            BackupDbRequest, BackupDbResponse, ChainInfoPacket, ChainInfoRequest, GroupPacket,
-            GroupRequest, ListSchemesRequest, ListSchemesResponse, LoadBeaconRequest,
-            LoadBeaconResponse, Metadata, Ping, Pong, PublicKeyRequest, PublicKeyResponse,
-            RemoteStatusRequest, RemoteStatusResponse, ShutdownRequest, ShutdownResponse,
+            ChainInfoPacket, ChainInfoRequest, ListSchemesRequest, ListSchemesResponse,
+            LoadBeaconRequest, LoadBeaconResponse, Metadata, ShutdownRequest, ShutdownResponse,
             StartSyncRequest, StatusRequest, StatusResponse, SyncProgress,
         },
     },
@@ -39,26 +37,18 @@ type ResponseStream = Pin<Box<dyn Stream<Item = SyncProgressResponse> + Send>>;
 /// Result type yielded by the sync progress response stream.
 pub type SyncProgressResponse = Result<SyncProgress, tonic::Status>;
 
-/// Implementor for [`Control`] trait for use with `ControlServer`
+/// Implementor for [`Control`] trait for use with `ControlServer`.
 pub struct ControlHandler(Arc<Daemon>);
 
 #[tonic::async_trait]
 impl Control for ControlHandler {
-    /// Server streaming response type for the `start_check_chain` method
+    /// Server streaming response type for the `start_check_chain` method.
     type StartCheckChainStream = ResponseStream;
 
-    /// Server streaming response type for the `start_follow_chain` method
+    /// Server streaming response type for the `start_follow_chain` method.
     type StartFollowChainStream = ResponseStream;
 
-    /// PingPong simply responds with an empty packet,
-    /// proving that this drand node is up and alive.
-    async fn ping_pong(&self, _request: Request<Ping>) -> Result<Response<Pong>, Status> {
-        let metadata = Some(Metadata::with_default());
-
-        Ok(Response::new(Pong { metadata }))
-    }
-
-    /// Status responds with the actual status of drand process
+    /// Status responds with the actual status of drand process.
     async fn status(
         &self,
         request: Request<StatusRequest>,
@@ -75,15 +65,15 @@ impl Control for ControlHandler {
             .map_err(|err| err.to_status(id))?;
 
         // Await response from callback
-        let chain_info = rx
+        let status = rx
             .await
             .map_err(|recv_err| recv_err.to_status(id))?
-            .map_err(|chain_info_err| chain_info_err.to_status(id))?;
+            .map_err(|err| err.to_status(id))?;
 
-        Ok(Response::new(chain_info))
+        Ok(Response::new(status))
     }
 
-    /// ListSchemes responds with the list of ids for the available schemes
+    /// ListSchemes responds with the list of ids for the available schemes.
     async fn list_schemes(
         &self,
         _request: Request<ListSchemesRequest>,
@@ -91,20 +81,11 @@ impl Control for ControlHandler {
         Err(Status::unimplemented("list_schemes: ListSchemesRequest"))
     }
 
-    /// PublicKey returns the longterm public key of the drand node
-    async fn public_key(
-        &self,
-        _request: Request<PublicKeyRequest>,
-    ) -> Result<Response<PublicKeyResponse>, Status> {
-        Err(Status::unimplemented("public_key: PublicKeyRequest"))
-    }
-
-    /// ChainInfo returns the chain info for the chain hash or beacon id requested in the metadata
+    /// ChainInfo returns the chain info for the chain hash or beacon id requested in the metadata.
     async fn chain_info(
         &self,
         request: Request<ChainInfoRequest>,
     ) -> Result<Response<ChainInfoPacket>, Status> {
-        // Borrow id from metadata.
         let id = request.get_ref().metadata.as_ref().map_or_else(
             || Err(Status::data_loss(ERR_METADATA_IS_MISSING)),
             |meta| Ok(meta.beacon_id.as_str()),
@@ -116,21 +97,12 @@ impl Control for ControlHandler {
             .await
             .map_err(|err| err.to_status(id))?;
 
-        // Await response from callback
         let chain_info = rx
             .await
             .map_err(|recv_err| recv_err.to_status(id))?
             .map_err(|chain_info_err| chain_info_err.to_status(id))?;
 
         Ok(Response::new(chain_info))
-    }
-
-    /// GroupFile returns the TOML-encoded group file, containing the group public key and coefficients
-    async fn group_file(
-        &self,
-        _request: Request<GroupRequest>,
-    ) -> Result<Response<GroupPacket>, Status> {
-        Err(Status::unimplemented("group_file: GroupRequest"))
     }
 
     async fn shutdown(
@@ -199,25 +171,12 @@ impl Control for ControlHandler {
         Ok(Response::new(Box::pin(ReceiverStream::new(stream_rx))))
     }
 
+    // TODO: this method is required.
     async fn start_check_chain(
         &self,
         _request: Request<StartSyncRequest>,
     ) -> Result<Response<Self::StartCheckChainStream>, Status> {
         Err(Status::unimplemented("start_check_chain: StartSyncRequest"))
-    }
-
-    async fn backup_database(
-        &self,
-        _request: Request<BackupDbRequest>,
-    ) -> Result<Response<BackupDbResponse>, Status> {
-        Err(Status::unimplemented("backup_database: BackupDbRequest"))
-    }
-
-    async fn remote_status(
-        &self,
-        _request: Request<RemoteStatusRequest>,
-    ) -> Result<Response<RemoteStatusResponse>, Status> {
-        Err(Status::unimplemented("remote_status: RemoteStatusRequest"))
     }
 }
 
@@ -256,17 +215,6 @@ impl ControlClient {
         let client = ControlClientInner::new(channel);
 
         Ok(Self { client })
-    }
-
-    // TODO: add ping_pong.
-    #[allow(dead_code)]
-    pub async fn ping_pong(&mut self) -> anyhow::Result<()> {
-        let request = Ping {
-            metadata: Some(Metadata::with_default()),
-        };
-        let _ = self.client.ping_pong(request).await?;
-
-        Ok(())
     }
 
     pub async fn status(&mut self, beacon_id: String) -> anyhow::Result<StatusResponse> {

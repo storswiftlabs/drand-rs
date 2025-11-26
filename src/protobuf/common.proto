@@ -65,24 +65,6 @@ message Node {
   uint32 index = 2;
 }
 
-// GroupPacket represents a group that is running a drand network (or is in the
-// process of creating one or performing a resharing).
-message GroupPacket {
-  repeated Node nodes = 1;
-  uint32 threshold = 2;
-  // period in seconds
-  uint32 period = 3;
-  uint64 genesis_time = 4;
-  uint64 transition_time = 5;
-  bytes genesis_seed = 6;
-  repeated bytes dist_key = 7;
-  // catchup_period in seconds
-  uint32 catchup_period = 8;
-  string schemeID = 9;
-  Metadata metadata = 10;
-}
-message GroupRequest { Metadata metadata = 1; }
-
 message ChainInfoRequest { Metadata metadata = 1; }
 
 message ChainInfoPacket {

@@ -56,14 +56,14 @@ async fn all_roles_dkg() {
     let thr = 5;
     group.setup_scenario(joiners, remainers, leavers, thr);
     //
-    // Start resharing protocol
+    // Start resharing protocol.
     group.leader_generate_proposal().await;
     group.members_proceed_proposal().await;
     group.leader_dkg_execute().await;
     sleep(Duration::from_secs(40)).await;
 
-    // Check results
-    // Get finished state from leader
+    // Check results.
+    // Get finished state from leader.
     let finished = get_finished_state(&group.nodes[0].control, group.config.id.clone()).await;
     assert_eq!(finished.epoch, 2);
     assert_eq!(finished.state, Status::Complete as u32);
@@ -99,10 +99,6 @@ async fn all_roles_dkg() {
     group.leader_generate_proposal().await;
     group.members_proceed_proposal().await;
     group.leader_dkg_execute().await;
-    // Sleep:
-    // 5 until execution time (protocol)
-    // + 10 * 3 phases timeouts (protocol)
-    // + 5 (CI/CD)
     sleep(Duration::from_secs(60)).await;
     //
     // Check results
@@ -117,7 +113,7 @@ async fn all_roles_dkg() {
     remove_nodes_fs();
 }
 
-#[ignore = "manual"]
+#[ignore = "manual test"]
 #[tokio::test]
 async fn random_scenarios() {
     // 55 epochs = ~20 minutes to run
@@ -156,13 +152,13 @@ async fn dkg_abort() {
     group.start_daemons();
     sleep(Duration::from_secs(5)).await;
 
-    // Initiate DKG proposal
+    // Initiate DKG proposal.
     group.sn.joiners = vec![0, 1];
     group.sn.thr = 2;
     group.leader_generate_proposal().await;
     sleep(Duration::from_secs(2)).await;
 
-    // Current status of node-rs should be `Proposed`
+    // Current status of node-rs should be `Proposed`.
     let mut client_rs = DkgControlClient::new(&group.nodes[1].control)
         .await
         .unwrap();
@@ -170,11 +166,11 @@ async fn dkg_abort() {
     let curr_status = Status::try_from(status.current.unwrap().state).unwrap();
     assert_eq!(curr_status, Status::Proposed);
 
-    // Abort DKG (leader-go action)
+    // Abort DKG (leader-go action).
     group.nodes[0].dkg_abort(&group.config).await;
     sleep(Duration::from_secs(2)).await;
 
-    // Current status of node-rs should be `Aborted`
+    // Current status of node-rs should be `Aborted`.
     let status = client_rs.dkg_status(group.config.id.clone()).await.unwrap();
     let curr_status = Status::try_from(status.current.unwrap().state).unwrap();
     assert_eq!(curr_status, Status::Aborted);

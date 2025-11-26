@@ -9,23 +9,14 @@ package drand;
 import "src/protobuf/common.proto";
 
 service Control {
-  // PingPong returns an empty message. Purpose is to test the control port.
-  rpc PingPong(Ping) returns (Pong) {}
   // Status responds with the actual status of drand process
   rpc Status(StatusRequest) returns (StatusResponse) {}
   // ListSchemes responds with the list of ids for the available schemes
   rpc ListSchemes(ListSchemesRequest) returns (ListSchemesResponse) {}
 
-  // PublicKey returns the longterm public key of the drand node
-  rpc PublicKey(PublicKeyRequest) returns (PublicKeyResponse) {}
-
   // ChainInfo returns the chain info for the chain hash or beacon id requested
   // in the metadata
   rpc ChainInfo(drand.ChainInfoRequest) returns (drand.ChainInfoPacket) {}
-
-  // GroupFile returns the TOML-encoded group file, containing the group public
-  // key and coefficients
-  rpc GroupFile(drand.GroupRequest) returns (drand.GroupPacket) {}
 
   rpc Shutdown(ShutdownRequest) returns (ShutdownResponse) {}
 
@@ -34,57 +25,13 @@ service Control {
   rpc StartFollowChain(StartSyncRequest) returns (stream SyncProgress) {}
 
   rpc StartCheckChain(StartSyncRequest) returns (stream SyncProgress) {}
-
-  rpc BackupDatabase(BackupDBRequest) returns (BackupDBResponse) {}
-
-  // RemoteStatus request the status of some remote drand nodes
-  rpc RemoteStatus(RemoteStatusRequest) returns (RemoteStatusResponse) {}
 }
-
-// EntropyInfo contains information about external entropy sources
-// can be optional
-message EntropyInfo {
-  // the path to the script to run that returns random bytes when called
-  string script = 1;
-  // do we only take this entropy source or mix it with /dev/urandom
-  bool userOnly = 10;
-  Metadata metadata = 11;
-}
-
-message Ping { Metadata metadata = 1; }
-
-message Pong { Metadata metadata = 1; }
-
-// RemoteStatusRequest contains the list of addresses that the local drand node
-// process should ask the status to.
-message RemoteStatusRequest {
-  Metadata metadata = 1;
-  repeated Address addresses = 2;
-}
-
-// RemoteStatusResponse contains the statuses reponses of all nodes given in the
-// requests. If a node did not reply, then the address key is absent from the
-// map
-message RemoteStatusResponse { map<string, StatusResponse> statuses = 1; }
 
 message ListSchemesRequest {}
 
 message ListSchemesResponse {
   repeated string ids = 1;
   Metadata metadata = 2;
-}
-
-// PublicKeyRequest requests the public key of a drand node for a given Beacon
-// ID
-message PublicKeyRequest { Metadata metadata = 1; }
-
-// PublicKeyResponse holds the public key of a drand node
-message PublicKeyResponse {
-  bytes pubKey = 1;
-  string addr = 2;
-  bytes signature = 4;
-  Metadata metadata = 5;
-  string schemeName = 6;
 }
 
 message ShutdownRequest { Metadata metadata = 1; }
@@ -111,10 +58,3 @@ message SyncProgress {
   uint64 target = 2;
   Metadata metadata = 3;
 }
-
-message BackupDBRequest {
-  string output_file = 1;
-  Metadata metadata = 2;
-}
-
-message BackupDBResponse { Metadata metadata = 1; }

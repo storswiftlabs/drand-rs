@@ -69,7 +69,7 @@ impl BeaconHandler {
             BN254UnchainedOnG1Scheme::ID => {
                 BeaconProcess::<BN254UnchainedOnG1Scheme>::run(fs, pair, pool, private_listen)?
             }
-            _ => return Err(FileStoreError::FailedInitID)?,
+            _ => return Err(FileStoreError::FailedInitID),
         };
 
         Ok(handler)

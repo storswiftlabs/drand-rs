@@ -8,13 +8,13 @@ use sha2::Digest;
 pub struct Group<S: Scheme> {
     /// Threshold to setup during the DKG or resharing protocol.
     pub threshold: u32,
-    /// Period to use for the beacon randomness generation
+    /// Period to use for the beacon randomness generation.
     pub period: Seconds,
     /// `CatchupPeriod` is a delay to insert while in a catchup mode
     /// also can be thought of as the minimum period allowed between
-    /// beacon and subsequent partial generation
+    /// beacon and subsequent partial generation.
     pub catchup_period: Seconds,
-    /// Time at which the first round of the chain is mined
+    /// Time at which the first round of the chain is mined.
     pub genesis_time: u64,
     // In case of a resharing, this is the time at which the network will
     // transition from the old network to the new network.
@@ -23,11 +23,11 @@ pub struct Group<S: Scheme> {
     /// populated directly from the list of nodes and other parameters. When
     /// doing a resharing, this seed is taken from the first group of the network.
     pub genesis_seed: Vec<u8>,
-    /// ID is the unique identifier for this group
+    /// ID is the unique identifier for this group.
     pub beacon_id: String,
-    /// List of nodes forming this group
+    /// List of nodes forming this group.
     pub nodes: Vec<Node<S>>,
-    /// The distributed public key of this group. It is empty - the group has not
+    /// The distributed public key of this group. It is empty - the group has not.
     /// ran a DKG protocol yet.
     pub dist_key: DistPublic<S>,
 }
@@ -104,7 +104,7 @@ impl<S: Scheme> Hash for Group<S> {
     }
 }
 
-/// Calculates the threshold needed for the group to produce sufficient shares to decode
+/// Calculates the threshold needed for the group to produce sufficient shares to decode.
 pub fn minimum_t(n: usize) -> usize {
     (n >> 1) + 1
 }

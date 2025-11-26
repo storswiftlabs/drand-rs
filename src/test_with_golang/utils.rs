@@ -22,9 +22,11 @@ static DRAND_BIN_PATH: LazyLock<String> = LazyLock::new(|| {
         env::var("CARGO_MANIFEST_DIR").unwrap()
     )
 });
-/// Inner path for current directory
+
+/// Inner path for current directory.
 pub const INNER_PATH: &str = "src/test_with_golang/";
-/// Path for group state summary, used in DKG scenario generator
+
+/// Path for group state summary, used in DKG scenario generator.
 pub const FRAMES_PATH: &str = "src/test_with_golang/frames.txt";
 
 /// Helper to simplify using CLI in tests.
@@ -94,21 +96,21 @@ pub enum Lang {
 
 #[derive(Debug, Clone)]
 pub struct NodeConfig {
-    /// Longterm node identifier
+    /// Longterm node identifier.
     cmd_i: usize,
-    /// Base folder name: `node<cmd_i>_<lang>`
+    /// Base folder name: `node<cmd_i>_<lang>`.
     folder_name: String,
-    /// Base folder absolute path
+    /// Base folder absolute path.
     folder_path: String,
-    /// Groupfile absolute path
+    /// Groupfile absolute path.
     pub groupfile_path: String,
     /// Node private-listen address (in tests is same to URI, no TLS termination).
     pub private_listen: String,
-    /// Node control port
+    /// Node control port.
     pub control: String,
-    /// Golang or Rust implementation
+    /// Golang or Rust implementation.
     implementation: Lang,
-    /// Statistical information about given node as participant
+    /// Statistical information about given node as participant.
     summary: CompletedRoles,
 }
 
@@ -175,7 +177,8 @@ impl Scenario {
         self.frames = Some(File::create(FRAMES_PATH).unwrap());
     }
 
-    /// Helper function for mapping between nodes indentifiers and their roles (as participants) for current epoch.
+    /// Helper function for mapping between nodes indentifiers and
+    /// their roles (as participants) for current epoch.
     #[allow(clippy::trivially_copy_pass_by_ref, reason = "slice::contains")]
     fn get_role(&self, i: &usize) -> Role {
         match (
@@ -196,8 +199,8 @@ impl Scenario {
             return;
         }
         // Step: scenario for each epoch has 2 steps:
-        // `Starting` is the setup phase, before DKG execution.
-        // `Finished` step means DKG is completed correctly and members groupfiles are verified
+        //  - `Starting` is the setup phase, before DKG execution.
+        //  - `Finished` step means DKG is completed correctly and members groupfiles are verified
 
         // Metadata
         let step = if is_finished {
@@ -279,15 +282,15 @@ impl Default for GroupConfig {
 pub struct NodesGroup {
     pub nodes: Vec<NodeConfig>,
     pub sn: Scenario,
-    /// Groupfile is required for joiners in existing group, see [`NodeConfig::dkg_join`]
+    /// Groupfile is required for joiners in existing group, see [`NodeConfig::dkg_join`].
     group_file_path: String,
-    /// Group level configuration for all nodes
+    /// Group level configuration for all nodes.
     pub config: GroupConfig,
 }
 
 impl NodesGroup {
     pub async fn check_results(&mut self) {
-        // Groupfiles of remainers and joiners should be same
+        // Groupfiles of remainers and joiners should be same.
         self.assert_groupfiles_with_leader().await;
 
         // All nodes should be in non-terminal state
@@ -301,7 +304,7 @@ impl NodesGroup {
                 status
             );
 
-            // Add current role to own node statistic
+            // Add current role to own node statistic.
             match self.sn.get_role(&n.cmd_i) {
                 Role::Joiner => {
                     n.summary.joiner += 1;
@@ -321,12 +324,13 @@ impl NodesGroup {
         self.sn.write_frame(&self.nodes, true);
     }
 
-    /// Generates nodes in 50% [go/rs] proportion by default. Proportion is shifted if `set_go` value is provided.
+    /// Generates nodes in 50% [go/rs] proportion by default.
+    /// Proportion is shifted if `set_go` value is provided.
     pub async fn generate_nodes(n: usize, c: GroupConfig, set_go: Option<usize>) -> Self {
         assert!((n >= 2), "at least 2 nodes required");
 
         let nodes: Vec<NodeConfig> =
-        // Shifted proportion
+        // Shifted proportion.
         if let Some(mut nodes_go) = set_go {
             assert!((nodes_go <= n), "nodes_go > group size");
             assert!((nodes_go != 0), "at least one node_go required");
@@ -391,17 +395,17 @@ impl NodesGroup {
         for n in self.nodes.iter().skip(1) {
             if self.sn.joiners.contains(&n.cmd_i) {
                 if self.sn.epoch > 1 {
-                    // Joiner in existing group
+                    // Joiner in existing group.
                     n.dkg_join(Some(&self.group_file_path), &self.config).await;
                 } else {
-                    // Joiner in new group
+                    // Joiner in new group.
                     n.dkg_join(None, &self.config).await;
                 }
             } else if self.sn.remainers.contains(&n.cmd_i) {
                 n.dkg_accept(&self.config).await;
             } else {
-                // * Leaver get no say if the rest of the network wants them out
-                // * Node is not included in current scenario
+                // * Leaver get no say if the rest of the network wants them out.
+                // * Node is not included in current scenario.
                 continue;
             }
         }
@@ -409,11 +413,12 @@ impl NodesGroup {
 
     /// Generates roles for participants based on the current group state.
     ///
-    /// After first epoch, the leader (node[0]) is always `Remainer`, other nodes may leave, join, remain, or stay out of the group.
+    /// After first epoch, the leader (node[0]) is always `Remainer`,
+    /// other nodes may leave, join, remain, or stay out of the group.
     pub fn generate_roles(&mut self) {
         self.sn.epoch += 1;
 
-        // Initial DKG for all nodes with minimal threshold
+        // Initial DKG for all nodes with minimal threshold.
         if self.sn.epoch == 1 {
             let nodes_len = self.nodes.len();
             self.sn.joiners.extend(0..nodes_len);
@@ -563,10 +568,10 @@ impl NodesGroup {
         self.sn.leavers.extend_from_slice(leavers);
     }
 
-    /// Performs a byte-level comparison of the members groupfiles against the groupfile from the leader
+    /// Performs a byte-level comparison of the members
+    /// groupfiles against the groupfile from the leader.
     pub async fn assert_groupfiles_with_leader(&self) {
         let leader_groupfile = async_std::fs::read(&self.group_file_path).await.unwrap();
-        // Joiners
         for j in &self.sn.joiners {
             assert_eq!(
                 leader_groupfile,
@@ -575,7 +580,6 @@ impl NodesGroup {
                     .unwrap()
             );
         }
-        // Remainers
         for r in &self.sn.remainers {
             assert_eq!(
                 leader_groupfile,
@@ -609,7 +613,7 @@ fn map_node_addresses<'a>(nodes: &'a [NodeConfig], identifiers: &[usize]) -> Vec
         .collect()
 }
 
-/// Helper to generate n nodes and run a fresh DKG
+/// Helper to generate n nodes and run a fresh DKG.
 ///
 /// First half of nodes use Golang implementation, leader is always node[0], see [`NodesGroup::generate_nodes`].
 /// Threshold is minimal by default; this can be changed if a custom threshold is specified.
@@ -656,7 +660,7 @@ impl NodeConfig {
 
     /// Removes all distributed materilas and restarts beacon ID at Fresh state.
     pub async fn set_to_fresh(&self, c: &GroupConfig) {
-        // remove beacon ID folder from node base folder
+        // Remove beacon ID folder from node base folder.
         std::fs::remove_dir_all(format!("{}/multibeacon/{}", self.folder_path, c.id)).unwrap();
         match self.implementation {
             Lang::GO => {

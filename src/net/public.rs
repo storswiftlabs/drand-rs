@@ -26,9 +26,10 @@ impl PublicHandler {
 
 #[tonic::async_trait]
 impl Public for PublicHandler {
-    /// Server streaming response type for the `public_rand_stream` method
+    /// Server streaming response type for the `public_rand_stream` method.
     type PublicRandStreamStream = ResponseStream;
 
+    /// TODO: implement if we need to support relays in same way.
     async fn public_rand(
         &self,
         _request: Request<PublicRandRequest>,
@@ -36,6 +37,7 @@ impl Public for PublicHandler {
         Err(Status::unimplemented("public_rand: PublicRandRequest"))
     }
 
+    /// TODO: implement if we need to support relays in same way.
     async fn public_rand_stream(
         &self,
         _request: Request<PublicRandRequest>,
@@ -68,6 +70,7 @@ impl Public for PublicHandler {
         Ok(Response::new(chain_info))
     }
 
+    // TODO: this method required.
     async fn list_beacon_i_ds(
         &self,
         _request: Request<ListBeaconIDsRequest>,

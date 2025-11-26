@@ -7,7 +7,8 @@ use crate::{
 use energon::{points::KeyPoint, traits::Affine};
 use sha2::Digest;
 
-/// Public information that is necessary for a client to verify any beacon present in a randomness chain.
+/// Public information that is necessary for a client
+/// to verify any beacon present in a randomness chain.
 #[derive(Default, Clone, PartialEq)]
 pub struct ChainInfo<S: Scheme> {
     pub public_key: KeyPoint<S>,
@@ -24,7 +25,7 @@ pub enum ChainInfoError {
     Scheme,
     #[error("failed to deserialize group key")]
     PublicKey,
-    #[error("genesis time can not be zero")]
+    #[error("genesis time cannot be zero")]
     GenesisTime,
 }
 

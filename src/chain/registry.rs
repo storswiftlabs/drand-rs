@@ -6,7 +6,7 @@ use crate::{error, key::Scheme, log::Logger, net::utils::Seconds, protobuf::dran
 use std::time::Duration;
 use tokio::{sync::mpsc, task::JoinHandle};
 
-/// Registry holds actual data which might be changed per / within a round.
+/// Registry holds mutable state that can change each round or during a round.
 pub struct Registry<S: Scheme, B: BeaconRepr> {
     /// Latest verified and successfully stored beacon.
     latest_stored: B,

@@ -40,26 +40,26 @@ pub fn setup_metrics(address: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[inline(always)]
 /// Discrepancy between beacon creation time and calculated round time.
+#[inline(always)]
 fn beacon_discrepancy_latency(id: BeaconID, value: f64) {
     gauge!("beacon_discrepancy_latency", "beacon_id" => id.as_str()).set(value);
 }
 
-#[inline(always)]
 /// Last locally stored beacon.
+#[inline(always)]
 fn last_beacon_round(id: BeaconID, value: f64) {
     gauge!("last_beacon_round", "beacon_id" => id.as_str()).set(value);
 }
 
-#[inline(always)]
 /// Number of shares needed for beacon reconstruction.
+#[inline(always)]
 fn group_threshold(id: BeaconID, value: f64) {
     gauge!("group_threshold", "beacon_id" => id.as_str()).set(value);
 }
 
-#[inline(always)]
 /// Number of peers in the current group.
+#[inline(always)]
 fn group_size(id: BeaconID, value: f64) {
     gauge!("group_size", "beacon_id" => id.as_str()).set(value);
 }
@@ -77,9 +77,9 @@ pub fn report_metrics_on_put(
     group_size(id, group_metrics.group_size);
 }
 
-#[derive(Default, Clone, Copy)]
 /// Group metrics are same within an epoch, so we cast them *once* into
 /// required `f64` representation to avoid repeated conversions.
+#[derive(Default, Clone, Copy)]
 pub struct GroupMetrics {
     group_size: f64,
     thr: f64,

@@ -23,10 +23,9 @@ use tokio_util::task::TaskTracker;
 #[derive(Clone)]
 pub(super) enum BroadcastCmd {
     /// Stop broadcast once dkg is finished or aborted.
-    // TODO: abort DKG
     #[allow(dead_code)]
     Stop,
-    /// Packet to broadcast for other nodes
+    /// Packet to broadcast for other nodes.
     Packet(DkgPacket),
 }
 
@@ -79,7 +78,7 @@ impl Broadcast {
                                     if let Err(err) = client.broadcast_dkg(packet).await {
                                         error!(
                                             &log,
-                                            "failed to broadcast packet: peer {peer}, {err}"
+                                            "failed to broadcast packet for {peer}: {err}"
                                         );
                                     }
                                 }

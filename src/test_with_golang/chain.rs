@@ -47,7 +47,7 @@ async fn follow_chain() {
     let leavers = &[];
     group.setup_scenario(joiners, remainers, leavers, thr);
 
-    // Start DKG protocol
+    // Start DKG protocol.
     group.leader_generate_proposal().await;
     group.members_proceed_proposal().await;
     group.leader_dkg_execute().await;
@@ -74,7 +74,7 @@ async fn follow_chain() {
     group.nodes[3].follow(&config.id, &hash, sync_node3, up_to, false);
     sleep(Duration::from_secs(5)).await;
 
-    // Get latest stored round from [node2_RS, node3_RS]
+    // Get latest stored round from [node2_RS, node3_RS].
     let mut conn2 = ControlClient::new(&group.nodes[2].control).await.unwrap();
     let mut conn3 = ControlClient::new(&group.nodes[3].control).await.unwrap();
     
@@ -134,10 +134,6 @@ async fn sync() {
     group.leader_generate_proposal().await;
     group.members_proceed_proposal().await;
     group.leader_dkg_execute().await;
-    // Sleep:
-    // 5 until execution time (protocol)
-    // + 3 for fast_sync mode (phase_timeout 10)
-    // + 5 (CI/CD)
     sleep(Duration::from_secs(30)).await;
 
     // Get transition time from node2_RS groupfile.

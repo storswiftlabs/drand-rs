@@ -17,7 +17,8 @@ use energon::{
 pub struct EpochNode<S: Scheme> {
     /// Node address.
     peer: Address,
-    /// Node public share is computed by evaluating public sharing polynomial at the node index.
+    /// Node public share is computed by evaluating public
+    /// sharing polynomial at the node index.
     share: PubShare<S>,
 }
 
@@ -27,7 +28,8 @@ impl<S: Scheme> EpochNode<S> {
     }
 }
 
-/// Epoch config is representation of [`dkg::DkgOutput`] where QUAL nodes are mapped into list of [`EpochNode`].
+/// Epoch config is representation of [`dkg::DkgOutput`]
+/// where QUAL nodes are mapped into list of [`EpochNode`].
 pub struct EpochConfig<S: Scheme> {
     share: dkg::DistKeyShare<S>,
     remote_nodes: Vec<EpochNode<S>>,

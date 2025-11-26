@@ -62,14 +62,6 @@ pub fn time_now() -> Duration {
 #[cfg(test)]
 mod test {
     use super::*;
-    fn current_round_t(now: u64, period: u32, genesis: u64) -> u64 {
-        let (next_round, _) = next_round(now, period, genesis);
-        if next_round <= 1 {
-            next_round
-        } else {
-            next_round - 1
-        }
-    }
 
     #[test]
     fn time_basic() {
@@ -77,9 +69,9 @@ mod test {
         let round = 22;
         let transition_round = round + ROUNDS_UNTIL_TRANSITION;
 
-        assert_eq!(round, current_round_t(1745308647, period, 1745308582));
-        assert_eq!(round, current_round_t(1745308824, period, 1745308759));
-        assert_eq!(round, current_round_t(1745309210, period, 1745309145));
+        assert_eq!(round, current_round(1745308647, period, 1745308582));
+        assert_eq!(round, current_round(1745308824, period, 1745308759));
+        assert_eq!(round, current_round(1745309210, period, 1745309145));
         assert!(1745308675 == time_of_round(period, 1745308582, transition_round));
         assert!(1745308852 == time_of_round(period, 1745308759, transition_round));
         assert!(1745309238 == time_of_round(period, 1745309145, transition_round));

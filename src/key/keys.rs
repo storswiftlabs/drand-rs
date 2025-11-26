@@ -1,13 +1,13 @@
 use super::Scheme;
 use crate::net::utils::Address;
-use anyhow::Result;
 use energon::{
+    drand::error::SchemeError,
     kyber::poly::PriShare,
     points::{KeyPoint, SigPoint},
     traits::{Affine, ScalarField},
 };
 
-/// Pair is a wrapper around a random scalar and the corresponding public key
+/// Pair is a wrapper around a random scalar and the corresponding public key.
 #[derive(Debug, PartialEq)]
 pub struct Pair<S: Scheme> {
     private: S::Scalar,
@@ -20,11 +20,12 @@ impl<S: Scheme> Pair<S> {
     }
 
     /// Returns a freshly created private / public key pair.
-    pub fn generate(address: Address) -> Result<Self> {
+    pub fn generate(address: Address) -> Result<Self, SchemeError> {
         let private = S::Scalar::random();
         let key = S::sk_to_pk(&private);
         let mut msg = S::ID.as_bytes().to_vec();
-        msg.extend_from_slice(key.hash()?.as_slice());
+        let hashed_key = key.hash().map_err(SchemeError::Backends)?;
+        msg.extend_from_slice(hashed_key.as_slice());
         let signature = S::bls_sign(&msg, &private)?;
         let public = Identity::new(address, key, signature);
 
@@ -91,8 +92,8 @@ impl<S: Scheme> DistPublic<S> {
     }
 }
 
-/// Share represents the private information that a node holds after a successful
-/// DKG. This information MUST stay private !
+/// Share represents the private information that a node holds
+/// after a successful DKG. This information MUST stay private!
 #[derive(PartialEq)]
 pub struct Share<S: Scheme> {
     /// Coefficients of the public polynomial holding the public key.
@@ -106,12 +107,12 @@ impl<S: Scheme> Share<S> {
         Self { commits, pri_share }
     }
 
-    /// Public returns the distributed public key associated with the distributed key share
+    /// Public returns the distributed public key associated with the distributed key share.
     pub fn public(&self) -> &DistPublic<S> {
         &self.commits
     }
 
-    /// Private returns the private share used to produce a partial signature
+    /// Private returns the private share used to produce a partial signature.
     pub fn private(&self) -> &PriShare<S> {
         &self.pri_share
     }

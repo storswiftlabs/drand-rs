@@ -62,7 +62,7 @@ impl DkgStore {
                 std::fs::set_permissions(&store.path, Permissions::from_mode(DIR_PERM))
                     .map_err(DkgStoreError::Permission)?;
             }
-            // Brocken configuration
+            // Brocken configuration.
             (false, false) => {
                 return Err(DkgStoreError::FailedToLoad(
                     store.path.display().to_string(),
@@ -71,7 +71,7 @@ impl DkgStore {
             _ => (),
         }
 
-        // Check timeout in case node is within dkg
+        // Check timeout in case node is within dkg.
         match store.get_current::<S>() {
             Ok(mut state) => {
                 if matches!(
@@ -185,7 +185,7 @@ impl DkgStore {
 impl PartialEq for DkgStoreError {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            // The only required check
+            // The only required check.
             (Self::NotFound, Self::NotFound) => true,
             _ => false,
         }

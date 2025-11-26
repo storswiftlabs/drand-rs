@@ -11,8 +11,9 @@ use crate::net::utils::Address;
 #[derive(PartialEq, Debug)]
 pub struct Node<S: Scheme> {
     identity: Identity<S>,
-    /// Index is an alias to designate the index of a node. The index is used to evaluate the share of a node,
-    /// and is thereafter fixed. A node will use the same index for generating a partial signature afterwards for example.
+    /// Index is an alias to designate the index of a node. The index is used to evaluate
+    /// the share of a node, and is thereafter fixed. A node will use the same index for
+    /// generating a partial signature afterwards for example.
     index: u32,
 }
 

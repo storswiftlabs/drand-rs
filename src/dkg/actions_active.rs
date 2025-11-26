@@ -9,7 +9,8 @@ use crate::{
 use std::future::Future;
 
 /// Contains all the DKG actions that require user interaction: creating a network,
-/// accepting or rejecting a DKG, getting the status, etc. Both leader and follower interactions are contained herein.
+/// accepting or rejecting a DKG, getting the status, etc.
+/// Both leader and follower interactions are contained herein.
 pub trait ActionsActive {
     type Scheme: Scheme;
 
@@ -44,12 +45,12 @@ impl<S: Scheme> ActionsActive for BeaconProcess<S> {
             }
         };
 
-        let responce = DkgStatusResponse {
+        let response = DkgStatusResponse {
             current: Some(self.dkg_store().get_current::<S>()?.into()),
             complete,
         };
 
-        Ok(responce)
+        Ok(response)
     }
 
     async fn command(&self, cmd: Command) -> Result<(), ActionsError> {

@@ -68,7 +68,7 @@ impl<S: Scheme> ExecuteDkg for BeaconProcess<S> {
         gk: &mut GateKeeper<Self::Scheme>,
     ) -> Result<(), ActionsError> {
         // # Setup DKG #
-        // Get current and last completed states
+        // Get current and last completed states.
         let current = self.dkg_store().get_current::<S>()?;
         let last_completed = match self.dkg_store().get_finished::<S>() {
             Ok(state) => Some(state),
@@ -154,7 +154,7 @@ impl<S: Scheme> ExecuteDkg for BeaconProcess<S> {
             .ok_or(ActionsError::ParticipantsToNewNodes)?;
 
         // Although this is an "initial" DKG, we could be a joiner, and we may need to set some things
-        // from a prior DKG provided by the network
+        // from a prior DKG provided by the network.
         let mut old_nodes = vec![];
         let mut public_coeffs = vec![];
         let mut old_threshold = 0;
@@ -363,7 +363,7 @@ fn as_group<S: Scheme>(
     all_sorted.extend(current.remaining.iter());
     sort_by_public_key(&mut all_sorted);
 
-    // Collect qualified participants using QUAL indexes
+    // Collect qualified participants using QUAL indexes.
     let remaning = qual
         .into_iter()
         .map(|node| {

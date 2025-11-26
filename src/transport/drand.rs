@@ -1,10 +1,10 @@
 //! Types are re-exported directly if their fields DO NOT contain:
 //!  - option<T> instead of T
 //!  - protected new pattern types
-use super::utils::{from_vec, try_from_vec, ConvertProto, RequireSome, TransportError};
+use super::utils::{ConvertProto, RequireSome, TransportError};
 use crate::{
     dkg::status::Status as DkgStatus,
-    net::utils::{Address, Seconds},
+    net::utils::Address,
     protobuf::{self, drand::Metadata},
 };
 
@@ -112,117 +112,6 @@ impl From<Node> for crate::protobuf::drand::Node {
     }
 }
 
-#[derive(Default)]
-pub struct GroupPacket {
-    pub nodes: Vec<Node>,
-    pub threshold: u32,
-    pub period: Seconds,
-    pub genesis_time: u64,
-    pub transition_time: u64,
-    pub genesis_seed: Vec<u8>,
-    pub dist_key: Vec<Vec<u8>>,
-    pub catchup_period: Seconds,
-    pub scheme_id: String,
-    pub metadata: Metadata,
-}
-
-impl ConvertProto for crate::protobuf::drand::GroupPacket {
-    type Inner = GroupPacket;
-
-    fn validate(self) -> Result<Self::Inner, TransportError> {
-        let Self {
-            nodes,
-            threshold,
-            period,
-            genesis_time,
-            transition_time,
-            genesis_seed,
-            dist_key,
-            catchup_period,
-            scheme_id,
-            metadata,
-        } = self;
-
-        Ok(Self::Inner {
-            nodes: try_from_vec(nodes)?,
-            threshold,
-            period: period.into(),
-            genesis_time,
-            transition_time,
-            genesis_seed,
-            dist_key,
-            catchup_period: catchup_period.into(),
-            scheme_id,
-            metadata: metadata.require_some()?,
-        })
-    }
-}
-
-impl From<GroupPacket> for crate::protobuf::drand::GroupPacket {
-    fn from(value: GroupPacket) -> Self {
-        let GroupPacket {
-            nodes,
-            threshold,
-            period,
-            genesis_time,
-            transition_time,
-            genesis_seed,
-            dist_key,
-            catchup_period,
-            scheme_id,
-            metadata,
-        } = value;
-
-        Self {
-            nodes: from_vec(nodes),
-            threshold,
-            period: period.into(),
-            genesis_time,
-            transition_time,
-            genesis_seed,
-            dist_key,
-            catchup_period: catchup_period.into(),
-            scheme_id,
-            metadata: Some(metadata),
-        }
-    }
-}
-
-pub struct RemoteStatusRequest {
-    pub metadata: Metadata,
-    pub addresses: Vec<Address>,
-}
-
-impl ConvertProto for crate::protobuf::drand::RemoteStatusRequest {
-    type Inner = RemoteStatusRequest;
-
-    fn validate(self) -> Result<Self::Inner, TransportError> {
-        let Self {
-            metadata,
-            addresses,
-        } = self;
-
-        Ok(Self::Inner {
-            metadata: metadata.require_some()?,
-            addresses: try_from_vec(addresses)?,
-        })
-    }
-}
-
-impl From<RemoteStatusRequest> for crate::protobuf::drand::RemoteStatusRequest {
-    fn from(value: RemoteStatusRequest) -> Self {
-        let RemoteStatusRequest {
-            metadata,
-            addresses,
-        } = value;
-
-        Self {
-            metadata: Some(metadata),
-            addresses: from_vec(addresses),
-        }
-    }
-}
-
 pub struct ListSchemesResponse {
     pub ids: Vec<String>,
     pub metadata: Metadata,
@@ -248,56 +137,6 @@ impl From<ListSchemesResponse> for crate::protobuf::drand::ListSchemesResponse {
         Self {
             ids,
             metadata: Some(metadata),
-        }
-    }
-}
-
-pub struct PublicKeyResponse {
-    pub pub_key: Vec<u8>,
-    pub address: Address,
-    pub signature: Vec<u8>,
-    pub metadata: Metadata,
-    pub scheme_name: String,
-}
-
-impl ConvertProto for crate::protobuf::drand::PublicKeyResponse {
-    type Inner = PublicKeyResponse;
-
-    fn validate(self) -> Result<Self::Inner, TransportError> {
-        let Self {
-            pub_key,
-            ref addr,
-            signature,
-            metadata,
-            scheme_name,
-        } = self;
-
-        Ok(Self::Inner {
-            pub_key,
-            address: Address::precheck(addr)?,
-            signature,
-            metadata: metadata.require_some()?,
-            scheme_name,
-        })
-    }
-}
-
-impl From<PublicKeyResponse> for crate::protobuf::drand::PublicKeyResponse {
-    fn from(value: PublicKeyResponse) -> Self {
-        let PublicKeyResponse {
-            pub_key,
-            ref address,
-            signature,
-            metadata,
-            scheme_name,
-        } = value;
-
-        Self {
-            pub_key,
-            addr: address.as_str().into(),
-            signature,
-            metadata: Some(metadata),
-            scheme_name,
         }
     }
 }

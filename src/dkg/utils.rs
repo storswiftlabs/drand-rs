@@ -132,9 +132,9 @@ struct Row {
 }
 
 #[rustfmt::skip]
-pub fn print_dkg_status(responce: crate::transport::dkg::DkgStatusResponse) {
-    let c = responce.current;
-    let f = responce.finished.unwrap_or_default();
+pub fn print_dkg_status(response: crate::transport::dkg::DkgStatusResponse) {
+    let c = response.current;
+    let f = response.finished.unwrap_or_default();
 
     let mut table = Table::new( [
         Row { field: "Status".into(),      current: c.state,        finished: f.state },

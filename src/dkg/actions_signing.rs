@@ -13,7 +13,7 @@ use energon::traits::Affine;
 use prost_types::Timestamp;
 use std::future::Future;
 
-/// Contains logic for signing and validation packets
+/// Contains logic for signing and validation packets.
 pub(super) trait ActionsSigning {
     type Scheme: Scheme;
 
@@ -31,7 +31,7 @@ pub(super) trait ActionsSigning {
     }
 }
 
-/// Helper trait to encode data for DKG command validation  
+/// Helper trait to encode data for DKG command validation.  
 pub(super) trait GossipAuth {
     fn encode(&self) -> Vec<u8>;
 }
@@ -60,7 +60,7 @@ impl<S: Scheme> ActionsSigning for BeaconProcess<S> {
                     .find(|p| p.address == gp.metadata.address)
             })
         {
-            // Verify signature
+            // Verify signature.
             {
                 let msg = self.msg_for_signing(gp, &state.encode());
                 if is_valid_signature::<S>(&participant.key, &gp.metadata.signature, &msg) {
@@ -115,7 +115,8 @@ impl GossipAuth for GossipPacket {
     fn encode(&self) -> Vec<u8> {
         [
             "beaconID:".as_bytes(),
-            // Using the `beacon_id` from `packet.metadata` is safe due to earlier authentication, see `MultiBeacon::cmd`.
+            // Using the `beacon_id` from `packet.metadata` is safe
+            // due to earlier authentication, see `MultiBeacon::cmd`.
             self.metadata.beacon_id.as_bytes(),
             "\n".as_bytes(),
             &match &self.data {

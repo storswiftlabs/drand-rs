@@ -112,10 +112,12 @@ pub enum Actions {
     Status(Callback<DkgStatusResponse, ActionsError>),
 }
 
-/// `BeaconProcess` is responsible for the main logic of the `BeaconID` instance. It reads the keys / group file, it
-/// can start the DKG, read/write shares to files and can initiate/respond to tBLS signature requests.
+/// `BeaconProcess` is responsible for the main logic of the `BeaconID` instance.
+/// It reads the keys / group file, it can start the DKG,
+/// read/write shares to files and can initiate/respond to tBLS signature requests.
 pub struct BeaconProcess<S: Scheme> {
-    // Shared access is required to execute DKG protocol.
+    // Shared access required to offload DKG protocol
+    // execution from beacon manager task.
     inner: Arc<InnerProcess<S>>,
 }
 

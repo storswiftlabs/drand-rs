@@ -12,7 +12,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-// Filesystem constants
 const DEFAULT_DIR: &str = ".drand";
 const MULTIBEACON_DIR: &str = "multibeacon";
 const KEY_DIR: &str = "key";
@@ -23,11 +22,11 @@ const PUBLIC_ID_FILE: &str = "drand_id.public";
 const PRIVATE_SHARE_FILE: &str = "dist_key.private";
 const GROUP_FILE: &str = "drand_group.toml";
 
-/// Directories permission
+/// Directories permission.
 const DIR_PERM: u32 = 0o740;
-/// Private id permission
+/// Private id permission.
 const PRIVATE_PERM: u32 = 0o600;
-/// Public id permission
+/// Public id permission.
 const PUBLIC_PERM: u32 = 0o664;
 
 #[derive(thiserror::Error, Debug)]
@@ -49,7 +48,7 @@ pub enum FileStoreError {
     BeaconNotFound,
     #[error("beacon_id is failed to init, unknown scheme")]
     FailedInitID,
-    #[error("failed ro read beacon id from path")]
+    #[error("failed to read beacon id from path")]
     FailedToReadID,
     #[error("chain_store error: {0}")]
     ChainStore(#[from] crate::chain::StoreError),
@@ -83,7 +82,7 @@ impl FileStore {
         }
         new_secure_dir(&beacon_path)?;
 
-        // Create beacon sub folders
+        // Create sub folders for beacon ID.
         new_secure_dir(&beacon_path.join(KEY_DIR))?;
         new_secure_dir(&beacon_path.join(GROUP_DIR))?;
         new_secure_dir(&beacon_path.join(DB_DIR))?;
@@ -110,15 +109,15 @@ impl FileStore {
         Ok(())
     }
 
-    /// Returns an absolute path to multibeacon folder and non-empty list of pre-validated filestores
+    /// Returns an absolute path to multibeacon folder and non-empty list of pre-validated filestores.
     pub fn read_multibeacon_folder(folder: &str) -> Result<(PathBuf, Vec<Self>), FileStoreError> {
-        // Check if 'multibeacon' exists
+        // Check if 'multibeacon' exists.
         let base = absolute_path(folder)?;
         let multibeacon = base.join(MULTIBEACON_DIR);
         if !multibeacon.try_exists()? {
             return Err(FileStoreError::FileNotFound(multibeacon));
         }
-        // Attempt to read and validate stores
+        // Attempt to read and validate stores.
         let mut stores = vec![];
         let entries = std::fs::read_dir(&multibeacon)?;
 
@@ -141,12 +140,12 @@ impl FileStore {
     pub fn save_key_pair<S: Scheme>(&self, pair: &Pair<S>) -> Result<(), FileStoreError> {
         let pair_toml = pair.toml_encode().ok_or(FileStoreError::TomlError)?;
 
-        // save private
+        // Save private.
         let mut f = File::create(self.private_id_file())?;
         f.set_permissions(Permissions::from_mode(PRIVATE_PERM))?;
         f.write_all(pair_toml.private().as_bytes())?;
 
-        // save public
+        // Save public.
         let mut f = File::create(self.public_id_file())?;
         f.set_permissions(Permissions::from_mode(PUBLIC_PERM))?;
         f.write_all(pair_toml.public().as_bytes())?;

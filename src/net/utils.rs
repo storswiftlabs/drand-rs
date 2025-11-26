@@ -22,7 +22,6 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[cfg(not(any(test, feature = "insecure")))]
 /// Returns a channel for a generic Tonic client with TLS configuration.
-/// Returns an error if the connection cannot be established.
 pub async fn connect(peer: &Address) -> anyhow::Result<Channel> {
     let channel = Channel::from_shared(format!("https://{peer}"))?
         .tls_config(tonic::transport::ClientTlsConfig::new().with_native_roots())?
@@ -34,7 +33,6 @@ pub async fn connect(peer: &Address) -> anyhow::Result<Channel> {
 
 #[cfg(any(test, feature = "insecure"))]
 /// Returns a channel for a generic Tonic client without TLS configuration.
-/// Returns an error if the connection cannot be established.
 pub async fn connect(peer: &Address) -> anyhow::Result<Channel> {
     let channel = Channel::from_shared(format!("http://{peer}"))?
         .connect_timeout(CONNECT_TIMEOUT)
@@ -175,35 +173,7 @@ impl FromStr for Seconds {
     }
 }
 
-/// Error type for failed connection attempt, contains address and underlying error
-#[derive(thiserror::Error, Debug)]
-pub struct ConnectionError {
-    pub address: String,
-    pub error: tonic::transport::Error,
-}
-
-impl std::fmt::Display for ConnectionError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "could not establish connection to {},", self.address)?;
-        if let Some(source) = self.error.source() {
-            write!(f, " {source}")
-        } else {
-            write!(f, " {}", self.error)
-        }
-    }
-}
-
 impl Metadata {
-    /// Default implementation of `Metadata` which always contains [`NodeVersion`]
-    ///
-    /// Note: This function  should be used instead of default impl provided by [`::prost::Message`]
-    pub(super) fn with_default() -> Self {
-        Self {
-            node_version: Some(VERSION),
-            ..Default::default()
-        }
-    }
-
     pub fn with_id(beacon_id: String) -> Self {
         Self {
             node_version: Some(VERSION),
@@ -228,7 +198,7 @@ impl Metadata {
             node_version: Some(NodeVersion {
                 major: 2,
                 minor: 1,
-                patch: 2,
+                patch: 3,
                 prerelease: String::new(),
             }),
             beacon_id,
@@ -249,8 +219,8 @@ pub trait NewTcpListener {
 
 pub struct ControlListener;
 pub struct NodeListener;
-/// TODO: random sockets for e2e.
-#[allow(dead_code, reason = "tests")]
+
+#[allow(dead_code, reason = "reserved for tests")]
 pub struct TestListener;
 
 impl NewTcpListener for ControlListener {

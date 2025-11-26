@@ -9,14 +9,14 @@ use crate::{
 use energon::kyber::tbls::SigShare;
 use std::collections::VecDeque;
 
-/// Partials that are up to this amount of rounds more than the last
-/// beacon we have - it is useful for quick catchup.
+/// Partials that are up to this number of rounds
+/// beyond the last beacon we have - useful for quick catchup.
 pub const CACHE_LIMIT_ROUNDS: u64 = 3;
 
 /// Logical errors for partial cache.
 #[derive(thiserror::Error, Debug)]
 pub enum CacheError {
-    #[error("new stored round {latest_stored} is less then height {height}")]
+    #[error("new stored round {latest_stored} is less than height {height}")]
     Height { latest_stored: u64, height: u64 },
     #[error("invalid structure: allowed rounds {allowed:?}, height {height}")]
     Structure { allowed: Vec<u64>, height: u64 },
@@ -32,8 +32,8 @@ struct PartialsUnchecked {
 }
 
 /// Partial cache holds 2 types of shares:
-///  - [`PartialBeaconPacket`] unchecked BLS signature .
-///  - [`SigShare`] checked BLS signature .
+///  - [`PartialBeaconPacket`] unchecked BLS signature.
+///  - [`SigShare`] checked BLS signature.
 ///
 /// Partial cache structure:
 ///                  n           n + 1       n + 2 .. n + 2 + `CACHE_LIMIT_ROUNDS`
@@ -63,11 +63,12 @@ impl<S: Scheme> PartialCache<S> {
         }
     }
 
-    /// Adds packet into the corresponding round cache if the round of packet is allowed
-    /// and signature of packet is not duplicated.
+    /// Adds a packet to the corresponding round cache if the packet's
+    /// round is allowed and the packet's signature is not duplicated.
     ///
-    /// Cache _might_ contain more than one packet with same share index for given round.
-    /// This is possible if leaved node is not in proper state: old index collided with new index of some valid node.
+    /// Corner case: cache _may_ contain more than one packet with the same
+    /// share index for a given round. This is possible if leaved node is not
+    /// in proper state and old index collided with new index of some valid node.
     /// Such invalid packets will be discarded at BLS signature check.
     pub fn add_packet(&mut self, packet: PartialBeaconPacket) -> Option<bool> {
         if let Some(r_cache) = self
@@ -100,7 +101,8 @@ impl<S: Scheme> PartialCache<S> {
         self.valid_sigs.iter().any(|s| s.index() == index)
     }
 
-    /// Adds sigshare to partial cache. Returns slice of sigshares *sorted by index* if their number hits the threshold.
+    /// Adds sigshare to partial cache. Returns slice of sigshares *sorted by index*
+    /// if their count reaches the threshold.
     ///
     /// WARNING: bls signature validity and round value must be prechecked on caller side.
     pub fn add_prechecked(
@@ -125,7 +127,7 @@ impl<S: Scheme> PartialCache<S> {
         Some(self.valid_sigs.as_slice())
     }
 
-    /// Updates cache state if argument is bigger than cache metadata.
+    /// Updates cache state if argument is greater than cache height.
     /// Returns packets to verify for `latest_stored +1` round if such packets exist.
     fn update(&mut self, latest_stored: u64) -> Result<Option<PartialsUnchecked>, CacheError> {
         #[allow(clippy::comparison_chain, reason = "exhaustive")]
@@ -146,12 +148,12 @@ impl<S: Scheme> PartialCache<S> {
             for _ in 0..delta {
                 match self.rounds_cache.pop_front() {
                     Some(packets) => {
-                        // Add corresponding entry for new allowed round
+                        // Add corresponding entry for new allowed round.
                         self.rounds_cache.push_back(PartialsUnchecked {
                             round: packets.round + CACHE_LIMIT_ROUNDS,
                             packets: Vec::with_capacity(self.thr),
                         });
-                        // Stop at wanted round to aggregate
+                        // Stop at wanted round to aggregate.
                         if packets.round == self.height + 1 {
                             if packets.packets.is_empty() {
                                 return Ok(None);

@@ -17,11 +17,11 @@ pub trait Toml: Sized {
 
     /// Encodes into TOML representation.
     fn toml_encode(&self) -> Option<Self::Inner>;
-    /// Decodes from TOML representation
+    /// Decodes from TOML representation.
     fn toml_decode(value: &Self::Inner) -> Option<Self>;
 }
 
-/// `PairToml` is a toml representation of a [`Pair`]
+/// `PairToml` is a toml representation of a [`Pair`].
 pub struct PairToml {
     private: DocumentMut,
     public: DocumentMut,

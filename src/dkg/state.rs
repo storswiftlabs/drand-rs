@@ -135,7 +135,7 @@ pub struct State<S: Scheme> {
     leaving: Vec<Participant>,
     acceptors: Vec<Participant>,
     rejectors: Vec<Participant>,
-
+    // XXX: Do we want to store keyshare in DKG db?
     pub final_group: Option<Group<S>>,
     pub key_share: Option<DistKeyShare<S>>,
 }
@@ -523,16 +523,16 @@ impl<S: Scheme> State<S> {
         if self.time_expired() {
             return Err(DBStateError::TimeoutReached);
         }
-        // Leavers get no say if the rest of the network wants them out
+        // Leavers get no say if the rest of the network wants them out.
         if self.leaving.contains(&me) {
             return Err(DBStateError::CannotAcceptProposalWhereLeaving);
         }
-        // Joiners should run the `Join` command instead
+        // Joiners should run the `Join` command instead.
         if self.joining.contains(&me) {
             return Err(DBStateError::CannotAcceptProposalWhereJoining);
         }
 
-        // Move our node from rejectors to acceptors
+        // Move our node from rejectors to acceptors.
         self.rejectors.retain(|i| i != &me);
         self.acceptors.push(me);
         self.status = Status::Accepted;
@@ -559,12 +559,12 @@ impl<S: Scheme> State<S> {
             return Err(DBStateError::TimeoutReached);
         }
 
-        // Joiners should just not run the `Join` command if they don't want to join
+        // Joiners should just not run the `Join` command if they don't want to join.
         if self.joining.contains(&me) {
             return Err(DBStateError::CannotRejectProposalWhereJoining);
         }
 
-        // Leavers get no say if the rest of the network wants them out
+        // Leavers get no say if the rest of the network wants them out.
         if self.leaving.contains(&me) {
             return Err(DBStateError::CannotRejectProposalWhereLeaving);
         }
@@ -584,7 +584,7 @@ fn validate_proposal<S: Scheme>(
     validate_for_all_dkgs(current, terms)?;
 
     // Some terms (such as genesis seed) get set during the first epoch
-    // additionally, we can't have remainers, `GenesisTime` == `TransitionTime`, amongst other things
+    // additionally, we can't have remainers, `GenesisTime` == `TransitionTime`, amongst other things.
     if terms.epoch == 1 {
         return validate_first_epoch(terms);
     };
@@ -662,7 +662,7 @@ fn validate_reshare_terms<S: Scheme>(
     }
 
     // There's no theoretical reason the leader can't be leaving, but from a practical perspective
-    // it makes sense in case e.g. the DKG fails or aborts
+    // it makes sense in case e.g. the DKG fails or aborts.
     if terms.leaving.iter().any(|p| *p == terms.leader)
         || !terms.remaining.iter().any(|p| *p == terms.leader)
     {
@@ -730,9 +730,9 @@ fn validate_for_all_dkgs<S: Scheme>(
         return Err(DBStateError::ThresholdTooLow);
     }
 
-    // Validate epoch
+    // Validate epoch.
     //
-    // Epochs should be monotonically increasing
+    // Epochs should be monotonically increasing.
     if terms.epoch < current.epoch {
         return Err(DBStateError::InvalidEpoch);
     }
@@ -741,7 +741,7 @@ fn validate_for_all_dkgs<S: Scheme>(
         return Err(DBStateError::InvalidEpoch);
     }
 
-    // If we have some leftover state after having left the network, we can accept higher epochs
+    // If we have some leftover state after having left the network, we can accept higher epochs.
     if terms.epoch > current.epoch + 1
         && (current.status != Status::Left && current.status != Status::Fresh)
     {
@@ -783,8 +783,8 @@ fn validate_previous_group_for_joiners<S: Scheme>(
     d: &State<S>,
     prev_group: Option<&Group<S>>,
 ) -> Result<(), DBStateError> {
-    // joiners after the first epoch must pass a group file in order to determine
-    // that the proposal is valid (e.g. the `GenesisTime` and `Remaining` group are correct)
+    // Joiners after the first epoch must pass a group file in order to determine
+    // that the proposal is valid (e.g. the `GenesisTime` and `Remaining` group are correct).
     match prev_group {
         Some(prev_group) => {
             if prev_group.genesis_time != u64::try_from(d.genesis_time.seconds).unwrap() {
@@ -805,7 +805,7 @@ fn validate_previous_group_for_joiners<S: Scheme>(
     }
 }
 
-/// Used for status request
+/// Used for DKG status request.
 impl<S: Scheme> From<State<S>> for crate::protobuf::dkg::DkgEntry {
     fn from(s: State<S>) -> Self {
         fn convert<T, U, I>(iter: I) -> Vec<U>

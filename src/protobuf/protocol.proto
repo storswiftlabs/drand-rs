@@ -16,8 +16,6 @@ service Protocol {
   rpc PartialBeacon(PartialBeaconPacket) returns (drand.Empty);
   // SyncRequest forces a daemon to sync up its chain with other nodes
   rpc SyncChain(SyncRequest) returns (stream BeaconPacket);
-  // Status responds with the actual status of drand process
-  rpc Status(StatusRequest) returns (StatusResponse) {}
 }
 
 message IdentityRequest { Metadata metadata = 1; }
