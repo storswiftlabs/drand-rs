@@ -14,7 +14,7 @@ use crate::{
 use anyhow::{bail, Result};
 use clap::{arg, command, Parser, Subcommand};
 use energon::{
-    drand::schemes::{BN254UnchainedOnG1Scheme, DefaultScheme, SigsOnG1Scheme, UnchainedScheme},
+    drand::schemes::{BN254UnchainedOnG1Scheme, DefaultScheme, SigsOnG1Scheme},
     points::KeyPoint,
     traits::Affine,
 };
@@ -238,7 +238,6 @@ async fn generate_keypair(config: KeyGenConfig) -> Result<()> {
     println!("Generating private / public key pair");
     match config.scheme.as_str() {
         DefaultScheme::ID => keygen::<DefaultScheme>(&config)?,
-        UnchainedScheme::ID => keygen::<UnchainedScheme>(&config)?,
         SigsOnG1Scheme::ID => keygen::<SigsOnG1Scheme>(&config)?,
         BN254UnchainedOnG1Scheme::ID => keygen::<BN254UnchainedOnG1Scheme>(&config)?,
         _ => bail!("keygen: unknown scheme: {}", config.scheme),
@@ -414,7 +413,6 @@ async fn check_identity_address(peer: &Address, beacon_id: String) -> Result<()>
     if match resp.scheme_name.as_str() {
         DefaultScheme::ID => KeyPoint::<DefaultScheme>::deserialize(&resp.key).is_err(),
         SigsOnG1Scheme::ID => KeyPoint::<SigsOnG1Scheme>::deserialize(&resp.key).is_err(),
-        UnchainedScheme::ID => KeyPoint::<UnchainedScheme>::deserialize(&resp.key).is_err(),
         BN254UnchainedOnG1Scheme::ID => {
             KeyPoint::<BN254UnchainedOnG1Scheme>::deserialize(&resp.key).is_err()
         }

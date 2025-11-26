@@ -6,7 +6,7 @@ use crate::{
     protobuf::drand::ChainInfoPacket,
 };
 use energon::drand::{
-    schemes::{BN254UnchainedOnG1Scheme, DefaultScheme, SigsOnG1Scheme, UnchainedScheme},
+    schemes::{BN254UnchainedOnG1Scheme, DefaultScheme, SigsOnG1Scheme},
     traits::DrandScheme,
 };
 use std::time::Duration;
@@ -145,10 +145,6 @@ async fn sync() {
         },
         DefaultScheme::ID => {
             let group:Group<DefaultScheme> = Toml::toml_decode(&group_str.parse().unwrap()).unwrap();
-            (group.transition_time, group.genesis_time)
-        }
-        UnchainedScheme::ID => {
-            let group:Group<UnchainedScheme> = Toml::toml_decode(&group_str.parse().unwrap()).unwrap();
             (group.transition_time, group.genesis_time)
         }
         BN254UnchainedOnG1Scheme::ID => {

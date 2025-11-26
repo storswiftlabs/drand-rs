@@ -10,9 +10,7 @@ use crate::{
     net::{pool::PoolSender, protocol::PartialMsg},
 };
 use arc_swap::{ArcSwap, ArcSwapAny, Guard};
-use energon::drand::schemes::{
-    BN254UnchainedOnG1Scheme, DefaultScheme, SigsOnG1Scheme, UnchainedScheme,
-};
+use energon::drand::schemes::{BN254UnchainedOnG1Scheme, DefaultScheme, SigsOnG1Scheme};
 use std::{path::PathBuf, sync::Arc};
 use tokio::sync::mpsc;
 
@@ -59,9 +57,6 @@ impl BeaconHandler {
         let handler = match scheme {
             DefaultScheme::ID => {
                 BeaconProcess::<DefaultScheme>::run(fs, pair, pool, private_listen)?
-            }
-            UnchainedScheme::ID => {
-                BeaconProcess::<UnchainedScheme>::run(fs, pair, pool, private_listen)?
             }
             SigsOnG1Scheme::ID => {
                 BeaconProcess::<SigsOnG1Scheme>::run(fs, pair, pool, private_listen)?
