@@ -1,5 +1,6 @@
 use crate::{
     core::{beacon, daemon::Daemon},
+    info,
     key::{keys::Pair, store::FileStore, Scheme},
     net::{
         control,
@@ -19,10 +20,12 @@ use energon::{
     traits::Affine,
 };
 
+const NAME: &str = "drand-rs.beta";
+
 #[derive(Debug, Parser, Clone)]
 #[command(
-    name = "drand rust implementation (BETA)", 
-    version = env!("CARGO_PKG_VERSION"), 
+    name = NAME,
+    version = version(),
     about = "drand - distributed randomness service"
 )]
 pub struct Cli {
@@ -30,6 +33,25 @@ pub struct Cli {
     pub verbose: bool,
     #[command(subcommand)]
     pub commands: Cmd,
+}
+
+fn version() -> String {
+    let mut version = env!("CARGO_PKG_VERSION").to_string();
+
+    // Backend info.
+    version.push_str(" [");
+    #[cfg(feature = "default")]
+    version.push_str("default");
+    #[cfg(feature = "asm")]
+    version.push_str("asm");
+    #[cfg(feature = "ark_asm")]
+    version.push_str("ark_asm");
+    version.push(']');
+
+    // Optional features.
+    #[cfg(any(test, feature = "insecure"))]
+    version.push_str(" insecure");
+    version
 }
 
 /// Generate the long-term keypair (drand.private, drand.public) for this node, and load it on the drand daemon if it is up and running.
@@ -270,6 +292,8 @@ async fn start(config: Config) -> Result<()> {
         crate::net::metrics::setup_metrics(address)?;
     }
     let log = crate::log::set_node(private_listen.as_str());
+    info!(&log, "BUILD: {NAME} {}", version());
+
     let daemon = Daemon::new(config, log)?;
     let t = daemon.tracker();
 

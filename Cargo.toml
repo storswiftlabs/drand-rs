@@ -5,7 +5,7 @@ version = "0.2.0"
 edition = "2021"
 
 [dependencies]
-energon = { git = "https://github.com/version513/energon.git", rev = "1810a9b" }
+energon = { git = "https://github.com/version513/energon.git", rev = "670db05" }
 thiserror = "2.0.11"
 clap = { version = "4", features = ["derive", "string"] }
 tokio = { version = "1.44.2", features = ["macros", "rt-multi-thread"] }
@@ -48,9 +48,15 @@ strip = true
 codegen-units = 1
 
 [features]
-default = ["blstrs"]
-blstrs = ["energon/bls12381_blstrs", "energon/bn254_arkworks"]
-arkworks = ["energon/bls12381_arkworks", "energon/bn254_arkworks"]
-# Disable TLS for local tests.
+# Backends are ordered by performance.
+asm = ["energon/bls12381_blstrs", "energon/bn254_arkworks_asm"]
+ark_asm = ["energon/bls12381_arkworks_asm", "energon/bn254_arkworks_asm"]
+default = ["energon/bls12381_arkworks", "energon/bn254_arkworks"]
+
+# Optional
+## Disable TLS for local tests.
 insecure = []
+
+# Development
+## CI: integration tests with Drand Go implementation. 
 test-integration = []

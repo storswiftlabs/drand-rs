@@ -33,7 +33,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: ["blstrs", "arkworks"]
+        backend: ["asm", "ark_asm"]
     steps:
       - uses: actions/checkout@v2
       - name: Install protobuf-compiler
@@ -42,6 +42,8 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
       - name: Run test
+        env:
+          RUSTFLAGS: "-D warnings -C target-feature=+bmi2,+adx"
         run: cargo test --no-default-features --features ${{ matrix.backend }}
   
   test-integration-dkg:
@@ -50,7 +52,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: ["blstrs", "arkworks"]
+        backend: ["asm", "ark_asm"]
         scheme: ["pedersen-bls-chained", "bls-unchained-g1-rfc9380", "bls-bn254-unchained-on-g1"]
     steps:
       - uses: actions/checkout@v2
@@ -64,7 +66,7 @@ jobs:
       - name: Run test
         env:
           DRAND_TEST_SCHEME: ${{ matrix.scheme }}
-          RUSTFLAGS: "-D warnings"
+          RUSTFLAGS: "-D warnings -C target-feature=+bmi2,+adx"
         run: cargo test --no-default-features --features "test-integration ${{ matrix.backend }}"  -- test_with_golang::dkg::all_roles_dkg --exact --show-output
   
   test-integration-chain-follow:
@@ -73,7 +75,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: ["blstrs", "arkworks"]
+        backend: ["asm", "ark_asm"]
         scheme: ["pedersen-bls-chained", "bls-unchained-g1-rfc9380", "bls-bn254-unchained-on-g1"]
     steps:
       - uses: actions/checkout@v2
@@ -87,7 +89,7 @@ jobs:
       - name: Run test
         env:
           DRAND_TEST_SCHEME: ${{ matrix.scheme }}
-          RUSTFLAGS: "-D warnings"
+          RUSTFLAGS: "-D warnings -C target-feature=+bmi2,+adx"
         run: cargo test --no-default-features --features "test-integration ${{ matrix.backend }}"  -- test_with_golang::chain::follow_chain --exact --show-output
 
   test-integration-chain-sync:
@@ -96,7 +98,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: ["blstrs", "arkworks"]
+        backend: ["asm", "ark_asm"]
         scheme: ["pedersen-bls-chained", "bls-unchained-g1-rfc9380", "bls-bn254-unchained-on-g1"]
     steps:
       - uses: actions/checkout@v2
@@ -110,5 +112,5 @@ jobs:
       - name: Run test
         env:
           DRAND_TEST_SCHEME: ${{ matrix.scheme }}
-          RUSTFLAGS: "-D warnings"
+          RUSTFLAGS: "-D warnings -C target-feature=+bmi2,+adx"
         run: cargo test --no-default-features --features "test-integration ${{ matrix.backend }}"  -- test_with_golang::chain::sync --exact --show-output
