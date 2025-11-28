@@ -123,15 +123,6 @@ pub struct ChainInfoPacket {
     #[prost(message, optional, tag = "7")]
     pub metadata: ::core::option::Option<Metadata>,
 }
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
-pub struct ListSchemesRequest {}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ListSchemesResponse {
-    #[prost(string, repeated, tag = "1")]
-    pub ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-    #[prost(message, optional, tag = "2")]
-    pub metadata: ::core::option::Option<Metadata>,
-}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ShutdownRequest {
     #[prost(message, optional, tag = "1")]
@@ -283,30 +274,6 @@ pub mod control_client {
             req.extensions_mut().insert(GrpcMethod::new("drand.Control", "Status"));
             self.inner.unary(req, path, codec).await
         }
-        /// ListSchemes responds with the list of ids for the available schemes
-        pub async fn list_schemes(
-            &mut self,
-            request: impl tonic::IntoRequest<super::ListSchemesRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::ListSchemesResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/drand.Control/ListSchemes",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new("drand.Control", "ListSchemes"));
-            self.inner.unary(req, path, codec).await
-        }
         /// ChainInfo returns the chain info for the chain hash or beacon id requested
         /// in the metadata
         pub async fn chain_info(
@@ -440,14 +407,6 @@ pub mod control_server {
             &self,
             request: tonic::Request<super::StatusRequest>,
         ) -> std::result::Result<tonic::Response<super::StatusResponse>, tonic::Status>;
-        /// ListSchemes responds with the list of ids for the available schemes
-        async fn list_schemes(
-            &self,
-            request: tonic::Request<super::ListSchemesRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::ListSchemesResponse>,
-            tonic::Status,
-        >;
         /// ChainInfo returns the chain info for the chain hash or beacon id requested
         /// in the metadata
         async fn chain_info(
@@ -599,51 +558,6 @@ pub mod control_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = StatusSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
-                        let mut grpc = tonic::server::Grpc::new(codec)
-                            .apply_compression_config(
-                                accept_compression_encodings,
-                                send_compression_encodings,
-                            )
-                            .apply_max_message_size_config(
-                                max_decoding_message_size,
-                                max_encoding_message_size,
-                            );
-                        let res = grpc.unary(method, req).await;
-                        Ok(res)
-                    };
-                    Box::pin(fut)
-                }
-                "/drand.Control/ListSchemes" => {
-                    #[allow(non_camel_case_types)]
-                    struct ListSchemesSvc<T: Control>(pub Arc<T>);
-                    impl<
-                        T: Control,
-                    > tonic::server::UnaryService<super::ListSchemesRequest>
-                    for ListSchemesSvc<T> {
-                        type Response = super::ListSchemesResponse;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
-                        fn call(
-                            &mut self,
-                            request: tonic::Request<super::ListSchemesRequest>,
-                        ) -> Self::Future {
-                            let inner = Arc::clone(&self.0);
-                            let fut = async move {
-                                <T as Control>::list_schemes(&inner, request).await
-                            };
-                            Box::pin(fut)
-                        }
-                    }
-                    let accept_compression_encodings = self.accept_compression_encodings;
-                    let send_compression_encodings = self.send_compression_encodings;
-                    let max_decoding_message_size = self.max_decoding_message_size;
-                    let max_encoding_message_size = self.max_encoding_message_size;
-                    let inner = self.inner.clone();
-                    let fut = async move {
-                        let method = ListSchemesSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
@@ -1455,15 +1369,6 @@ pub struct PublicRandResponse {
     #[prost(message, optional, tag = "5")]
     pub metadata: ::core::option::Option<Metadata>,
 }
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
-pub struct ListBeaconIDsRequest {}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ListBeaconIDsResponse {
-    #[prost(string, repeated, tag = "1")]
-    pub ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-    #[prost(message, repeated, tag = "2")]
-    pub metadatas: ::prost::alloc::vec::Vec<Metadata>,
-}
 /// Generated client implementations.
 pub mod public_client {
     #![allow(
@@ -1625,31 +1530,6 @@ pub mod public_client {
             req.extensions_mut().insert(GrpcMethod::new("drand.Public", "ChainInfo"));
             self.inner.unary(req, path, codec).await
         }
-        /// ListBeaconIDs responds with the list of Beacon IDs running on that node
-        pub async fn list_beacon_i_ds(
-            &mut self,
-            request: impl tonic::IntoRequest<super::ListBeaconIDsRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::ListBeaconIDsResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/drand.Public/ListBeaconIDs",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("drand.Public", "ListBeaconIDs"));
-            self.inner.unary(req, path, codec).await
-        }
     }
 }
 /// Generated server implementations.
@@ -1693,14 +1573,6 @@ pub mod public_server {
             &self,
             request: tonic::Request<super::ChainInfoRequest>,
         ) -> std::result::Result<tonic::Response<super::ChainInfoPacket>, tonic::Status>;
-        /// ListBeaconIDs responds with the list of Beacon IDs running on that node
-        async fn list_beacon_i_ds(
-            &self,
-            request: tonic::Request<super::ListBeaconIDsRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::ListBeaconIDsResponse>,
-            tonic::Status,
-        >;
     }
     #[derive(Debug)]
     pub struct PublicServer<T> {
@@ -1895,51 +1767,6 @@ pub mod public_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = ChainInfoSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
-                        let mut grpc = tonic::server::Grpc::new(codec)
-                            .apply_compression_config(
-                                accept_compression_encodings,
-                                send_compression_encodings,
-                            )
-                            .apply_max_message_size_config(
-                                max_decoding_message_size,
-                                max_encoding_message_size,
-                            );
-                        let res = grpc.unary(method, req).await;
-                        Ok(res)
-                    };
-                    Box::pin(fut)
-                }
-                "/drand.Public/ListBeaconIDs" => {
-                    #[allow(non_camel_case_types)]
-                    struct ListBeaconIDsSvc<T: Public>(pub Arc<T>);
-                    impl<
-                        T: Public,
-                    > tonic::server::UnaryService<super::ListBeaconIDsRequest>
-                    for ListBeaconIDsSvc<T> {
-                        type Response = super::ListBeaconIDsResponse;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
-                        fn call(
-                            &mut self,
-                            request: tonic::Request<super::ListBeaconIDsRequest>,
-                        ) -> Self::Future {
-                            let inner = Arc::clone(&self.0);
-                            let fut = async move {
-                                <T as Public>::list_beacon_i_ds(&inner, request).await
-                            };
-                            Box::pin(fut)
-                        }
-                    }
-                    let accept_compression_encodings = self.accept_compression_encodings;
-                    let send_compression_encodings = self.send_compression_encodings;
-                    let max_decoding_message_size = self.max_decoding_message_size;
-                    let max_encoding_message_size = self.max_encoding_message_size;
-                    let inner = self.inner.clone();
-                    let fut = async move {
-                        let method = ListBeaconIDsSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

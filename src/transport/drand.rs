@@ -112,35 +112,6 @@ impl From<Node> for crate::protobuf::drand::Node {
     }
 }
 
-pub struct ListSchemesResponse {
-    pub ids: Vec<String>,
-    pub metadata: Metadata,
-}
-
-impl ConvertProto for crate::protobuf::drand::ListSchemesResponse {
-    type Inner = ListSchemesResponse;
-
-    fn validate(self) -> Result<Self::Inner, TransportError> {
-        let Self { ids, metadata } = self;
-
-        Ok(Self::Inner {
-            ids,
-            metadata: metadata.require_some()?,
-        })
-    }
-}
-
-impl From<ListSchemesResponse> for crate::protobuf::drand::ListSchemesResponse {
-    fn from(value: ListSchemesResponse) -> Self {
-        let ListSchemesResponse { ids, metadata } = value;
-
-        Self {
-            ids,
-            metadata: Some(metadata),
-        }
-    }
-}
-
 pub struct StartSyncRequest {
     pub nodes: Vec<String>,
     pub up_to: u64,

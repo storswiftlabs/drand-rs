@@ -4,8 +4,7 @@ use crate::{
     core::{beacon::BeaconCmd, daemon::Daemon},
     protobuf::drand::{
         public_client::PublicClient as PublicClientInner, public_server::Public, ChainInfoPacket,
-        ChainInfoRequest, ListBeaconIDsRequest, ListBeaconIDsResponse, Metadata, PublicRandRequest,
-        PublicRandResponse,
+        ChainInfoRequest, Metadata, PublicRandRequest, PublicRandResponse,
     },
 };
 use anyhow::{bail, Context};
@@ -29,7 +28,7 @@ impl Public for PublicHandler {
     /// Server streaming response type for the `public_rand_stream` method.
     type PublicRandStreamStream = ResponseStream;
 
-    /// TODO: implement if we need to support relays in same way.
+    /// TODO: https://github.com/drand/http-relay/blob/master/grpc/grpc.go#L119
     async fn public_rand(
         &self,
         _request: Request<PublicRandRequest>,
@@ -37,7 +36,7 @@ impl Public for PublicHandler {
         Err(Status::unimplemented("public_rand: PublicRandRequest"))
     }
 
-    /// TODO: implement if we need to support relays in same way.
+    /// TODO: https://github.com/drand/http-relay/blob/master/grpc/grpc.go#L141
     async fn public_rand_stream(
         &self,
         _request: Request<PublicRandRequest>,
@@ -68,16 +67,6 @@ impl Public for PublicHandler {
             .map_err(|chain_info_err| chain_info_err.to_status(id))?;
 
         Ok(Response::new(chain_info))
-    }
-
-    // TODO: this method required.
-    async fn list_beacon_i_ds(
-        &self,
-        _request: Request<ListBeaconIDsRequest>,
-    ) -> Result<Response<ListBeaconIDsResponse>, Status> {
-        Err(Status::unimplemented(
-            "list_beacon_i_ds: ListBeaconIDsRequest",
-        ))
     }
 }
 

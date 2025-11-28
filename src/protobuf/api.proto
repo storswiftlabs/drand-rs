@@ -19,9 +19,6 @@ service Public {
   // ChainInfo returns the information related to the chain this node
   // participates to
   rpc ChainInfo(drand.ChainInfoRequest) returns (drand.ChainInfoPacket);
-
-  // ListBeaconIDs responds with the list of Beacon IDs running on that node
-  rpc ListBeaconIDs(ListBeaconIDsRequest) returns (ListBeaconIDsResponse) {}
 }
 
 // PublicRandRequest requests a public random value that has been generated in a
@@ -42,11 +39,4 @@ message PublicRandResponse {
   bytes signature = 2;
   bytes previous_signature = 3;
   Metadata metadata = 5;
-}
-
-message ListBeaconIDsRequest {}
-
-message ListBeaconIDsResponse {
-  repeated string ids = 1;
-  repeated Metadata metadatas = 2;
 }

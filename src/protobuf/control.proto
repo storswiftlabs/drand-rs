@@ -11,8 +11,6 @@ import "src/protobuf/common.proto";
 service Control {
   // Status responds with the actual status of drand process
   rpc Status(StatusRequest) returns (StatusResponse) {}
-  // ListSchemes responds with the list of ids for the available schemes
-  rpc ListSchemes(ListSchemesRequest) returns (ListSchemesResponse) {}
 
   // ChainInfo returns the chain info for the chain hash or beacon id requested
   // in the metadata
@@ -25,13 +23,6 @@ service Control {
   rpc StartFollowChain(StartSyncRequest) returns (stream SyncProgress) {}
 
   rpc StartCheckChain(StartSyncRequest) returns (stream SyncProgress) {}
-}
-
-message ListSchemesRequest {}
-
-message ListSchemesResponse {
-  repeated string ids = 1;
-  Metadata metadata = 2;
 }
 
 message ShutdownRequest { Metadata metadata = 1; }

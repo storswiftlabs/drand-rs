@@ -11,9 +11,9 @@ use crate::{
         drand::{
             control_client::ControlClient as ControlClientInner,
             control_server::{Control, ControlServer},
-            ChainInfoPacket, ChainInfoRequest, ListSchemesRequest, ListSchemesResponse,
-            LoadBeaconRequest, LoadBeaconResponse, Metadata, ShutdownRequest, ShutdownResponse,
-            StartSyncRequest, StatusRequest, StatusResponse, SyncProgress,
+            ChainInfoPacket, ChainInfoRequest, LoadBeaconRequest, LoadBeaconResponse, Metadata,
+            ShutdownRequest, ShutdownResponse, StartSyncRequest, StatusRequest, StatusResponse,
+            SyncProgress,
         },
     },
 };
@@ -71,14 +71,6 @@ impl Control for ControlHandler {
             .map_err(|err| err.to_status(id))?;
 
         Ok(Response::new(status))
-    }
-
-    /// ListSchemes responds with the list of ids for the available schemes.
-    async fn list_schemes(
-        &self,
-        _request: Request<ListSchemesRequest>,
-    ) -> Result<Response<ListSchemesResponse>, Status> {
-        Err(Status::unimplemented("list_schemes: ListSchemesRequest"))
     }
 
     /// ChainInfo returns the chain info for the chain hash or beacon id requested in the metadata.
