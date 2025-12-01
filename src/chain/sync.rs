@@ -21,7 +21,6 @@ use crate::{
     protobuf::drand::{BeaconPacket, ChainInfoPacket, StartSyncRequest, SyncProgress},
     {debug, error, info, warn},
 };
-use energon::traits::Affine;
 use rand::seq::SliceRandom;
 use std::time::Duration;
 use tokio::{
@@ -145,13 +144,16 @@ impl<S: Scheme, B: BeaconRepr> DefaultSyncer<S, B> {
         Ok(syncer)
     }
 
-    #[rustfmt::skip] // readability
+    #[rustfmt::skip]
+    #[cfg(not(feature = "skip_db_verification"))]
     pub fn process_follow_request(
         self,
         target: u64,
         tx: mpsc::Sender<SyncProgressResponse>,
         log: Logger,
     ) -> JoinHandle<Result<(), SyncError>> {
+        use energon::traits::Affine;
+
         task::spawn(async move {
             let mut last_stored = self.store.last().await?;
             if last_stored.round() >= target {
@@ -173,7 +175,6 @@ impl<S: Scheme, B: BeaconRepr> DefaultSyncer<S, B> {
                     error!(&log, "latest stored round {}, {err}", last_stored.round());
                     return Err(err);
                 }
-
                 let mut stream = match ProtocolClient::new(peer).await {
                     Ok(mut client) => {
                         match client.sync_chain(from, self.info.beacon_id.to_string()).await {
@@ -189,13 +190,11 @@ impl<S: Scheme, B: BeaconRepr> DefaultSyncer<S, B> {
                         continue;
                     }
                 };
-
                 while let Ok(Some(p)) = stream.message().await {
                     let Some(ref meta) = p.metadata else {
                         error!(&log, "stream: skipping {peer}, no metadata for round {}", p.round);
                         continue 'peers;
                     };
-
                     if self.info.beacon_id.as_str() != meta.beacon_id {
                         error!(&log, "stream: skipping {peer}, invalid beacon_id {} for round {}", meta.beacon_id, p.round);
                         continue 'peers;
@@ -213,7 +212,6 @@ impl<S: Scheme, B: BeaconRepr> DefaultSyncer<S, B> {
                         error!(&log, "stream: skipping peer {peer}: failed to deserialize signature for round {}", p.round);
                         continue 'peers;
                     };
-
                     if super::is_valid_signature::<S>(&self.info.public_key, last_stored.signature(), p.round, &new_sig) {
                         // Signature and round has been checked - beacon is valid.
                         let valid_beacon = B::from_packet(p);
@@ -222,7 +220,6 @@ impl<S: Scheme, B: BeaconRepr> DefaultSyncer<S, B> {
                             return Err(SyncError::ChainStore(err));
                         }
                         last_stored = valid_beacon;
-
                         // Report sync progress to control client side.
                         if tx.send(Ok(SyncProgress { current: last_stored.round(), target, metadata: None })).await.is_err() {
                             debug!(&log, "sync request cancelled: synced {}, latest_stored {}", last_stored.round() - started_from, last_stored.round());
@@ -238,12 +235,102 @@ impl<S: Scheme, B: BeaconRepr> DefaultSyncer<S, B> {
                     }
                 }
             }
-
             if last_stored.round() != target {
                 let err = SyncError::TriedAllPers {
                     last: last_stored.round(),
                 };
+                let _ = tx.send(Err(Status::cancelled(err.to_string()))).await;
+                error!(&log, "sync request finished: {err}");
+                return Err(err);
+            }
 
+            Ok(())
+        })
+    }
+
+    #[rustfmt::skip]
+    #[cfg(feature = "skip_db_verification")]
+    pub fn process_follow_request(
+        self,
+        target: u64,
+        tx: mpsc::Sender<SyncProgressResponse>,
+        log: Logger,
+    ) -> JoinHandle<Result<(), SyncError>> {
+        task::spawn(async move {
+            let mut last_stored = self.store.last().await?;
+            if last_stored.round() >= target {
+                warn!(&log, "sync request rejected: target {target}, latest_stored {}", last_stored.round());
+                return Ok(());
+            }
+            info!(&log, "processing sync request: target {target}, latest_stored {}", last_stored.round());
+            warn!(&log, "skipping beacons validity checks - use for tests only!");
+
+            let started_from = last_stored.round();
+            if target - started_from > LOGS_TO_SKIP {
+                debug!(&log, "logging will use rate limiting {LOGS_TO_SKIP}");
+            }
+
+            // Peers are randomly sorted on configuration step (see [start_follow_chain]).
+            'peers: for peer in &self.peers {
+                let from = last_stored.round() + 1;
+                if target < from {
+                    let err = SyncError::InvalidTarget { from, target };
+                    error!(&log, "latest stored round {}, {err}", last_stored.round());
+                    return Err(err);
+                }
+                let mut stream = match ProtocolClient::new(peer).await {
+                    Ok(mut client) => {
+                        match client.sync_chain(from, self.info.beacon_id.to_string()).await {
+                            Ok(stream) => stream,
+                            Err(err) => {
+                                error!(&log, "skipping {peer}, failed to get stream: {err}");
+                                continue;
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        error!(&log, "skipping {peer}, unable to create client: {err}",);
+                        continue;
+                    }
+                };
+                while let Ok(Some(p)) = stream.message().await {
+                    let Some(ref meta) = p.metadata else {
+                        error!(&log, "stream: skipping {peer}, no metadata for round {}", p.round);
+                        continue 'peers;
+                    };
+                    if self.info.beacon_id.as_str() != meta.beacon_id {
+                        error!(&log, "stream: skipping {peer}, invalid beacon_id {} for round {}", meta.beacon_id, p.round);
+                        continue 'peers;
+                    }
+                    if p.round != last_stored.round() + 1 {
+                        warn!(&log, "round expected {}, received {}, CONTINUE..", last_stored.round() + 1, p.round);
+                    }
+                    if target - p.round < LOGS_TO_SKIP || p.round % LOGS_TO_SKIP == 0 {
+                        debug!(&log, "new_beacon_fetched: peer {peer}, from_round {from}, got_round {}", p.round);
+                    }
+
+                    let unchecked_beacon = B::from_packet(p);
+                    if let Err(err) = self.store.put(unchecked_beacon.clone()).await {
+                        error!(&log, "failed to store beacon for round {}: {err}", unchecked_beacon.round());
+                        return Err(SyncError::ChainStore(err));
+                    }
+                    last_stored = unchecked_beacon;
+
+                    // Report sync progress to control client side.
+                    if tx.send(Ok(SyncProgress { current: last_stored.round(), target, metadata: None })).await.is_err() {
+                        debug!(&log, "sync request cancelled: synced {}, latest_stored {}", last_stored.round() - started_from, last_stored.round());
+                        return Ok(());
+                    }
+                    if last_stored.round() == target {
+                        debug!(&log, "finished syncing up_to {target} round");
+                        return Ok(());
+                    }
+                }
+            }
+            if last_stored.round() != target {
+                let err = SyncError::TriedAllPers {
+                    last: last_stored.round(),
+                };
                 let _ = tx.send(Err(Status::cancelled(err.to_string()))).await;
                 error!(&log, "sync request finished: {err}");
                 return Err(err);

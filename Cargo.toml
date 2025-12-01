@@ -45,6 +45,7 @@ async-std = { version = "1.7.0", features = ["unstable"] }
 [profile.release]
 lto = true
 strip = true
+panic = "abort"
 codegen-units = 1
 
 [features]
@@ -56,6 +57,8 @@ default = ["energon/bls12381_arkworks", "energon/bn254_arkworks"]
 # Optional
 ## Disable TLS for local tests.
 insecure = []
+## Disable checks for chain database during `follow` request. Use for tests only.
+skip_db_verification = []
 
 # Development
 ## CI: integration tests with Drand Go implementation. 

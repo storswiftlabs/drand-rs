@@ -51,6 +51,8 @@ fn version() -> String {
     // Optional features.
     #[cfg(any(test, feature = "insecure"))]
     version.push_str(" insecure");
+    #[cfg(feature = "skip_db_verification")]
+    version.push_str(" skip-db-verification");
     version
 }
 
