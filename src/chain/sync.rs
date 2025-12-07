@@ -321,8 +321,10 @@ impl<S: Scheme, B: BeaconRepr> DefaultSyncer<S, B> {
                         debug!(&log, "sync request cancelled: synced {}, latest_stored {}", last_stored.round() - started_from, last_stored.round());
                         return Ok(());
                     }
-                    if last_stored.round() == target {
-                        debug!(&log, "finished syncing up_to {target} round");
+                    // With verification disabled, an inconsistent sync node database might send
+                    // a greater round instead of target, so we check for rounds ≥ target.
+                    if last_stored.round() >= target {
+                        debug!(&log, "finished syncing: up_to {target} round, latest_stored {}", last_stored.round());
                         return Ok(());
                     }
                 }

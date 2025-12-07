@@ -166,7 +166,7 @@ impl Pool {
                 beacons: Vec::with_capacity(3),
                 log,
             };
-            info!(&pool.log, "initialing empty pool...");
+            info!(&pool.log, "initializing empty pool for partial packets ...");
 
             loop {
                 tokio::select! {
