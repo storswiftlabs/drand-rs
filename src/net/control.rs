@@ -19,6 +19,7 @@ use crate::{
 };
 use anyhow::anyhow;
 use std::{ops::Deref, pin::Pin, sync::Arc};
+use tokio::time::Instant;
 use tokio_stream::{
     wrappers::{ReceiverStream, TcpListenerStream},
     Stream,
@@ -245,7 +246,6 @@ impl ControlClient {
             up_to: if c.follow { 0 } else { c.up_to },
             metadata: Some(metadata),
         };
-
         println!(
             "Launching a follow request: nodes: {:?}, upTo: {}, hash {}, beaconID: {}",
             request.nodes, request.up_to, c.chain_hash, c.id
@@ -253,19 +253,21 @@ impl ControlClient {
 
         let mut responce = self.client.start_follow_chain(request).await?.into_inner();
         let mut spinner = ['/', '—', '\\'].iter().cycle();
+        let start = Instant::now();
 
         while let Ok(Some(progress)) = responce.message().await {
-            if progress.current % 300 == 0 {
+            if progress.current == progress.target || progress.current % 300 == 0 {
                 #[allow(clippy::cast_precision_loss)]
                 let percent = (progress.current as f64 / progress.target as f64) * 100.0;
                 let symbol = spinner.next().expect("infallible");
                 print!(
-                    "\r{}  synced round up to {} - current target {}     --> {:.2} %",
+                    "\r{}  synced round up to {} - current target {}     --> {:.2} % ",
                     symbol, progress.current, progress.target, percent,
                 );
                 std::io::stdout().flush()?;
             }
         }
+        println!("time total {}s", start.elapsed().as_secs());
 
         Ok(())
     }
