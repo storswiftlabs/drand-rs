@@ -1,3 +1,6 @@
+// Copyright 2023-2025 StorSwift Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! DKG scenarios can be configured manually e.g [`all_roles_dkg`],
 //! or generated randomly within the DKG state machine rules (see: [`NodesGroup::generate_roles`]),
 //! which is useful for continuous resharing with different thresholds and participant roles (see: [`random_scenarios`]).

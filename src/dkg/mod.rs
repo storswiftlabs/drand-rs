@@ -1,3 +1,6 @@
+// Copyright 2023-2025 StorSwift Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 pub mod actions_active;
 pub mod actions_passive;
 pub mod actions_signing;

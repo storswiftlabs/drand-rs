@@ -1,3 +1,6 @@
+// Copyright 2023-2025 StorSwift Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Types are re-exported directly if their fields DO NOT contain:
 //!  - option<T> instead of T
 //!  - protected new pattern types

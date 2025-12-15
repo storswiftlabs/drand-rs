@@ -1,3 +1,6 @@
+// Copyright 2023-2025 StorSwift Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fs::read_dir;
 
 const PROTO_DIR: &str = "./src/protobuf";

@@ -1,3 +1,6 @@
+// Copyright 2023-2025 StorSwift Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 use super::{actions_signing::ActionsSigning, ActionsError};
 use crate::{core::beacon::BeaconProcess, key::Scheme, transport::dkg::GossipPacket};
 use prost_types::Timestamp;

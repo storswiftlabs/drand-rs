@@ -1,3 +1,6 @@
+// Copyright 2023-2025 StorSwift Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! This module contains logic for syncing and resyncing beacons.
 //!
 //! - Sync is called manually (CLI) by nodes without DKG setup to

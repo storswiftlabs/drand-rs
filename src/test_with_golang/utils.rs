@@ -1,3 +1,6 @@
+// Copyright 2023-2025 StorSwift Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Utilities for testing Drand-rs with Drand-go v2.1.3-insecure 8228476b.
 use crate::{
     cli::*,

@@ -1,3 +1,6 @@
+// Copyright 2023-2025 StorSwift Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Client and server implementations for RPC [`Public`] service.
 use super::utils::{Address, Callback, ToStatus, ERR_METADATA_IS_MISSING};
 use crate::{

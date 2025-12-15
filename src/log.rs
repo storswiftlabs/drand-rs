@@ -1,3 +1,6 @@
+// Copyright 2023-2025 StorSwift Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Abstraction for logging API to simplify changing dependencies.
 mod api {
     //! Note: Reuse existing logger instances from respective layers, see [`setup_logger`].

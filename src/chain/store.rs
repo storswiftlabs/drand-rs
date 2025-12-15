@@ -1,3 +1,6 @@
+// Copyright 2023-2025 StorSwift Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! This module implements an actor pattern for a *trimmed* chain store
 //! using [rusqlite] under the hood.
 use crate::{

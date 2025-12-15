@@ -1,3 +1,6 @@
+// Copyright 2023-2025 StorSwift Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 use super::{keys::DistPublic, Hash, Scheme};
 use crate::{key::node::Node, net::utils::Seconds};
 use energon::traits::Affine;

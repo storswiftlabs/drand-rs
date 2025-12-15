@@ -1,5 +1,6 @@
-//! Chain logic implementation.
-//! Price for some abstraction boundaries is traded for speed.
+// Copyright 2023-2025 StorSwift Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 use super::{
     cache,
     epoch::{EpochConfig, EpochNode},

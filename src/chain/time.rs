@@ -1,3 +1,6 @@
+// Copyright 2023-2025 StorSwift Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 use crate::net::utils::Seconds;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 

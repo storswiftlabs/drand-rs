@@ -1,3 +1,6 @@
+// Copyright 2023-2025 StorSwift Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 use crate::{
     chain::{ChainError, StoreError},
     core::{beacon::BeaconProcessError, multibeacon::BeaconHandlerError},

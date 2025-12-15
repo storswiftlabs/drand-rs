@@ -1,3 +1,6 @@
+// Copyright 2023-2025 StorSwift Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Client and server implementations for RPC [`DkgControl`] service.
 use super::{
     control::CONTROL_HOST,

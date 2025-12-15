@@ -1,3 +1,6 @@
+// Copyright 2023-2025 StorSwift Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 use super::{
     cache::PartialCache, epoch::EpochConfig, handler::ChainError, info::ChainInfo,
     store::BeaconRepr, sync::HandleReSync, time, SyncError,

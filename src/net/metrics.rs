@@ -1,3 +1,6 @@
+// Copyright 2023-2025 StorSwift Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! This module provides API to setup and report metrics.
 use crate::{core::beacon::BeaconID, net::utils::Address};
 use anyhow::bail;

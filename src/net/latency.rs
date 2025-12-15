@@ -1,3 +1,6 @@
+// Copyright 2023-2025 StorSwift Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! # Context
 //! Beacon aggregation is the most CPU-intensive operation for randomness generation.
 //!

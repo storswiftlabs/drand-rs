@@ -1,3 +1,6 @@
+// Copyright 2023-2025 StorSwift Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 use super::{
     actions_signing::{enc_participant, enc_timestamp, GossipAuth},
     status::{StateError, Status},
