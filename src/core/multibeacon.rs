@@ -1,165 +1,181 @@
-// Copyright (C) 2023-2024 StorSwift Inc.
-// This file is part of the Drand-RS library.
+// Copyright 2023-2025 StorSwift Inc.
+// SPDX-License-Identifier: Apache-2.0
 
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at:
-// http://www.apache.org/licenses/LICENSE-2.0
-
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-use super::beacon::BeaconCmd;
-use super::beacon::BeaconID;
-use super::dkg::DkgCmd;
-use crate::key::store::FileStore;
-use crate::key::store::MULTIBEACON_FOLDER;
-use crate::net::pool::PoolCmd;
-use crate::net::transport::SetupInfo;
-
-use anyhow::bail;
-use anyhow::Context;
-use anyhow::Result;
-
-use arc_swap::ArcSwap;
-use arc_swap::ArcSwapAny;
-use arc_swap::Guard;
-
-use std::fs;
-use std::path::PathBuf;
-use std::sync::Arc;
+use super::beacon::{BeaconCmd, BeaconID, BeaconProcess};
+use crate::{
+    cli::Config,
+    info,
+    key::{
+        store::{FileStore, FileStoreError},
+        Scheme,
+    },
+    log::Logger,
+    net::{pool::PoolSender, protocol::PartialMsg},
+};
+use arc_swap::{ArcSwap, ArcSwapAny, Guard};
+use energon::drand::schemes::{BN254UnchainedOnG1Scheme, DefaultScheme, SigsOnG1Scheme};
+use std::{path::PathBuf, sync::Arc};
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::Sender;
-use tokio::sync::oneshot;
 
-pub struct MultiBeacon(ArcSwapAny<Arc<Vec<BeaconHandler>>>);
-pub type Snapshot = Guard<Arc<Vec<BeaconHandler>>>;
+/// Atomic storage for beacon handlers.
+type Snapshot = Guard<Arc<Vec<BeaconHandler>>>;
 
-impl MultiBeacon {
-    pub fn new(
-        beacon_id: Option<&String>,
-        base_folder: &str,
-        private_listen: &str,
-        pool: mpsc::Sender<PoolCmd>,
-    ) -> Result<Self> {
-        // Load single id
-        if let Some(id) = beacon_id {
-            let h = BeaconHandler::new(id, base_folder, private_listen, pool.clone())?;
-            return Ok(Self(ArcSwap::from(Arc::new(vec![h]))));
-        };
-
-        // Attempt to load ids from multibeacon folder
-        let mut store = vec![];
-        let path = PathBuf::from(base_folder).join(MULTIBEACON_FOLDER);
-
-        match fs::read_dir(&path) {
-            Ok(entries) => {
-                for entry in entries {
-                    if let Some(filename) = entry?.file_name().to_str() {
-                        let h = BeaconHandler::new(
-                            filename,
-                            base_folder,
-                            private_listen,
-                            pool.clone(),
-                        )?;
-                        store.push(h)
-                    }
-                }
-            }
-            Err(e) => bail!("Failed to read {}: {e:?}", path.display()),
-        }
-
-        Ok(Self(ArcSwap::from(Arc::new(store))))
-    }
-
-    pub fn shapshot(&self) -> Snapshot {
-        self.0.load()
-    }
-
-    /// Replaces the value inside this instance
-    pub fn replace_store(&self, val: Arc<Vec<BeaconHandler>>) {
-        self.0.store(val)
-    }
-
-    pub async fn cmd(&self, cmd: BeaconCmd, id: &str) -> anyhow::Result<()> {
-        if let Some(beacon) = self.0.load().iter().find(|h| h.beacon_id.is_eq(id)) {
-            beacon
-                .tx
-                .send(cmd)
-                .await
-                // should not be possible
-                .with_context(|| format!("beacon [{id}] receiver dropped"))?;
-            return Ok(());
-        }
-        bail!("beacon [{id}] is not running")
-    }
-
-    pub async fn init_dkg(
-        &self,
-        callback: oneshot::Sender<Result<String>>,
-        setup_info: SetupInfo,
-        id: BeaconID,
-    ) -> Result<()> {
-        if let Some(beacon) = self.0.load().iter().find(|h| h.beacon_id == id) {
-            beacon
-                .tx
-                .send(BeaconCmd::Dkg(DkgCmd::Init(callback, setup_info, beacon.tx.clone())))
-                .await?
-        } else {
-            bail!("MultiBeacon::cmd: beacon [{id}] not found")
-        }
-
-        Ok(())
-    }
-
-    pub fn load_id(
-        &self,
-        beacon_id: &str,
-        base_folder: &str,
-        private_listen: &str,
-        pool: mpsc::Sender<PoolCmd>,
-    ) -> Result<()> {
-        if self.0.load().iter().any(|h| h.beacon_id.as_str() == beacon_id) {
-            bail!("MultiBeacon::load_id: beacon is already loaded: {beacon_id}")
-        }
-        let h = BeaconHandler::new(beacon_id, base_folder, private_listen, pool)?;
-        let mut new_store = self.0.load().iter().cloned().collect::<Vec<BeaconHandler>>();
-
-        new_store.push(h);
-        self.0.store(Arc::new(new_store));
-
-        Ok(())
-    }
+#[derive(thiserror::Error, Debug)]
+pub enum BeaconHandlerError {
+    #[error("beacon_id is not found")]
+    UnknownID,
+    #[error("beacon_id is already loaded")]
+    AlreadyLoaded,
+    #[error("packet metadata is missing")]
+    MetadataRequired,
+    #[error("receiver for beacon process has been closed unexpectedly")]
+    ClosedBpRx,
+    #[error("failed to receive stop_id response - callback is dropped")]
+    DroppedCallback,
+    #[error(transparent)]
+    ShutdownError(#[from] super::beacon::ShutdownError),
 }
 
+/// Handler for sending commands to the beacon node
 #[derive(Clone)]
 pub struct BeaconHandler {
-    beacon_id: BeaconID,
-    tx: Sender<BeaconCmd>,
+    pub beacon_id: BeaconID,
+    /// Sender for beacon commands
+    pub process_tx: mpsc::Sender<BeaconCmd>,
+    /// Sender for partial signature packets (hot path)
+    pub partial_tx: mpsc::Sender<PartialMsg>,
 }
 
 impl BeaconHandler {
     pub fn new(
-        beacon_id: &str,
-        base_folder: &str,
-        private_listen: &str,
-        pool: mpsc::Sender<PoolCmd>,
-    ) -> Result<Self> {
-        let (tx, rx) = mpsc::channel(100);
-        let fs = FileStore::set(base_folder, beacon_id);
-        let pair = fs.load_pair_raw()?;
-        let beacon_id = BeaconID::new(beacon_id);
-        crate::core::schemes::run_beacon(pair, beacon_id.clone(), fs, rx, private_listen, pool)?;
+        fs: FileStore,
+        pool: PoolSender,
+        private_listen: String,
+    ) -> Result<Self, FileStoreError> {
+        let pair = &fs.load_key_pair_toml()?;
+        let scheme = pair
+            .get_scheme_id()
+            .ok_or(FileStoreError::InvalidPairSchemes)?;
 
-        Ok(Self { beacon_id, tx })
+        let handler = match scheme {
+            DefaultScheme::ID => {
+                BeaconProcess::<DefaultScheme>::run(fs, pair, pool, private_listen)?
+            }
+            SigsOnG1Scheme::ID => {
+                BeaconProcess::<SigsOnG1Scheme>::run(fs, pair, pool, private_listen)?
+            }
+            BN254UnchainedOnG1Scheme::ID => {
+                BeaconProcess::<BN254UnchainedOnG1Scheme>::run(fs, pair, pool, private_listen)?
+            }
+            _ => return Err(FileStoreError::FailedInitID),
+        };
+
+        Ok(handler)
     }
+
     pub fn id(&self) -> &BeaconID {
         &self.beacon_id
     }
-    pub fn sender(&self) -> &Sender<BeaconCmd> {
-        &self.tx
+}
+
+pub struct MultiBeacon {
+    /// Atomic storage for beacon handlers.
+    beacons: ArcSwapAny<Arc<Vec<BeaconHandler>>>,
+    /// Sender for partial beacons pool.
+    tx_pool: PoolSender,
+}
+
+impl MultiBeacon {
+    /// This call is success only if *all* detected storages has minimal valid structure.
+    /// Succesfull value contains a turple with valid absolute path to multibeacon folder.
+    pub fn new(
+        config: Config,
+        tx_pool: PoolSender,
+        log: &Logger,
+    ) -> Result<(PathBuf, Self), FileStoreError> {
+        let (multibeacon_path, fstores) = FileStore::read_multibeacon_folder(&config.folder)?;
+        info!(
+            log,
+            "Detected stores: folder {}, amount {}",
+            multibeacon_path.display(),
+            fstores.len()
+        );
+        let beacons: Vec<BeaconHandler> = match &config.id {
+            // Load single id
+            Some(id) => {
+                let fs = fstores
+                    .into_iter()
+                    .find(|fs| fs.get_beacon_id() == Some(id))
+                    .ok_or(FileStoreError::BeaconNotFound)?;
+                vec![BeaconHandler::new(
+                    fs,
+                    tx_pool.clone(),
+                    config.private_listen,
+                )?]
+            }
+            // Load all ids
+            None => fstores
+                .into_iter()
+                .map(|fs| BeaconHandler::new(fs, tx_pool.clone(), config.private_listen.clone()))
+                .collect::<Result<_, _>>()?,
+        };
+        let multibeacon = Self {
+            beacons: ArcSwap::from(Arc::new(beacons)),
+            tx_pool,
+        };
+
+        Ok((multibeacon_path, multibeacon))
+    }
+
+    pub fn snapshot(&self) -> Snapshot {
+        self.beacons.load()
+    }
+
+    /// Replaces the value inside this instance
+    pub fn replace_store(&self, val: Arc<Vec<BeaconHandler>>) {
+        self.beacons.store(val);
+    }
+
+    /// Sends a command to the beacon identified by `id`.
+    /// Returns an error if the id is not presented in store or if sending the command fails.
+    pub async fn cmd(&self, cmd: BeaconCmd, id: &str) -> Result<(), BeaconHandlerError> {
+        let store = self.beacons.load();
+        let handler = store
+            .iter()
+            .find(|h| h.beacon_id.is_eq(id))
+            .ok_or(BeaconHandlerError::UnknownID)?;
+
+        handler
+            .process_tx
+            .send(cmd)
+            .await
+            .map_err(|_| BeaconHandlerError::ClosedBpRx)?;
+
+        Ok(())
+    }
+
+    pub async fn send_partial(&self, partial: PartialMsg) -> Result<(), BeaconHandlerError> {
+        let id = partial.0.packet.metadata.as_ref().map_or_else(
+            || Err(BeaconHandlerError::MetadataRequired),
+            |meta| Ok(meta.beacon_id.as_str()),
+        )?;
+
+        let store = self.beacons.load();
+        let handler = store
+            .iter()
+            .find(|h| h.beacon_id.is_eq(id))
+            .ok_or(BeaconHandlerError::UnknownID)?;
+
+        handler
+            .partial_tx
+            .send(partial)
+            .await
+            .map_err(|_| BeaconHandlerError::ClosedBpRx)?;
+
+        Ok(())
+    }
+
+    pub(super) fn get_pool(&self) -> PoolSender {
+        self.tx_pool.clone()
     }
 }

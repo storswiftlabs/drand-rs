@@ -1,104 +1,160 @@
-// Copyright (C) 2023-2024 StorSwift Inc.
-// This file is part of the Drand-RS library.
+// Copyright 2023-2025 StorSwift Inc.
+// SPDX-License-Identifier: Apache-2.0
 
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at:
-// http://www.apache.org/licenses/LICENSE-2.0
+use super::{
+    beacon::BeaconCmd,
+    multibeacon::{BeaconHandler, BeaconHandlerError, MultiBeacon},
+};
+use crate::{
+    cli::Config,
+    key::store::{FileStore, FileStoreError},
+    log::Logger,
+    net::{latency::AppResponseTimeReporter, pool::Pool, utils::Callback},
+    {error, info},
+};
+use std::{path::PathBuf, sync::Arc};
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-use super::beacon::BeaconCmd;
-use super::beacon::BeaconID;
-use super::dkg::DkgCmd;
-use super::multibeacon::BeaconHandler;
-use super::multibeacon::MultiBeacon;
-use crate::log::Logger;
-use crate::net::pool::Pool;
-use crate::net::pool::PoolCmd;
-use crate::net::pool::PoolPartial;
-use crate::net::transport::Bundle;
-use crate::net::transport::DkgInfo;
-use crate::net::transport::IdentityResponse;
-use crate::net::utils::INTERNAL_ERR;
-use crate::protobuf::drand::PartialBeaconPacket;
-
-use anyhow::bail;
-use anyhow::Result;
-use core::time::Duration;
-use std::sync::Arc;
-use tokio::sync::broadcast::Sender;
-use tokio::sync::mpsc;
-use tokio::sync::oneshot;
-use tonic::Status;
+#[derive(thiserror::Error, Debug)]
+pub enum DaemonError {
+    #[error(transparent)]
+    FileStore(#[from] FileStoreError),
+    #[error(transparent)]
+    BeaconHandler(#[from] BeaconHandlerError),
+}
 
 pub struct Daemon {
-    beacons: MultiBeacon,
-    logger: Logger,
-    pub stop_daemon: tokio::sync::broadcast::Sender<()>,
     private_listen: String,
-    pool: mpsc::Sender<PoolCmd>,
+    tracker: TaskTracker,
+    token: CancellationToken,
+    beacons: MultiBeacon,
+    multibeacon_path: PathBuf,
+    latency_tx: AppResponseTimeReporter,
+    log: Logger,
 }
 
 impl Daemon {
-    pub fn new(
-        private_listen: String,
-        base_folder: &str,
-        beacon_id: Option<&String>,
-        logger: Logger,
-    ) -> Result<Arc<Self>> {
-        let pool = Pool::start(false, logger.register_pool());
-        let beacons = MultiBeacon::new(beacon_id, base_folder, &private_listen, pool.clone())?;
-        let (stop_daemon, _) = tokio::sync::broadcast::channel::<()>(1);
-        let daemon = Self { beacons, stop_daemon, logger, private_listen, pool };
+    pub fn new(config: Config, log: Logger) -> Result<Arc<Self>, DaemonError> {
+        let tracker: TaskTracker = TaskTracker::new();
+        let token: CancellationToken = CancellationToken::new();
+        let private_listen = config.private_listen.clone();
 
-        Ok(Arc::new(daemon))
-    }
+        info!(
+            &log,
+            "Drand daemon initializing: private_listen: {}, control_port: {}, folder: {}",
+            config.private_listen,
+            config.control,
+            config.folder,
+        );
+        let latency_tx =
+            AppResponseTimeReporter::initialize(config.monitored_ids.clone(), log.clone());
 
-    /// Returns true if no loaded beacons left
-    pub async fn stop_id(&self, id: &BeaconID) -> Result<bool> {
-        let snapshot = self.beacons().shapshot();
-
-        // Stop daemon if ONLY target id is running now
-        if snapshot.len() == 1 && snapshot[0].id() == id {
-            self.stop_daemon().await?;
-            Ok(true)
-        }
-        // otherwise stop id and update MultiBeacon state
-        else if let Some(handler) = snapshot.iter().find(|h| h.id() == id) {
-            let (tx, rx) = oneshot::channel();
-            handler.sender().send(BeaconCmd::Shutdown(tx)).await?;
-            rx.await??;
-
-            let new_store = snapshot
-                .iter()
-                .filter(|x| x.id() != handler.id())
-                .cloned()
-                .collect::<Vec<BeaconHandler>>();
-
-            self.beacons().replace_store(Arc::new(new_store));
-            return Ok(false);
-        } else {
-            bail!("beacon [{id}] is not loaded")
-        }
-    }
-
-    /// Stops all beacons and shutdown daemon
-    pub async fn stop_daemon(&self) -> Result<(), anyhow::Error> {
-        for handler in self.beacons().shapshot().iter() {
-            let (tx, rx) = oneshot::channel();
-            handler.sender().send(BeaconCmd::Shutdown(tx)).await?;
-            rx.await??;
-        }
-        let shutdown = Sender::clone(&self.stop_daemon);
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            let _ = shutdown.send(());
+        // Sender for connection pool for partial beacon packets is shared across beacon ids.
+        let pool_tx = Pool::start(log.clone());
+        let (multibeacon_path, beacons) = MultiBeacon::new(config, pool_tx, &log)?;
+        let daemon = Arc::new(Self {
+            private_listen,
+            tracker,
+            token,
+            beacons,
+            multibeacon_path,
+            latency_tx,
+            log,
         });
+
+        Ok(daemon)
+    }
+
+    pub fn is_last_id_to_shutdown(&self, id: &str) -> bool {
+        let snapshot = self.beacons().snapshot();
+        snapshot.len() == 1 && snapshot[0].id().is_eq(id)
+    }
+
+    pub async fn stop_id(&self, id: &str) -> Result<(), BeaconHandlerError> {
+        let snapshot = self.beacons().snapshot();
+        let handler = snapshot
+            .iter()
+            .find(|h| h.id().is_eq(id))
+            .ok_or(BeaconHandlerError::UnknownID)?;
+
+        info!(&self.log, "processing stop_id request for {id} ...");
+        let new_store = snapshot
+            .iter()
+            .filter(|x| x.id() != handler.id())
+            .cloned()
+            .collect::<Vec<BeaconHandler>>();
+        self.beacons().replace_store(Arc::new(new_store));
+
+        let (tx, rx) = Callback::new();
+        handler
+            .process_tx
+            .send(BeaconCmd::Shutdown(tx))
+            .await
+            .map_err(|_| BeaconHandlerError::ClosedBpRx)?;
+
+        rx.await
+            .map_err(|_| BeaconHandlerError::DroppedCallback)?
+            .map_err(BeaconHandlerError::ShutdownError)?;
+
+        Ok(())
+    }
+
+    pub async fn stop_daemon(&self) -> Result<(), BeaconHandlerError> {
+        info!(&self.log, "processing stop request for daemon ...");
+        let snapshot = self.beacons().snapshot();
+        self.beacons().replace_store(Arc::new(vec![]));
+
+        for h in snapshot.iter() {
+            let (tx, rx) = Callback::new();
+            h.process_tx
+                .send(BeaconCmd::Shutdown(tx))
+                .await
+                .map_err(|_| BeaconHandlerError::ClosedBpRx)?;
+
+            rx.await
+                .map_err(|_| BeaconHandlerError::DroppedCallback)?
+                .map_err(BeaconHandlerError::ShutdownError)?;
+        }
+        self.tracker.close();
+        self.token.cancel();
+
+        Ok(())
+    }
+
+    pub fn load_id(&self, id: &str) -> Result<(), BeaconHandlerError> {
+        let store = self.beacons.snapshot();
+        // Return error if given id is already loaded
+        if store.iter().any(|h| h.beacon_id.is_eq(id)) {
+            return Err(BeaconHandlerError::AlreadyLoaded);
+        }
+        let store = FileStore {
+            beacon_path: self.multibeacon_path.join(id),
+        };
+        if let Err(err) = store.validate() {
+            error!(&self.log, "failed to validate store: {err}, beacon_id {id}");
+            return Err(BeaconHandlerError::UnknownID);
+        };
+
+        let new_handler =
+            BeaconHandler::new(store, self.beacons.get_pool(), self.private_listen.clone())
+                .map_err(|err| {
+                    error!(
+                        &self.log,
+                        "failed to initialize beacon handler: {err}, beacon_id {id}"
+                    );
+                    BeaconHandlerError::UnknownID
+                })?;
+
+        // Update multibeacon storage with new handler
+        let mut handlers = self
+            .beacons()
+            .snapshot()
+            .iter()
+            .cloned()
+            .collect::<Vec<BeaconHandler>>();
+        handlers.push(new_handler);
+        self.beacons().replace_store(Arc::new(handlers));
+
         Ok(())
     }
 
@@ -106,71 +162,19 @@ impl Daemon {
         &self.beacons
     }
 
-    pub fn span(&self) -> &tracing::Span {
-        &self.logger.span
-    }
-    pub fn private_listen(&self) -> &str {
-        &self.private_listen
+    pub fn tracker(&self) -> TaskTracker {
+        self.tracker.clone()
     }
 
-    pub async fn identity_request(&self, id: &str) -> Result<IdentityResponse, Status> {
-        let (tx, callback) = oneshot::channel();
-
-        self.beacons()
-            .cmd(BeaconCmd::IdentityRequest(tx), id)
-            .await
-            .map_err(|e| Status::invalid_argument(e.to_string()))?;
-
-        callback.await.map_or_else(|_| Err(Status::internal(INTERNAL_ERR)), Ok)
+    pub fn cancellation_token(&self) -> CancellationToken {
+        self.token.clone()
     }
 
-    pub async fn broadcast_dkg_bundle(&self, bundle: Bundle, id: &str) -> Result<(), Status> {
-        let (tx, callback) = oneshot::channel();
-        // TODO: move tx from DkgCmd into BeaconCmd: otherwise it might return INTERNAL_ERR but actually nothing is brocken and logs should be less dramatic
-        self.beacons()
-            .cmd(BeaconCmd::Dkg(DkgCmd::Broadcast(tx, bundle)), id)
-            .await
-            .map_err(|e| Status::from_error(e.into()))?;
-
-        resolve(callback).await
+    pub fn log(&self) -> &Logger {
+        &self.log
     }
 
-    pub async fn push_new_group(&self, info: DkgInfo, id: &str) -> Result<(), Status> {
-        let (tx, callback) = oneshot::channel();
-
-        self.beacons()
-            .cmd(BeaconCmd::Dkg(DkgCmd::NewGroup(tx, info)), id)
-            .await
-            .map_err(|e| Status::from_error(e.into()))?;
-
-        resolve(callback).await
+    pub fn latency_tx(&self) -> &AppResponseTimeReporter {
+        &self.latency_tx
     }
-
-    pub async fn new_partial(&self, packet: PartialBeaconPacket, id: &str) -> Result<(), Status> {
-        let (sender, callback) = oneshot::channel();
-        self.beacons()
-            .cmd(BeaconCmd::Partial(packet, sender), id)
-            .await
-            .map_err(|e| Status::from_error(e.into()))?;
-
-        resolve(callback).await
-    }
-
-    pub async fn pool_status(&self) -> Result<String, Status> {
-        let (sender, callback) = oneshot::channel();
-        self.pool.send(PoolCmd::Status(sender)).await.map_err(|e| Status::from_error(e.into()))?;
-
-        callback.await.map_or_else(|_| Err(Status::internal(INTERNAL_ERR)), Ok)
-    }
-}
-
-async fn resolve(callback: oneshot::Receiver<Result<()>>) -> Result<(), Status> {
-    // TODO: all of [`Status::from_error`] should be limited within enum errorr
-    //       At border [transport -> protobuf] anyhow should not be used
-    callback
-        .await
-        // callback is dropped
-        .map_err(|_| Status::internal(INTERNAL_ERR))?
-        // received error from callback
-        .map_err(|e| Status::from_error(e.into()))
 }

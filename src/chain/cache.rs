@@ -1,0 +1,356 @@
+// Copyright 2023-2025 StorSwift Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+use super::epoch::EpochConfig;
+use crate::{
+    key::Scheme,
+    log::Logger,
+    net::utils::Address,
+    protobuf::drand::PartialBeaconPacket,
+    {debug, error, warn},
+};
+use energon::kyber::tbls::SigShare;
+use std::collections::VecDeque;
+
+/// Partials that are up to this number of rounds
+/// beyond the last beacon we have - useful for quick catchup.
+pub const CACHE_LIMIT_ROUNDS: u64 = 3;
+
+/// Logical errors for partial cache.
+#[derive(thiserror::Error, Debug)]
+pub enum CacheError {
+    #[error("new stored round {latest_stored} is less than height {height}")]
+    Height { latest_stored: u64, height: u64 },
+    #[error("invalid structure: allowed rounds {allowed:?}, height {height}")]
+    Structure { allowed: Vec<u64>, height: u64 },
+    #[error("invalid delta: {0}")]
+    Delta(u64),
+}
+
+/// Contains unchecked packets received from nodes for allowed round.
+#[derive(Debug)]
+struct PartialsUnchecked {
+    round: u64,
+    packets: Vec<PartialBeaconPacket>,
+}
+
+/// Partial cache holds 2 types of shares:
+///  - [`PartialBeaconPacket`] unchecked BLS signature.
+///  - [`SigShare`] checked BLS signature.
+///
+/// Partial cache structure:
+///                  n           n + 1       n + 2 .. n + 2 + `CACHE_LIMIT_ROUNDS`
+///     Round: `latest_stored`|  current   |  `CACHE_LIMIT_ROUNDS`
+///     Type:        -        | `SigShare` |  `PartialBeaconPacket`
+pub struct PartialCache<S: Scheme> {
+    thr: usize,
+    height: u64,
+    valid_sigs: Vec<SigShare<S>>,
+    rounds_cache: VecDeque<PartialsUnchecked>,
+}
+
+impl<S: Scheme> PartialCache<S> {
+    pub fn new(latest_stored: u64, thr: usize) -> Self {
+        let unchecked = (latest_stored + 2..latest_stored + 2 + CACHE_LIMIT_ROUNDS)
+            .map(|i| PartialsUnchecked {
+                round: i,
+                packets: Vec::with_capacity(thr),
+            })
+            .collect();
+
+        Self {
+            valid_sigs: Vec::with_capacity(thr),
+            height: latest_stored,
+            thr,
+            rounds_cache: unchecked,
+        }
+    }
+
+    /// Adds a packet to the corresponding round cache if the packet's
+    /// round is allowed and the packet's signature is not duplicated.
+    ///
+    /// Corner case: cache _may_ contain more than one packet with the same
+    /// share index for a given round. This is possible if leaved node is not
+    /// in proper state and old index collided with new index of some valid node.
+    /// Such invalid packets will be discarded at BLS signature check.
+    pub fn add_packet(&mut self, packet: PartialBeaconPacket) -> Option<bool> {
+        if let Some(r_cache) = self
+            .rounds_cache
+            .iter_mut()
+            // Search within `CACHE_LIMIT_ROUNDS`.
+            .find(|r_cache| r_cache.round == packet.round)
+        {
+            // Round is allowed, packet signature is duplicated.
+            if r_cache
+                .packets
+                .iter()
+                .any(|i| i.partial_sig == packet.partial_sig)
+            {
+                Some(false)
+            } else {
+                // Round allowed, packet is stored.
+                r_cache.packets.push(packet);
+
+                Some(true)
+            }
+        } else {
+            // Round not allowed, packet is ignored.
+            None
+        }
+    }
+
+    /// Returns `true` if sigshare with given index is already stored in cache.
+    pub fn is_share_present(&self, index: u32) -> bool {
+        self.valid_sigs.iter().any(|s| s.index() == index)
+    }
+
+    /// Adds sigshare to partial cache. Returns slice of sigshares *sorted by index*
+    /// if their count reaches the threshold.
+    ///
+    /// WARNING: bls signature validity and round value must be prechecked on caller side.
+    pub fn add_prechecked(
+        &mut self,
+        valid_sig: SigShare<S>,
+        peer: &Address,
+        log: &Logger,
+    ) -> Option<&[SigShare<S>]> {
+        self.valid_sigs.push(valid_sig);
+        debug!(
+            log,
+            "store_partial: {peer}, round {}, len_partials {}/{}",
+            self.height + 1,
+            self.thr,
+            self.valid_sigs.len()
+        );
+
+        if self.valid_sigs.len() < self.thr {
+            return None;
+        }
+        self.valid_sigs.sort_by_key(SigShare::index);
+        Some(self.valid_sigs.as_slice())
+    }
+
+    /// Updates cache state if argument is greater than cache height.
+    /// Returns packets to verify for `latest_stored +1` round if such packets exist.
+    fn update(&mut self, latest_stored: u64) -> Result<Option<PartialsUnchecked>, CacheError> {
+        #[allow(clippy::comparison_chain, reason = "exhaustive")]
+        if latest_stored == self.height {
+            return Ok(None);
+        } else if latest_stored < self.height {
+            return Err(CacheError::Height {
+                latest_stored,
+                height: self.height,
+            });
+        }
+
+        let delta = latest_stored - self.height;
+        if let 1..=CACHE_LIMIT_ROUNDS = delta {
+            self.valid_sigs.clear();
+            self.height = latest_stored;
+
+            for _ in 0..delta {
+                match self.rounds_cache.pop_front() {
+                    Some(packets) => {
+                        // Add corresponding entry for new allowed round.
+                        self.rounds_cache.push_back(PartialsUnchecked {
+                            round: packets.round + CACHE_LIMIT_ROUNDS,
+                            packets: Vec::with_capacity(self.thr),
+                        });
+                        // Stop at wanted round to aggregate.
+                        if packets.round == self.height + 1 {
+                            if packets.packets.is_empty() {
+                                return Ok(None);
+                            }
+                            return Ok(Some(packets));
+                        }
+                    }
+                    None => {
+                        return Err(CacheError::Structure {
+                            allowed: self.rounds_cache.iter().map(|entry| entry.round).collect(),
+                            height: self.height,
+                        });
+                    }
+                }
+            }
+            Err(CacheError::Delta(delta))
+        } else {
+            // Cache is outdated after resync.
+            *self = Self::new(latest_stored, self.thr);
+            Ok(None)
+        }
+    }
+
+    /// Aligns cache for new `latest_stored` round, verifying unchecked packets for next round.
+    pub fn align(
+        &mut self,
+        ec: &EpochConfig<S>,
+        latest_stored: u64,
+        log: &Logger,
+    ) -> Result<(), CacheError> {
+        if let Some(next_round_packets) = self.update(latest_stored)? {
+            for packet in next_round_packets.packets {
+                let Some(idx) = get_partial_index::<S>(&packet.partial_sig) else {
+                    warn!(
+                        log,
+                        "update_cache: ignoring packet with invalid data for round {}",
+                        packet.round
+                    );
+                    continue;
+                };
+
+                if !self.valid_sigs.iter().any(|s| s.index() == idx) {
+                    match ec.verify_partial(&packet) {
+                        Ok((valid_sigshare, node_addr)) => {
+                            self.valid_sigs.push(valid_sigshare);
+                            debug!(log, "update_cache: added valid share from {node_addr}, round {}, latest_stored {}", packet.round, latest_stored);
+                        }
+                        Err(err) => {
+                            error!(
+                                log,
+                                "update_cache: latest_stored {}, packet_round {} :{err}",
+                                self.height,
+                                packet.round
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Returns the height of cache.
+    pub fn height(&self) -> u64 {
+        self.height
+    }
+}
+
+pub fn get_partial_index<S: Scheme>(partial: &[u8]) -> Option<u32> {
+    let expected = <S::Sig as energon::traits::Group>::POINT_SIZE + 2;
+    let received = partial.len();
+    if received != expected {
+        return None;
+    }
+    // XXX: consider u8 instead of u32.
+    Some(u32::from_be_bytes([0, 0, partial[0], partial[1]]))
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use energon::drand::schemes::DefaultScheme;
+
+    /// Returns list of allowed rounds.
+    fn allowed_rounds(entries: &VecDeque<PartialsUnchecked>) -> Vec<u64> {
+        entries.iter().map(|entry| entry.round).collect()
+    }
+
+    /// Inserts all packets to cache.
+    fn insert_all<S: Scheme>(cache: &mut PartialCache<S>, packets: Vec<PartialBeaconPacket>) {
+        for p in packets {
+            cache.add_packet(p);
+        }
+    }
+
+    /// Panics if 3 expected packets are not present in cache.
+    fn all_present<S: Scheme>(cache: &PartialCache<S>, expected: [&PartialBeaconPacket; 3]) {
+        assert!(cache.rounds_cache.len() == usize::try_from(CACHE_LIMIT_ROUNDS).unwrap());
+
+        for beacon in expected {
+            let found = cache.rounds_cache.iter().any(|r_cache| {
+                assert!(r_cache.packets.len() == 1);
+                // Packets are checked against round and partial signature.
+                r_cache.round == beacon.round && r_cache.packets.iter().any(|p| p == beacon)
+            });
+            assert!(
+                found,
+                "expected beacon with round {:?} not found in cache.",
+                beacon.round
+            );
+        }
+    }
+
+    fn continuous_cache_update<S: Scheme>(
+        p_cache: &mut PartialCache<S>,
+        packets: &[PartialBeaconPacket],
+        rounds: std::ops::RangeInclusive<u64>,
+    ) {
+        for latest_stored in rounds {
+            assert_eq!(
+                p_cache.update(latest_stored).unwrap().unwrap().packets[0],
+                packets[usize::try_from(latest_stored).unwrap() + 1]
+            );
+
+            assert_eq!(
+                allowed_rounds(&p_cache.rounds_cache),
+                vec![latest_stored + 2, latest_stored + 3, latest_stored + 4]
+            );
+
+            for p in packets {
+                p_cache.add_packet(p.clone());
+            }
+            let latest = usize::try_from(latest_stored).unwrap();
+
+            let expected = [
+                &packets[latest + 2],
+                &packets[latest + 3],
+                &packets[latest + 4],
+            ];
+            all_present(p_cache, expected);
+        }
+    }
+
+    #[test]
+    fn cache_no_gaps() {
+        let packets_total = 15u8;
+        let p: Vec<PartialBeaconPacket> = (0..=packets_total)
+            .map(|i| PartialBeaconPacket {
+                round: u64::from(i),
+                partial_sig: vec![i, i],
+                previous_signature: vec![],
+                metadata: None,
+            })
+            .collect();
+
+        let thr = 2;
+        let latest_stored = 0;
+        let mut p_cache = PartialCache::<DefaultScheme>::new(latest_stored, thr);
+        insert_all(&mut p_cache, p.clone());
+
+        continuous_cache_update::<DefaultScheme>(
+            &mut p_cache,
+            &p,
+            1..=(u64::from(packets_total) - 4),
+        );
+    }
+
+    #[test]
+    fn cache_with_gaps() {
+        let thr = 7;
+        let mut new_stored = 0;
+        let mut p_cache = PartialCache::<DefaultScheme>::new(new_stored, thr);
+        assert_eq!(allowed_rounds(&p_cache.rounds_cache), vec![2, 3, 4]);
+
+        new_stored = 1;
+        p_cache.update(new_stored).unwrap();
+        assert_eq!(p_cache.height, new_stored);
+        assert_eq!(allowed_rounds(&p_cache.rounds_cache), vec![3, 4, 5]);
+
+        new_stored = 2;
+        p_cache.update(new_stored).unwrap();
+        assert_eq!(p_cache.height, new_stored);
+        assert_eq!(allowed_rounds(&p_cache.rounds_cache), vec![4, 5, 6]);
+
+        // Gaps are expected at syncing:
+        // - new joiner may need to sync up to latest chain height.
+        // - sync always started once node is 2 rounds behing the expected height.
+        new_stored = 513;
+        p_cache.update(new_stored).unwrap();
+        assert_eq!(allowed_rounds(&p_cache.rounds_cache), vec![515, 516, 517]);
+
+        new_stored = 520;
+        p_cache.update(new_stored).unwrap();
+        assert_eq!(allowed_rounds(&p_cache.rounds_cache), vec![522, 523, 524]);
+    }
+}

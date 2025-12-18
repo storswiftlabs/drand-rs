@@ -1,120 +1,233 @@
-// Copyright (C) 2023-2024 StorSwift Inc.
-// This file is part of the Drand-RS library.
+// Copyright 2023-2025 StorSwift Inc.
+// SPDX-License-Identifier: Apache-2.0
 
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at:
-// http://www.apache.org/licenses/LICENSE-2.0
+//! Client and server implementations for RPC [`Protocol`] service.
+use super::{
+    dkg_public::DkgPublicHandler,
+    public::PublicHandler,
+    utils::{Address, Callback, NewTcpListener, ToStatus, ERR_METADATA_IS_MISSING},
+};
+use crate::{
+    chain::ChainError,
+    core::{beacon::BeaconCmd, daemon::Daemon},
+    debug,
+    protobuf::{
+        dkg::dkg_public_server::DkgPublicServer,
+        drand::{
+            protocol_client::ProtocolClient as ProtocolClientInner,
+            protocol_server::{Protocol, ProtocolServer},
+            public_server::PublicServer,
+            BeaconPacket, Empty, IdentityRequest, IdentityResponse, Metadata, PartialBeaconPacket,
+            SyncRequest,
+        },
+    },
+    transport::utils::ConvertProto,
+};
+use anyhow::anyhow;
+use std::{ops::Deref, pin::Pin, sync::Arc};
+use tokio_stream::{
+    wrappers::{ReceiverStream, TcpListenerStream},
+    Stream,
+};
+use tonic::{
+    transport::{Channel, Server},
+    Request, Response, Status, Streaming,
+};
 
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/// Alias for partial beacon packet with callback.
+pub type PartialMsg = (PartialPacket, Callback<bool, ChainError>);
 
-use crate::core::daemon::Daemon;
-use crate::net::transport::DkgInfo;
-use crate::protobuf::drand::IdentityResponse;
-//use crate::net::transport::IdentityResponse;
-use crate::net::transport;
-use crate::net::transport::ProtoConvert;
-
-use crate::net::utils::get_ref_id;
-use crate::protobuf::common::Empty;
-use crate::protobuf::drand::protocol_server::Protocol;
-use crate::protobuf::drand::DkgInfoPacket;
-use crate::protobuf::drand::DkgPacket;
-use crate::protobuf::drand::IdentityRequest;
-use crate::protobuf::drand::PartialBeaconPacket;
-use crate::protobuf::drand::SignalDkgPacket;
-
-use anyhow::Result;
-use std::sync::Arc;
-use tonic::Request;
-use tonic::Response;
-use tonic::Status;
-use tracing::trace;
-
-use super::transport::Bundle;
-
-#[derive(Clone)]
+/// Implementor for [`Protocol`] trait for use with [`ProtocolServer`].
 pub struct ProtocolHandler(Arc<Daemon>);
 
-impl ProtocolHandler {
-    pub fn new(daemon: Arc<Daemon>) -> Self {
-        Self(daemon)
-    }
-}
-
-impl std::ops::Deref for ProtocolHandler {
-    type Target = Daemon;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
+/// Contains partial beacon packet and sender IP.
+pub struct PartialPacket {
+    pub packet: PartialBeaconPacket,
+    // X-REAL-IP from request metadata.
+    pub from: String,
 }
 
 #[tonic::async_trait]
 impl Protocol for ProtocolHandler {
-    async fn partial_beacon(
-        &self,
-        req: Request<PartialBeaconPacket>,
-    ) -> std::result::Result<Response<Empty>, Status> {
-        let mut packet = req.into_inner();
-        let metadata = packet.metadata.take();
+    /// Server streaming response type for the `sync_chain` method.
+    type SyncChainStream = Pin<Box<dyn Stream<Item = Result<BeaconPacket, Status>> + Send>>;
 
-        let id = get_ref_id(metadata.as_ref());
-        self.new_partial(packet, id).await?;
-
-        Ok(Response::new(Empty::default()))
-    }
-
-    async fn push_dkg_info(
-        &self,
-        req: Request<DkgInfoPacket>,
-    ) -> std::result::Result<Response<Empty>, Status> {
-        let mut packet = req.into_inner();
-        let metadata = packet.metadata.take();
-
-        let dkg_info = DkgInfo::from_proto(packet)?;
-        let id = get_ref_id(metadata.as_ref());
-        self.push_new_group(dkg_info, id).await?;
-
-        Ok(Response::new(Empty::default()))
-    }
-
-    async fn broadcast_dkg(
-        &self,
-        req: Request<DkgPacket>,
-    ) -> std::result::Result<Response<Empty>, Status> {
-        let mut packet = req.into_inner();
-        let metadata = packet.metadata.take();
-
-        let now = tokio::time::Instant::now();
-        let bundle = Bundle::from_proto(packet)?;
-        let new_now = tokio::time::Instant::now();
-
-        trace!(parent: self.span(), "$$$ {} Bundle::from_proto {:?}",bundle, new_now.checked_duration_since(now).unwrap());
-        let id = get_ref_id(metadata.as_ref());
-        self.broadcast_dkg_bundle(bundle, id).await?;
-
-        Ok(Response::new(Empty::default()))
-    }
-
-    async fn signal_dkg_participant(
-        &self,
-        _request: Request<SignalDkgPacket>,
-    ) -> Result<Response<Empty>, Status> {
-        Err(Status::failed_precondition("Leader logic is not implemented yet"))
-    }
-
+    /// Returns the identity of beacon id.
     async fn get_identity(
         &self,
-        req: Request<IdentityRequest>,
+        request: Request<IdentityRequest>,
     ) -> Result<Response<IdentityResponse>, Status> {
-        let id = get_ref_id(req.get_ref().metadata.as_ref());
-        let responce: transport::IdentityResponse = self.identity_request(id).await?;
+        let id = request.get_ref().metadata.as_ref().map_or_else(
+            || Err(Status::data_loss(ERR_METADATA_IS_MISSING)),
+            |meta| Ok(meta.beacon_id.as_str()),
+        )?;
 
-        Ok(Response::new(responce.to_proto()))
+        let (tx, rx) = Callback::new();
+        self.beacons()
+            .cmd(BeaconCmd::IdentityRequest(tx), id)
+            .await
+            .map_err(|err| err.to_status(id))?;
+
+        let mut identity = rx
+            .await
+            .map_err(|recv_err| recv_err.to_status(id))?
+            .map_err(|cmd_err| cmd_err.to_status(id))?;
+        identity.metadata = Some(Metadata::with_id(id.to_string()));
+
+        Ok(Response::new(identity))
+    }
+
+    async fn partial_beacon(
+        &self,
+        request: Request<PartialBeaconPacket>,
+    ) -> Result<Response<Empty>, Status> {
+        let from = request
+            .metadata()
+            .get("x-real-ip")
+            .map_or_else(|| "", |v| v.to_str().unwrap_or_default())
+            .to_string();
+        let packet = request.into_inner();
+        let round = packet.round;
+        let id = packet.metadata.as_ref().map_or_else(
+            || Err(Status::data_loss(ERR_METADATA_IS_MISSING)),
+            |meta| Ok(meta.beacon_id.as_str()),
+        )?;
+        debug!(
+            self.log(),
+            "received partial: id {id}, round {round}, from {from}"
+        );
+        let request_latency_metadata: Option<_> = self.latency_tx().check_id(id);
+        let (tx, rx) = Callback::new();
+
+        self.beacons()
+            .send_partial((PartialPacket { packet, from }, tx))
+            .await
+            .map_err(|err| Status::unknown(err.to_string()))?;
+        let is_aggregated = rx
+            .await
+            .map_err(|err| Status::unknown(err.to_string()))?
+            .map_err(|err| Status::unknown(err.to_string()))?;
+
+        if is_aggregated {
+            if let Some(tracked_id) = request_latency_metadata {
+                let delay = tracked_id.elapsed_ms();
+                self.latency_tx().send(tracked_id, delay, round).await;
+            }
+        }
+
+        Ok(Response::new(Empty { metadata: None }))
+    }
+
+    async fn sync_chain(
+        &self,
+        request: Request<SyncRequest>,
+    ) -> Result<Response<Self::SyncChainStream>, Status> {
+        let request = request.into_inner();
+
+        let id = request.metadata.as_ref().map_or_else(
+            || Err(Status::data_loss(ERR_METADATA_IS_MISSING)),
+            |meta| Ok(meta.beacon_id.as_str()),
+        )?;
+        let (tx, rx) = Callback::new();
+
+        self.beacons()
+            .cmd(BeaconCmd::Sync(request.from_round, tx), id)
+            .await
+            .map_err(|err| Status::unknown(err.to_string()))?;
+        let stream_rx = rx
+            .await
+            .map_err(|err| Status::unknown(err.to_string()))?
+            .map_err(|err| Status::unknown(err.to_string()))?;
+
+        Ok(Response::new(Box::pin(ReceiverStream::new(stream_rx))))
+    }
+}
+
+pub async fn start_node<N: NewTcpListener>(
+    daemon: Arc<Daemon>,
+    node_listener: N::Config,
+) -> anyhow::Result<()> {
+    let listener = N::bind(node_listener)
+        .await
+        .map_err(|err| anyhow!("failed to start node: {err}"))?;
+    let token = daemon.cancellation_token();
+
+    let (_health_reporter, health_service) = tonic_health::server::health_reporter();
+    Server::builder()
+        .add_service(ProtocolServer::new(ProtocolHandler(daemon.clone())))
+        .add_service(PublicServer::new(PublicHandler::new(daemon.clone())))
+        .add_service(DkgPublicServer::new(DkgPublicHandler::new(daemon)))
+        .add_service(health_service)
+        .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async move {
+            let () = token.cancelled().await;
+        })
+        .await?;
+
+    Ok(())
+}
+
+#[derive(Clone)]
+pub struct ProtocolClient {
+    client: ProtocolClientInner<Channel>,
+}
+
+impl ProtocolClient {
+    pub async fn new(address: &Address) -> anyhow::Result<Self> {
+        let channel = super::utils::connect(address).await?;
+        let client = ProtocolClientInner::new(channel);
+
+        Ok(Self { client })
+    }
+
+    /// Does not attempt to connect to the endpoint until first use.
+    /// Should be used only in pool for partial packets.
+    pub fn new_lazy(address: &Address) -> anyhow::Result<Self> {
+        let channel = super::utils::connect_lazy(address)?;
+        let client = ProtocolClientInner::new(channel);
+
+        Ok(Self { client })
+    }
+
+    pub async fn get_identity(
+        &mut self,
+        beacon_id: String,
+    ) -> anyhow::Result<crate::transport::drand::IdentityResponse> {
+        let request = IdentityRequest {
+            metadata: Some(Metadata::golang_node_version(beacon_id, None)),
+        };
+        let response = self.client.get_identity(request).await?;
+        let inner = response.into_inner().validate()?;
+
+        Ok(inner)
+    }
+
+    pub async fn sync_chain(
+        &mut self,
+        from_round: u64,
+        beacon_id: String,
+    ) -> anyhow::Result<Streaming<BeaconPacket>> {
+        let request = SyncRequest {
+            from_round,
+            metadata: Some(Metadata::with_id(beacon_id)),
+        };
+        let stream = self.client.sync_chain(request).await?.into_inner();
+
+        Ok(stream)
+    }
+
+    pub async fn partial_beacon(&mut self, packet: PartialBeaconPacket) -> anyhow::Result<()> {
+        if let Err(err) = self.client.partial_beacon(packet).await {
+            anyhow::bail!("{}", err.message());
+        };
+
+        Ok(())
+    }
+}
+
+impl Deref for ProtocolHandler {
+    type Target = Daemon;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }

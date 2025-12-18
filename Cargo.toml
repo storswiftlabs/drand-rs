@@ -1,45 +1,65 @@
 [package]
 authors = ["version513 at StorSwift Labs"]
 name = "drand"
-version = "0.0.1"
+version = "0.2.0"
 edition = "2021"
 
 [dependencies]
-time = "0.3.30"
-tokio-stream = { version = "0.1", features = ["net"] }
-chrono = "0.4.26"
-tracing = { version = "0.1.37" }
-tracing-subscriber = { version = "0.3.17", default-features = true, features = [
-    "fmt",
-    "time",
-    "env-filter",
-] }
-http = "0.2.9"
-tonic = { version = "0.10.0", features = ["tls-roots"] }
-aes-gcm = "0.10.1"
-hkdf = "0.12.3"
-prost = "0.12.0"
-home = "0.5.5"
-anyhow = "1.0.71"
-tokio = { version = "1.27.0", features = ["macros", "rt-multi-thread"] }
-energon = { git = "https://github.com/version513/energon.git", rev = "97f4013", default-features = false }
+energon = { git = "https://github.com/version513/energon.git", rev = "670db05" }
+thiserror = "2.0.11"
 clap = { version = "4", features = ["derive", "string"] }
+tokio = { version = "1.44.2", features = ["macros", "rt-multi-thread"] }
+tokio-stream = { version = "0.1", features = ["net"] }
+prost-types = { version = "0.13.4", features = ["std"] }
+prost = "0.13.4"
+tonic = { version = "0.12.0", features = ["tls-roots"] }
+tonic-health = "0.12.3"
+slog = { version = "2.8.2", features = ["max_level_debug"] }
+slog-term = { version = "2.9.2" }
 crev-common = "0.25.0"
-toml = { version = "0.8.0", features = ["preserve_order"] }
 sha2 = "0.10.7"
-hex = "0.4.2"
+http = "1.2.0"
+toml_edit = "0.22.22"
+hex = "0.4.3"
+home = "0.5.11"
+anyhow = "1.0.95"
+tokio-util = { version = "0.7.13", features = ["rt"] }
 arc-swap = "1.7.1"
-indexmap = "2.5.0"
-
+rusqlite = "0.37.0"
+rand = "0.9.1"
+metrics-exporter-prometheus = { version = "0.17.2", default-features = false, features = [
+    "http-listener",
+] }
+metrics = "0.24.2"
+metrics-util = "0.20.0"
+tabled = "0.20.0"
+hdrhistogram = "7.5.4"
 
 [build-dependencies]
-tonic-build = "0.10.0"
+tonic-build = "0.12.3"
+
+[dev-dependencies]
+tempfile = "3.16.0"
+async-std = { version = "1.7.0", features = ["unstable"] }
 
 [profile.release]
 lto = true
 strip = true
+panic = "abort"
 codegen-units = 1
 
 [features]
-blstrs = ["energon/bls12381_blstrs"]
-arkworks = ["energon/bls12381_arkworks"]
+# Backends are ordered by performance.
+asm = ["energon/bls12381_blstrs", "energon/bn254_arkworks_asm"]
+ark_asm = ["energon/bls12381_arkworks_asm", "energon/bn254_arkworks_asm"]
+default = ["energon/bls12381_arkworks", "energon/bn254_arkworks"]
+
+# Optional
+## Disable TLS for local tests.
+insecure = []
+## Disable checks for chain database during `follow` request. Use for tests only.
+skip_db_verification = []
+
+# Development
+## CI: integration tests with Drand Go implementation. 
+test-integration = []

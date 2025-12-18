@@ -1,326 +1,288 @@
-// Copyright (C) 2023-2024 StorSwift Inc.
-// This file is part of the Drand-RS library.
+// Copyright 2023-2025 StorSwift Inc.
+// SPDX-License-Identifier: Apache-2.0
 
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at:
-// http://www.apache.org/licenses/LICENSE-2.0
-
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-use super::protocol::ProtocolHandler;
-use super::public::PublicHandler;
-use super::utils;
-
-use super::utils::INTERNAL_ERR;
-use crate::core::beacon::BeaconCmd;
-use crate::core::beacon::BeaconID;
-use crate::core::daemon::Daemon;
-use crate::core::schemes::Schemes;
-
-use crate::log::Logger;
-use crate::protobuf::common::Metadata;
-use crate::protobuf::drand::control_client::ControlClient;
-use crate::protobuf::drand::control_server::Control;
-use crate::protobuf::drand::control_server::ControlServer;
-use crate::protobuf::drand::protocol_server::ProtocolServer;
-use crate::protobuf::drand::public_server::PublicServer;
-use crate::protobuf::drand::InitDkgPacket;
-use crate::protobuf::drand::InitDkgResponse;
-use crate::protobuf::drand::ListSchemesRequest;
-use crate::protobuf::drand::ListSchemesResponse;
-use crate::protobuf::drand::LoadBeaconRequest;
-use crate::protobuf::drand::LoadBeaconResponse;
-use crate::protobuf::drand::PoolInfoRequest;
-use crate::protobuf::drand::PoolInfoResponse;
-use crate::protobuf::drand::PublicKeyRequest;
-use crate::protobuf::drand::PublicKeyResponse;
-use crate::protobuf::drand::SetupInfoPacket;
-use crate::protobuf::drand::ShutdownRequest;
-use crate::protobuf::drand::ShutdownResponse;
-
-use anyhow::bail;
-use std::ops::Deref;
-use std::sync::Arc;
-use tokio::net::TcpListener;
-use tokio::sync::oneshot;
-use tokio_stream::wrappers::TcpListenerStream;
-use tonic::transport::Server;
-
-use tonic::Request;
-use tonic::Response;
-use tonic::Status;
-use tracing::*;
+//! Client and server implementations for RPC [`Control`] service.
+use super::{
+    dkg_control::DkgControlHandler,
+    utils::{Callback, NewTcpListener, ToStatus, ERR_METADATA_IS_MISSING},
+};
+use crate::{
+    cli::SyncConfig,
+    core::{beacon::BeaconCmd, daemon::Daemon},
+    protobuf::{
+        dkg::dkg_control_server::DkgControlServer,
+        drand::{
+            control_client::ControlClient as ControlClientInner,
+            control_server::{Control, ControlServer},
+            ChainInfoPacket, ChainInfoRequest, LoadBeaconRequest, LoadBeaconResponse, Metadata,
+            ShutdownRequest, ShutdownResponse, StartSyncRequest, StatusRequest, StatusResponse,
+            SyncProgress,
+        },
+    },
+};
+use anyhow::anyhow;
+use std::{ops::Deref, pin::Pin, sync::Arc};
+use tokio::time::Instant;
+use tokio_stream::{
+    wrappers::{ReceiverStream, TcpListenerStream},
+    Stream,
+};
+use tonic::{
+    transport::{Channel, Server},
+    Request, Response, Status,
+};
 
 pub const DEFAULT_CONTROL_PORT: &str = "8888";
 pub const CONTROL_HOST: &str = "127.0.0.1";
 
-#[derive(Clone)]
+/// Control server streaming response reporting sync progress to the control client.
+type ResponseStream = Pin<Box<dyn Stream<Item = SyncProgressResponse> + Send>>;
+
+/// Result type yielded by the sync progress response stream.
+pub type SyncProgressResponse = Result<SyncProgress, tonic::Status>;
+
+/// Implementor for [`Control`] trait for use with `ControlServer`.
 pub struct ControlHandler(Arc<Daemon>);
-impl ControlHandler {
-    fn new(daemon: Arc<Daemon>) -> Self {
-        Self(daemon)
-    }
-}
 
 #[tonic::async_trait]
-// TODO: make whole impl readable, see 'ProtocolHandler'
 impl Control for ControlHandler {
-    /// InitDKG sends information to daemon to start a fresh DKG protocol
-    async fn init_dkg(
+    /// Server streaming response type for the `start_check_chain` method.
+    type StartCheckChainStream = ResponseStream;
+
+    /// Server streaming response type for the `start_follow_chain` method.
+    type StartFollowChainStream = ResponseStream;
+
+    /// Status responds with the actual status of drand process.
+    async fn status(
         &self,
-        req: Request<InitDkgPacket>,
-    ) -> Result<Response<InitDkgResponse>, Status> {
-        let req = req.into_inner();
-        let id: BeaconID = req.metadata.as_ref().into();
-        trace!(parent: self.span(), "received DkgInfoPacket, id: {id}");
-        if let Some(info) = req.info {
-            let (tx, rx) = oneshot::channel();
-            if let Err(e) = self.beacons().init_dkg(tx, info.from_proto(), id).await {
-                return Err(Status::from_error(e.into()));
-            };
-            match rx.await.map_err(|e| Status::from_error(e.into()))? {
-                Ok(share_path) => Ok(Response::new(InitDkgResponse { share_path })),
-                Err(e) => Err(Status::from_error(e.into())),
-            }
-        } else {
-            Err(Status::data_loss("setup_info_packet can't be None"))
-        }
+        request: Request<StatusRequest>,
+    ) -> Result<Response<StatusResponse>, Status> {
+        // Borrow id from metadata.
+        let id = request.get_ref().metadata.as_ref().map_or_else(
+            || Err(Status::data_loss(ERR_METADATA_IS_MISSING)),
+            |meta| Ok(meta.beacon_id.as_str()),
+        )?;
+        let (tx, rx) = Callback::new();
+        self.beacons()
+            .cmd(BeaconCmd::Status(tx), id)
+            .await
+            .map_err(|err| err.to_status(id))?;
+
+        // Await response from callback
+        let status = rx
+            .await
+            .map_err(|recv_err| recv_err.to_status(id))?
+            .map_err(|err| err.to_status(id))?;
+
+        Ok(Response::new(status))
     }
 
-    async fn list_schemes(
+    /// ChainInfo returns the chain info for the chain hash or beacon id requested in the metadata.
+    async fn chain_info(
         &self,
-        _req: Request<ListSchemesRequest>,
-    ) -> Result<Response<ListSchemesResponse>, Status> {
-        let response = ListSchemesResponse { ids: Schemes::list_schemes(), metadata: None };
-        Ok(Response::new(response))
+        request: Request<ChainInfoRequest>,
+    ) -> Result<Response<ChainInfoPacket>, Status> {
+        let id = request.get_ref().metadata.as_ref().map_or_else(
+            || Err(Status::data_loss(ERR_METADATA_IS_MISSING)),
+            |meta| Ok(meta.beacon_id.as_str()),
+        )?;
+
+        let (tx, rx) = Callback::new();
+        self.beacons()
+            .cmd(BeaconCmd::ChainInfo(tx), id)
+            .await
+            .map_err(|err| err.to_status(id))?;
+
+        let chain_info = rx
+            .await
+            .map_err(|recv_err| recv_err.to_status(id))?
+            .map_err(|chain_info_err| chain_info_err.to_status(id))?;
+
+        Ok(Response::new(chain_info))
     }
 
-    async fn pool_info(
-        &self,
-        _req: Request<PoolInfoRequest>,
-    ) -> Result<Response<PoolInfoResponse>, Status> {
-        trace!(parent: self.span(), "received pool_info request");
-        let pool_info = self.pool_status().await?;
-        let response = PoolInfoResponse { pool_info };
-
-        Ok(Response::new(response))
-    }
-
-    async fn public_key(
-        &self,
-        req: Request<PublicKeyRequest>,
-    ) -> Result<Response<PublicKeyResponse>, Status> {
-        let metadata = req.into_inner().metadata;
-        let id = utils::get_ref_id(metadata.as_ref());
-
-        let (sender, callback) = oneshot::channel();
-        if let Err(e) = self.beacons().cmd(BeaconCmd::ShowPublicKey(sender), id).await {
-            return Err(Status::from_error(e.into()));
-        }
-        match callback.await {
-            Ok(pub_key) => Ok(Response::new(PublicKeyResponse { pub_key, metadata })),
-            Err(_) => Err(Status::internal(INTERNAL_ERR)),
-        }
-    }
-
-    /// Shutdown request:
-    ///    - Metadata is None: stop the daemon
-    ///    - Metadata is Some: stop the beacon_id, if stopped beacon_id was the last: stop the daemon
     async fn shutdown(
         &self,
-        req: Request<ShutdownRequest>,
+        request: Request<ShutdownRequest>,
     ) -> Result<Response<ShutdownResponse>, Status> {
-        let mut metadata = req.into_inner().metadata;
-
-        if metadata.is_some() {
-            if self
-                .stop_id(&metadata.as_ref().into())
-                .await
-                .map_err(|e| Status::from_error(e.into()))?
-            {
-                metadata = None
+        let metadata = if let Some(m) = request.into_inner().metadata {
+            if self.is_last_id_to_shutdown(&m.beacon_id) {
+                self.stop_daemon()
+                    .await
+                    .map_err(|err| err.to_status(&m.beacon_id))?;
+                None
+            } else {
+                self.stop_id(&m.beacon_id)
+                    .await
+                    .map_err(|err| err.to_status(&m.beacon_id))?;
+                Some(Metadata::with_id(m.beacon_id))
             }
         } else {
-            self.stop_daemon().await.map_err(|e| Status::from_error(e.into()))?
-        }
+            self.stop_daemon()
+                .await
+                .map_err(|err| Status::unknown(err.to_string()))?;
+            None
+        };
 
         Ok(Response::new(ShutdownResponse { metadata }))
     }
 
     async fn load_beacon(
         &self,
-        _req: Request<LoadBeaconRequest>,
+        request: Request<LoadBeaconRequest>,
     ) -> Result<Response<LoadBeaconResponse>, Status> {
-        todo!()
+        let id = request.get_ref().metadata.as_ref().map_or_else(
+            || Err(Status::data_loss(ERR_METADATA_IS_MISSING)),
+            |meta| Ok(meta.beacon_id.as_str()),
+        )?;
+
+        self.load_id(id).map_err(|err| err.to_status(id))?;
+        let response = LoadBeaconResponse {
+            metadata: Some(Metadata::with_id(id.to_string())),
+        };
+
+        Ok(Response::new(response))
+    }
+
+    async fn start_follow_chain(
+        &self,
+        request: Request<StartSyncRequest>,
+    ) -> Result<Response<Self::StartFollowChainStream>, Status> {
+        let request = request.into_inner();
+        let id = request.metadata.as_ref().map_or_else(
+            || Err(Status::data_loss(ERR_METADATA_IS_MISSING)),
+            |meta| Ok(meta.beacon_id.clone()),
+        )?;
+        let (tx, rx) = Callback::new();
+
+        self.beacons()
+            .cmd(BeaconCmd::Follow(request, tx), &id)
+            .await
+            .map_err(|err| Status::unknown(err.to_string()))?;
+
+        let stream_rx = rx
+            .await
+            .map_err(|err| Status::unknown(err.to_string()))?
+            .map_err(|err| Status::unknown(err.to_string()))?;
+        Ok(Response::new(Box::pin(ReceiverStream::new(stream_rx))))
+    }
+
+    // TODO: this method is required.
+    async fn start_check_chain(
+        &self,
+        _request: Request<StartSyncRequest>,
+    ) -> Result<Response<Self::StartCheckChainStream>, Status> {
+        Err(Status::unimplemented("start_check_chain: StartSyncRequest"))
     }
 }
 
-async fn start_node(daemon: Arc<Daemon>) -> anyhow::Result<()> {
-    let listener = TcpListener::bind(daemon.private_listen())
+pub async fn start<N: NewTcpListener>(
+    daemon: Arc<Daemon>,
+    control: N::Config,
+) -> anyhow::Result<()> {
+    let listener = N::bind(control)
         .await
-        .map_err(|err| anyhow::anyhow!("DBG::start_node::listener err: {}", err))?;
-    let mut stop = daemon.stop_daemon.subscribe();
+        .map_err(|err| anyhow!("failed to start control server: {err}"))?;
+    let token = daemon.cancellation_token();
 
-    if let Err(err) = Server::builder()
-        .add_service(ProtocolServer::new(ProtocolHandler::new(daemon)))
-        .add_service(PublicServer::new(PublicHandler))
+    Server::builder()
+        .add_service(ControlServer::new(ControlHandler(daemon.clone())))
+        .add_service(DkgControlServer::new(DkgControlHandler::new(
+            daemon.clone(),
+        )))
         .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async move {
-            let _ = stop.recv().await;
-            println!("DBG:: stopped: ProtocolServer, PublicServer")
+            let () = token.cancelled().await;
         })
         .await
-    {
-        bail!("Node start is failed: {err:?}")
-    }
-    Ok(())
-}
-
-async fn start_control(daemon: Arc<Daemon>, control_port: &str) -> Result<(), anyhow::Error> {
-    let listener = TcpListener::bind(control_address_server(control_port)).await?;
-    let mut stop = daemon.stop_daemon.subscribe();
-
-    if let Err(err) = Server::builder()
-        .add_service(ControlServer::new(ControlHandler::new(daemon)))
-        .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async move {
-            let _ = stop.recv().await;
-            println!("DBG:: stopped: ControlServer")
-        })
-        .await
-    {
-        bail!("Control server start is failed: {err:?}",)
-    }
+        .map_err(|err| anyhow!("control server: {err}"))?;
 
     Ok(())
 }
 
-pub async fn start(
-    folder: &str,
-    id: Option<String>,
-    control_port: &str,
-    private_listen: String,
-) -> anyhow::Result<()> {
-    let logger = Logger::register_node(&private_listen);
-    info!(parent: &logger.span, "DrandDaemon initializing: private_listen: {private_listen}, control_port: {control_port}, folder: {folder}");
-    let daemon = Daemon::new(private_listen, folder, id.as_ref(), logger)?;
-
-    if let Err(err) =
-        tokio::try_join!(start_node(Arc::clone(&daemon)), start_control(daemon, control_port))
-    {
-        bail!("can't instantiate drand daemon: {err}")
-    }
-
-    Ok(())
+/// Control client capable of issuing proto commands to a running daemon.
+pub struct ControlClient {
+    client: ControlClientInner<Channel>,
 }
 
-pub async fn stop(control_port: &str, beacon_id: Option<&String>) -> anyhow::Result<()> {
-    let mut conn = ControlClient::connect(control_address_client(control_port)).await?;
+impl ControlClient {
+    pub async fn new(port: &str) -> anyhow::Result<Self> {
+        let address = format!("http://{CONTROL_HOST}:{port}");
+        let channel = Channel::from_shared(address)?.connect().await?;
+        let client = ControlClientInner::new(channel);
 
-    let mut metadata = None; // shutdown daemon if beacon_id.is_none()
-    if let Some(id) = beacon_id {
-        metadata = Some(Metadata { beacon_id: id.into(), ..Default::default() })
+        Ok(Self { client })
     }
-    match conn.shutdown(ShutdownRequest { metadata }).await {
-        Ok(response) => {
-            if let Some(m) = response.get_ref().metadata.as_ref() {
-                println!("beacon process [{}] stopped correctly. Bye.\n", m.beacon_id)
-            } else {
-                println!("drand daemon stopped correctly. Bye.\n")
+
+    pub async fn status(&mut self, beacon_id: String) -> anyhow::Result<StatusResponse> {
+        let request = StatusRequest {
+            metadata: Some(Metadata::with_id(beacon_id)),
+        };
+        let responce = self.client.status(request).await?;
+        Ok(responce.into_inner())
+    }
+
+    pub async fn load_beacon(&mut self, beacon_id: String) -> anyhow::Result<()> {
+        let request = LoadBeaconRequest {
+            metadata: Some(Metadata::with_id(beacon_id)),
+        };
+        let _ = self.client.load_beacon(request).await?;
+
+        Ok(())
+    }
+
+    pub async fn shutdown(
+        &mut self,
+        beacon_id: Option<String>,
+    ) -> anyhow::Result<Option<Metadata>> {
+        let metadata = beacon_id.map(Metadata::with_id);
+        let request = ShutdownRequest { metadata };
+        let responce = self.client.shutdown(request).await?;
+
+        Ok(responce.into_inner().metadata)
+    }
+
+    pub async fn sync(&mut self, c: SyncConfig) -> anyhow::Result<()> {
+        use std::io::Write;
+        let metadata = Metadata::with_chain_hash(&c.id, &c.chain_hash)?;
+        let request = StartSyncRequest {
+            nodes: c.sync_nodes,
+            up_to: if c.follow { 0 } else { c.up_to },
+            metadata: Some(metadata),
+        };
+        println!(
+            "Launching a follow request: nodes: {:?}, upTo: {}, hash {}, beaconID: {}",
+            request.nodes, request.up_to, c.chain_hash, c.id
+        );
+
+        let mut responce = self.client.start_follow_chain(request).await?.into_inner();
+        let mut spinner = ['/', '—', '\\'].iter().cycle();
+        let start = Instant::now();
+
+        while let Ok(Some(progress)) = responce.message().await {
+            if progress.current == progress.target || progress.current % 300 == 0 {
+                #[allow(clippy::cast_precision_loss)]
+                let percent = (progress.current as f64 / progress.target as f64) * 100.0;
+                let symbol = spinner.next().expect("infallible");
+                print!(
+                    "\r{}  synced round up to {} - current target {}     --> {:.2} % ",
+                    symbol, progress.current, progress.target, percent,
+                );
+                std::io::stdout().flush()?;
             }
         }
-        Err(err) => {
-            if let Some(id) = beacon_id {
-                println!("error stopping beacon process: [{id}], status: {}", err.message())
-            } else {
-                println!("error stopping drand daemon, status: {}", err.message())
-            }
-        }
+        println!("time total {}s", start.elapsed().as_secs());
+
+        Ok(())
     }
 
-    Ok(())
-}
+    pub async fn chain_info(&mut self, beacon_id: String) -> anyhow::Result<ChainInfoPacket> {
+        let request = ChainInfoRequest {
+            metadata: Some(Metadata::with_id(beacon_id)),
+        };
+        let info = self.client.chain_info(request).await?.into_inner();
 
-pub async fn public_key_request(
-    control_port: &str,
-    beacon_id: Option<String>,
-) -> anyhow::Result<()> {
-    let mut conn = ControlClient::connect(control_address_client(control_port)).await?;
-
-    let mut metadata = None;
-    if let Some(beacon_id) = beacon_id {
-        metadata = Some(Metadata { beacon_id, ..Default::default() })
+        Ok(info)
     }
-    let response = conn.public_key(PublicKeyRequest { metadata }).await?;
-    let key: &Vec<u8> = response.get_ref().pub_key.as_ref();
-    println!("pubKey: {}", hex::encode(key));
-    Ok(())
-}
-
-pub async fn list_schemes(control_port: &str) -> anyhow::Result<()> {
-    let mut client = ControlClient::connect(control_address_client(control_port)).await?;
-    let list = client.list_schemes(ListSchemesRequest { metadata: None }).await?;
-    let msg = list.get_ref().ids.join("\n");
-    println!("Drand supports the following list of schemes:\n{msg}\n\nChoose one of them and set it on --scheme flag");
-
-    Ok(())
-}
-
-pub async fn pool_info(control_port: &str) -> anyhow::Result<()> {
-    let mut client = ControlClient::connect(control_address_client(control_port)).await?;
-    let res = client.pool_info(PoolInfoRequest {}).await?;
-
-    println!("Pool status:\n{}", res.get_ref().pool_info);
-
-    Ok(())
-}
-
-pub async fn share(
-    control_port: &str,
-    leader: bool,
-    id: Option<String>,
-    leader_tls: bool,
-    leader_address: String,
-) -> anyhow::Result<()> {
-    if leader {
-        bail!("leader logic is not implemented yet")
-    }
-
-    let addr = control_address_client(control_port);
-    let secret = crate::core::dkg::load_secret_cmd()?.into_bytes();
-    let metadata = Metadata { beacon_id: id.unwrap(), ..Default::default() };
-    let req = InitDkgPacket {
-        info: Some(SetupInfoPacket {
-            leader,
-            leader_address,
-            secret,
-            leader_tls,
-            metadata: Some(metadata.clone()),
-            ..Default::default()
-        }),
-        metadata: Some(metadata),
-        ..Default::default()
-    };
-    println!("Participation in DKG");
-    let mut conn = ControlClient::connect(addr).await?;
-
-    match conn.init_dkg(req).await {
-        Ok(res) => println!("--- distributed share path: {}", res.get_ref().share_path),
-        Err(e) => println!("failed to init dkg: {e:?}"),
-    }
-
-    Ok(())
-}
-
-// TODO: use 'Address' and 'ControlAddress' instead
-fn control_address_server(control_port: &str) -> String {
-    format!("{CONTROL_HOST}:{control_port}")
-}
-fn control_address_client(control_port: &str) -> String {
-    format!("http://{CONTROL_HOST}:{control_port}")
 }
 
 impl Deref for ControlHandler {
