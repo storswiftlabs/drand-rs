@@ -13,9 +13,7 @@ use energon::{
     kyber::dkg::{Bundle, BundleSender},
     traits::Affine,
 };
-
 use std::collections::HashSet;
-use tabled::{settings::Style, Table, Tabled};
 
 const SHORT_SIG_BYTES: usize = 3;
 
@@ -121,42 +119,4 @@ fn bundle_from_proto<S: Scheme>(proto: DkgPacket) -> Option<Bundle<S>> {
     };
 
     Some(bundle)
-}
-
-/// Row for DKG status table.
-#[derive(Tabled)]
-struct Row {
-    #[tabled(rename = "FIELD")]
-    field: String,
-    #[tabled(rename = "CURRENT")]
-    current: String,
-    #[tabled(rename = "FINISHED")]
-    finished: String,
-}
-
-#[rustfmt::skip]
-pub fn print_dkg_status(response: crate::transport::dkg::DkgStatusResponse) {
-    let c = response.current;
-    let f = response.finished.unwrap_or_default();
-
-    let mut table = Table::new( [
-        Row { field: "Status".into(),      current: c.state,        finished: f.state },
-        Row { field: "Epoch".into(),       current: c.epoch,        finished: f.epoch },
-        Row { field: "BeaconID".into(),    current: c.beacon_id,    finished: f.beacon_id },
-        Row { field: "Threshold".into(),   current: c.threshold,    finished: f.threshold },
-        Row { field: "Timeout".into(),     current: c.timeout,      finished: f.timeout },
-        Row { field: "GenesisTime".into(), current: c.genesis_time, finished: f.genesis_time },
-        Row { field: "GenesisSeed".into(), current: c.genesis_seed, finished: f.genesis_seed },
-        Row { field: "Leader".into(),      current: c.leader,       finished: f.leader },
-        Row { field: "Joining".into(),     current: c.joining,      finished: f.joining },
-        Row { field: "Remaining".into(),   current: c.remaining,    finished: f.remaining },
-        Row { field: "Leaving".into(),     current: c.leaving,      finished: f.leaving },
-        Row { field: "Accepted".into(),    current: c.acceptors,    finished: f.acceptors },
-        Row { field: "Rejected".into(),    current: c.rejectors,    finished: f.rejectors },
-        Row { field: "FinalGroup".into(),  current: c.final_group,  finished: f.final_group },
-    ]);
-
-    table.with(Style::sharp());
-
-    println!("{table}");
 }
