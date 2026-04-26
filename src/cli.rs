@@ -373,7 +373,7 @@ async fn dkg_status(control_port: &str, beacon_id: String) -> Result<()> {
     let response: crate::transport::dkg::DkgStatusResponse =
         client.dkg_status(beacon_id).await?.try_into()?;
 
-    crate::dkg::utils::print_dkg_status(response);
+    crate::dkg::status::print_dkg_status(response);
 
     Ok(())
 }
