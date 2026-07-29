@@ -3,15 +3,13 @@
 
 use crate::{
     core::{beacon, daemon::Daemon},
-    info,
+    debug, error, info,
     key::{keys::Pair, store::FileStore, Scheme},
     net::{
-        control,
-        control::ControlClient,
+        control::{self, ControlClient},
         dkg_control::DkgControlClient,
         health::HealthClient,
-        protocol,
-        protocol::ProtocolClient,
+        protocol::{self, ProtocolClient},
         utils::{Address, ControlListener, NodeListener},
     },
 };
@@ -22,6 +20,9 @@ use energon::{
     points::KeyPoint,
     traits::Affine,
 };
+use std::{eprintln, io::Write};
+use tabled::{settings::Style, Table, Tabled};
+use tokio::{task::JoinSet, time::Instant};
 
 const NAME: &str = "drand-rs.beta";
 
@@ -195,6 +196,17 @@ pub enum Util {
         id: Option<String>,
         addresses: Vec<String>,
     },
+    /// Check node at the given `ADDRESS` (you can put multiple ones) over the gRPC communication.
+    /// Returns summary of connectivity attempts for each node.
+    LongCheck {
+        /// Indicates the id for the randomness generation process which will be started.
+        #[arg(long, default_value = None)]
+        id: Option<String>,
+        /// Number of attempts to perform for each node.
+        #[arg(long)]
+        retries: usize,
+        addresses: Vec<String>,
+    },
 }
 
 #[derive(Debug, Parser, Clone)]
@@ -254,6 +266,11 @@ impl Cli {
                 Util::Check { id, addresses } => {
                     util_check(id.as_deref(), addresses, self.verbose).await?;
                 }
+                Util::LongCheck {
+                    id,
+                    retries,
+                    addresses,
+                } => util_long_check(id, addresses, retries).await?,
             },
         }
 
@@ -452,6 +469,150 @@ async fn check_identity_address(peer: &Address, beacon_id: String) -> Result<()>
     } {
         bail!("failed to deserialize public key");
     };
+
+    Ok(())
+}
+
+/// Connectivity report for a single node
+#[derive(Default)]
+struct ConnectivityReport {
+    node: Address,
+    /// Successful connections count
+    connected_count: usize,
+    /// Successful identity verifications count
+    verified_count: usize,
+}
+
+/// Updates the report on successful connection and identity verification.
+async fn update_report(
+    report: &mut ConnectivityReport,
+    beacon_id: String,
+    log: &crate::log::Logger,
+) {
+    let Ok(mut conn) = ProtocolClient::new(&report.node).await else {
+        error!(log, "failed to connect");
+        return;
+    };
+    debug!(log, "connection established");
+
+    report.connected_count += 1;
+
+    let Ok(resp) = conn.get_identity(beacon_id).await else {
+        error!(log, "failed to get_identity");
+        return;
+    };
+
+    let is_scheme_valid = match resp.scheme_name.as_str() {
+        DefaultScheme::ID => KeyPoint::<DefaultScheme>::deserialize(&resp.key).is_ok(),
+        SigsOnG1Scheme::ID => KeyPoint::<SigsOnG1Scheme>::deserialize(&resp.key).is_ok(),
+        BN254UnchainedOnG1Scheme::ID => {
+            KeyPoint::<BN254UnchainedOnG1Scheme>::deserialize(&resp.key).is_ok()
+        }
+        _ => {
+            error!(log, "scheme is not valid");
+            return;
+        }
+    };
+
+    if is_scheme_valid {
+        report.verified_count += 1;
+    }
+}
+
+#[derive(Tabled)]
+struct Row {
+    #[tabled(rename = "NODES")]
+    node: String,
+    #[tabled(rename = "CONNECTED")]
+    connected: usize,
+    #[tabled(rename = "DATA RECEIVED: IDENTITY")]
+    verified: usize,
+}
+
+async fn util_long_check(
+    beacon_id: Option<String>,
+    addresses: Vec<String>,
+    retries: usize,
+) -> Result<()> {
+    if retries > 10 {
+        bail!("retries more than 10 are discouraged, current retries: {retries}")
+    }
+
+    println!(
+        "retries for each node: {retries}, nodes total: {}\n",
+        addresses.len()
+    );
+
+    let mut reports = Vec::with_capacity(addresses.len());
+
+    for addr in addresses {
+        reports.push(ConnectivityReport {
+            node: Address::precheck(addr.as_str())?,
+            ..Default::default()
+        });
+    }
+
+    let mut set = JoinSet::new();
+
+    for report in reports {
+        let id = beacon_id.clone();
+        set.spawn({
+            async move {
+                let log = crate::log::set_node(report.node.as_str());
+                let mut report = report;
+                let time_total = Instant::now();
+                for i in 1..=retries {
+                    let now = Instant::now();
+                    match id {
+                        Some(ref id) => update_report(&mut report, id.to_string(), &log).await,
+                        None => {
+                            if HealthClient::check(&report.node).await.is_ok() {
+                                report.connected_count += 1;
+                            }
+                        }
+                    }
+                    debug!(
+                        &log,
+                        "finished attempt: {i}, duration: {}s",
+                        now.elapsed().as_secs()
+                    );
+
+                    // delay between retry attempts
+                    if i < retries {
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    }
+                }
+                info!(
+                    &log,
+                    "FINISHED, time total: {}s",
+                    time_total.elapsed().as_secs()
+                );
+                report
+            }
+        });
+    }
+
+    let mut finished = Vec::with_capacity(set.len());
+
+    while let Some(result) = set.join_next().await {
+        match result {
+            Ok(i) => {
+                finished.push(Row {
+                    node: i.node.to_string(),
+                    connected: i.connected_count,
+                    verified: i.verified_count,
+                });
+                print!("\r --- nodes left: {} ---\n", set.len());
+                std::io::stdout().flush()?;
+            }
+            Err(err) => panic!("{err} is not expected, please report this"),
+        }
+    }
+
+    let mut table = Table::new(finished);
+    table.with(Style::sharp());
+
+    println!("\n{table}");
 
     Ok(())
 }
