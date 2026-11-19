@@ -1,4 +1,7 @@
 # Drand-rs (BETA)
+
+![Joined LOE Testnet 2026-Q3][testnet-badge]
+
 > **Status:** This project has reached beta stage! We're seeking community feedback! Please create an issue if you encounter any problems or submit PRs.
 
 A Distributed Randomness Beacon Daemon written in Rust.
@@ -138,3 +141,4 @@ Licensed under [Apache 2.0](LICENSE).
 [blstrs]: https://github.com/filecoin-project/blstrs
 [arkworks_asm]: https://github.com/filecoin-project/blstrs
 [Protocol Buffers compiler]: https://protobuf.dev/downloads/
+[testnet-badge]: https://img.shields.io/badge/✓_Joined_LOE_Testnet-2026--Q3-brightgreen
